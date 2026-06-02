@@ -451,6 +451,69 @@ if ('serviceWorker' in navigator) {
   body.theme-light .mobile-nav {
     background: #f5f5f5 !important;
   }
+
+  /* ===================== MODE PLEIN SOLEIL ===================== */
+  /* Thème ultra-contrasté pour utilisation en extérieur sur tablette */
+  .app.solaire, .app.solaire .content, body.solaire {
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --card: #ffffff;
+    --border: #000000;
+    --text: #000000;
+    --muted: #333333;
+    --accent: #000000;
+    --accent2: #000000;
+    --accent3: #000000;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  body.solaire { background:#ffffff !important; }
+  .app.solaire { background:#ffffff !important; }
+  /* Texte noir et épais partout dans la zone solaire */
+  .app.solaire .content, .app.solaire .content * {
+    color: #000000 !important;
+  }
+  .app.solaire .content {
+    font-size: 17px !important;
+    font-weight: 600 !important;
+  }
+  /* Cartes et conteneurs : fond blanc, bordure noire nette */
+  .app.solaire .content [style*="background:var(--bg)"],
+  .app.solaire .content [style*="background: var(--bg)"],
+  .app.solaire .card,
+  .app.solaire .cart-item {
+    background: #ffffff !important;
+    border: 2px solid #000000 !important;
+  }
+  /* Boutons plus grands et contrastés */
+  .app.solaire .content button {
+    font-size: 16px !important;
+    font-weight: 800 !important;
+    border: 2px solid #000000 !important;
+    color: #000000 !important;
+    background: #ffe500 !important;
+    padding: 12px 16px !important;
+  }
+  /* Champs de saisie */
+  .app.solaire .content input,
+  .app.solaire .content select {
+    font-size: 17px !important;
+    font-weight: 700 !important;
+    color: #000000 !important;
+    background: #ffffff !important;
+    border: 2px solid #000000 !important;
+  }
+  /* Prix et chiffres importants bien noirs */
+  .app.solaire .content [style*="--accent"] {
+    color: #000000 !important;
+  }
+  /* Bouton bascule soleil */
+  .solaire-btn {
+    background: #ffe500 !important;
+    color: #000 !important;
+    border: 2px solid #000 !important;
+    font-weight: 800 !important;
+  }
   .mobile-nav.open { display: block !important; }
   .mobile-nav-btn {
     display: none;
@@ -1860,6 +1923,7 @@ function renderCaisseMarche(el, actions) {
     <button class="btn btn-secondary btn-sm" onclick="openCaisseHistory()">📋 Historique</button>
     <button class="btn btn-secondary btn-sm" onclick="cloturerMarche()" style="border-color:#e0a800;color:#e0a800;">🏁 Clôturer le marché</button>
     <button class="btn btn-secondary btn-sm" onclick="toggleCaisseFullscreen()" id="btn-fullscreen" style="border-color:var(--accent);color:var(--accent);">⛶ Plein écran</button>
+    <button class="btn btn-secondary btn-sm solaire-btn" onclick="toggleSolaire()">☀️ Plein soleil</button>
   `;
   const cats = [...new Set(db.products.map(p=>p.categorie).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
 
@@ -4332,7 +4396,7 @@ function highlightRow(row) {
 }
 
 function renderStocks(el, actions) {
-  actions.innerHTML = `<button class="btn btn-secondary btn-sm" onclick="openStockHistory()">📋 Historique</button> <button class="btn btn-secondary btn-sm" onclick="exportReassortPDF()">📄 Bon Réassort</button> <button class="btn btn-secondary btn-sm" onclick="openRetourModal()">🏠 Retour → Maison</button> <button class="btn btn-primary btn-sm" onclick="openReassortModal()">📦 Réassort → Marché</button>`;
+  actions.innerHTML = `<button class="btn btn-secondary btn-sm" onclick="openStockHistory()">📋 Historique</button> <button class="btn btn-secondary btn-sm" onclick="exportReassortPDF()">📄 Bon Réassort</button> <button class="btn btn-secondary btn-sm" onclick="openRetourModal()">🏠 Retour → Maison</button> <button class="btn btn-primary btn-sm" onclick="openReassortModal()">📦 Réassort → Marché</button> <button class="btn btn-secondary btn-sm solaire-btn" onclick="toggleSolaire()">☀️ Plein soleil</button>`;
 
   const cats = ['all', ...[...new Set(db.products.map(p=>p.categorie).filter(Boolean))].sort((a,b)=>a.localeCompare(b))];
   const filtered = db.products.filter(p => {
@@ -6538,6 +6602,25 @@ function toggleTheme() {
   if(btn) btn.textContent = isLight ? '🌙 Thème sombre' : '☀️ Thème clair';
   document.getElementById('sidebar').classList.toggle('theme-light', isLight);
 }
+
+// ===================== MODE PLEIN SOLEIL =====================
+function toggleSolaire() {
+  const app = document.getElementById('app');
+  const on = app.classList.toggle('solaire');
+  localStorage.setItem('fath3d_solaire', on ? 'on' : 'off');
+  document.querySelectorAll('.solaire-btn').forEach(b => {
+    b.innerHTML = on ? '🌙 Mode normal' : '☀️ Plein soleil';
+  });
+}
+// Appliquer au chargement
+(function() {
+  if(localStorage.getItem('fath3d_solaire') === 'on') {
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('app')?.classList.add('solaire');
+      document.querySelectorAll('.solaire-btn').forEach(b => b.innerHTML = '🌙 Mode normal');
+    });
+  }
+})();
 
 // Apply saved theme on load
 (function() {
