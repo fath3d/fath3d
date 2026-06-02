@@ -514,6 +514,29 @@ if ('serviceWorker' in navigator) {
     border: 2px solid #000 !important;
     font-weight: 800 !important;
   }
+  /* Renfort mode soleil : tout passe en clair */
+  body.solaire, body.solaire .app, body.solaire .content,
+  body.solaire .sidebar, body.solaire .topbar {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  body.solaire .content, body.solaire .content * {
+    color: #000000 !important;
+  }
+  body.solaire .content { font-size:17px !important; }
+  body.solaire .content button {
+    background:#ffe500 !important; color:#000 !important;
+    border:2px solid #000 !important; font-weight:800 !important; padding:12px 16px !important;
+  }
+  body.solaire .content input, body.solaire .content select {
+    background:#fff !important; color:#000 !important; border:2px solid #000 !important; font-size:17px !important;
+  }
+  body.solaire .card, body.solaire .cart-item,
+  body.solaire .content [style*="background:var(--bg)"],
+  body.solaire .content [style*="background: var(--bg)"] {
+    background:#fff !important; border:2px solid #000 !important;
+  }
+
   .mobile-nav.open { display: block !important; }
   .mobile-nav-btn {
     display: none;
@@ -6605,8 +6628,10 @@ function toggleTheme() {
 
 // ===================== MODE PLEIN SOLEIL =====================
 function toggleSolaire() {
-  const app = document.getElementById('app');
+  const app = document.querySelector('.app');
+  if(!app) return;
   const on = app.classList.toggle('solaire');
+  document.body.classList.toggle('solaire', on);
   localStorage.setItem('fath3d_solaire', on ? 'on' : 'off');
   document.querySelectorAll('.solaire-btn').forEach(b => {
     b.innerHTML = on ? '🌙 Mode normal' : '☀️ Plein soleil';
@@ -6616,7 +6641,8 @@ function toggleSolaire() {
 (function() {
   if(localStorage.getItem('fath3d_solaire') === 'on') {
     document.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('app')?.classList.add('solaire');
+      document.querySelector('.app')?.classList.add('solaire');
+      document.body.classList.add('solaire');
       document.querySelectorAll('.solaire-btn').forEach(b => b.innerHTML = '🌙 Mode normal');
     });
   }
