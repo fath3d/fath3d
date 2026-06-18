@@ -11562,25 +11562,32 @@ function renderBoutiques(el, actions) {
 }
 
 function openAddBoutiqueVente() {
+  const lastMois = window._lastBoutiqueMois || MOIS_ORDER[0];
   openModal(`
     <div class="modal-title">Nouvelle vente boutique</div>
     <div class="grid-2">
       <div class="form-group"><label class="form-label">Boutique</label>
         <select class="form-select" id="bv-boutique" onchange="updateCommField()">
+          <option value="boutB" selected>Arts Complices</option>
           <option value="boutA">La Boutique de Véro</option>
-          <option value="boutB">Arts Complices</option>
         </select>
       </div>
       <div class="form-group"><label class="form-label">Mois</label>
         <select class="form-select" id="bv-mois">
-          ${MOIS_ORDER.map(m=>`<option value="${m}">${m.charAt(0)+m.slice(1).toLowerCase()}</option>`).join('')}
+          ${MOIS_ORDER.map(m=>`<option value="${m}" ${m===lastMois?'selected':''}>${m.charAt(0)+m.slice(1).toLowerCase()}</option>`).join('')}
         </select>
       </div>
     </div>
     <div class="form-group"><label class="form-label">Produit</label><input class="form-input" id="bv-produit" placeholder="Ex: DRAGON CHINOIS"></div>
     <div class="grid-2">
-      <div class="form-group"><label class="form-label">Prix de vente (€)</label><input type="number" class="form-input" id="bv-prix" value="0" min="0" step="0.50" oninput="updateCommField()"></div>
+      <div class="form-group"><label class="form-label">Quantité</label><input type="number" class="form-input" id="bv-qty" value="1" min="1" step="1" oninput="updateCommField()"></div>
+      <div class="form-group"><label class="form-label">Prix de vente unitaire (€)</label><input type="number" class="form-input" id="bv-prix" value="0" min="0" step="0.50" oninput="updateCommField()"></div>
+    </div>
+    <div class="grid-2">
       <div class="form-group"><label class="form-label">Commission (€)</label><input type="number" class="form-input" id="bv-comm" value="0" min="0" step="0.01"></div>
+      <div class="form-group"><label class="form-label">&nbsp;</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;padding:9px 0;"><input type="checkbox" id="bv-minimaux" onchange="updateCommField()" style="width:18px;height:18px;"> Minimaux (Véro : -0,50€)</label>
+      </div>
     </div>
     <div id="bv-net-preview" style="padding:10px;background:var(--bg);border-radius:8px;font-size:13px;color:var(--muted);margin-bottom:4px;">Prix net : —</div>
     <div class="modal-actions">
@@ -11588,39 +11595,47 @@ function openAddBoutiqueVente() {
       <button class="btn btn-primary" onclick="doAddBoutiqueVente()">Ajouter</button>
     </div>
   `);
+  updateCommField();
 }
 
 function updateCommField() {
   const boutique = document.getElementById('bv-boutique')?.value;
   const prix = +document.getElementById('bv-prix')?.value || 0;
+  const qty = Math.max(1, parseInt(document.getElementById('bv-qty')?.value)||1);
+  const isMini = document.getElementById('bv-minimaux')?.checked;
   const commInput = document.getElementById('bv-comm');
   const netDiv = document.getElementById('bv-net-preview');
   if(!commInput) return;
-  if(boutique==='boutB') {
-    // Arts Complices : 10% automatique
-    const comm = Math.round(prix * 0.10 * 100)/100;
-    commInput.value = comm.toFixed(2);
-    if(netDiv) netDiv.innerHTML = `Prix net : <strong style="color:var(--accent2);">${(prix-comm).toFixed(2)} €</strong>`;
-  } else if(boutique==='boutA') {
-    // La Boutique de Véro : pas de commission (prix déposé = prix net)
-    commInput.value = '0.00';
-    if(netDiv) netDiv.innerHTML = `Prix net : <strong style="color:var(--accent2);">${prix.toFixed(2)} €</strong>`;
-  }
+  const brut = prix*qty;
+  let comm = 0;
+  if(boutique==='boutB') comm = Math.round(brut*0.10*100)/100;      // Arts Complices : 10%
+  else if(boutique==='boutA') comm = (isMini?0.50:1.00)*qty;        // Véro : -1€ (ou -0,50€ Minimaux) par pièce
+  commInput.value = comm.toFixed(2);
+  if(netDiv) netDiv.innerHTML = `${qty} × ${prix.toFixed(2)}€ = ${brut.toFixed(2)}€ — Prix net : <strong style="color:var(--accent2);">${(brut-comm).toFixed(2)} €</strong>`;
 }
 
 function doAddBoutiqueVente() {
   const produit = document.getElementById('bv-produit').value.trim().toUpperCase();
   if(!produit) { showToast('Produit requis !', false); return; }
   const boutiqueVal = document.getElementById('bv-boutique').value;
+  const moisVal = document.getElementById('bv-mois').value;
+  const qty = Math.max(1, parseInt(document.getElementById('bv-qty').value)||1);
   const prixVal = +document.getElementById('bv-prix').value;
-  // Auto-calculate comm for Arts Complices (10%), reduction for Véro
-  let commVal = +document.getElementById('bv-comm').value;
+  const isMini = document.getElementById('bv-minimaux')?.checked;
+  const categorie = isMini ? 'Minimaux' : '';
+  // Commission recalculée proprement (×quantité)
+  let commVal;
+  if(boutiqueVal==='boutB') commVal = Math.round(prixVal*qty*0.10*100)/100;
+  else if(boutiqueVal==='boutA') commVal = (isMini?0.50:1.00)*qty;
+  else commVal = +document.getElementById('bv-comm').value || 0;
+  window._lastBoutiqueMois = moisVal;   // mémorise le dernier mois choisi
   const v = {
     id: db.nextBoutiqueVenteId++,
     boutique: boutiqueVal,
-    mois: document.getElementById('bv-mois').value,
+    mois: moisVal,
     produit,
-    categorie: document.getElementById('bv-cat') ? document.getElementById('bv-cat').value : '',
+    categorie,
+    qty,
     prixVente: prixVal,
     comm: commVal,
   };
@@ -11655,10 +11670,16 @@ function openEditBoutiqueVente(id) {
     </div>
     <div class="form-group"><label class="form-label">Produit</label><input class="form-input" id="bve-produit" value="${v.produit||''}"></div>
     <div class="grid-2">
-      <div class="form-group"><label class="form-label">Prix de vente (€)</label><input type="number" class="form-input" id="bve-prix" value="${v.prixVente||0}" min="0" step="0.50" oninput="updateCommFieldEdit()"></div>
-      <div class="form-group"><label class="form-label">Commission (€)</label><input type="number" class="form-input" id="bve-comm" value="${v.comm||0}" min="0" step="0.01"></div>
+      <div class="form-group"><label class="form-label">Quantité</label><input type="number" class="form-input" id="bve-qty" value="${v.qty||1}" min="1" step="1" oninput="updateCommFieldEdit()"></div>
+      <div class="form-group"><label class="form-label">Prix de vente unitaire (€)</label><input type="number" class="form-input" id="bve-prix" value="${v.prixVente||0}" min="0" step="0.50" oninput="updateCommFieldEdit()"></div>
     </div>
-    <div id="bve-net-preview" style="padding:10px;background:var(--bg);border-radius:8px;font-size:13px;color:var(--muted);margin-bottom:4px;">Prix net : ${((v.prixVente||0)-(v.comm||0)).toFixed(2)} €</div>
+    <div class="grid-2">
+      <div class="form-group"><label class="form-label">Commission (€)</label><input type="number" class="form-input" id="bve-comm" value="${v.comm||0}" min="0" step="0.01"></div>
+      <div class="form-group"><label class="form-label">&nbsp;</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;padding:9px 0;"><input type="checkbox" id="bve-minimaux" ${v.categorie==='Minimaux'?'checked':''} onchange="updateCommFieldEdit()" style="width:18px;height:18px;"> Minimaux (Véro : -0,50€)</label>
+      </div>
+    </div>
+    <div id="bve-net-preview" style="padding:10px;background:var(--bg);border-radius:8px;font-size:13px;color:var(--muted);margin-bottom:4px;">Prix net : ${((v.prixVente||0)*(v.qty||1)-(v.comm||0)).toFixed(2)} €</div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="doEditBoutiqueVente(${id})">Enregistrer</button>
@@ -11669,19 +11690,17 @@ function openEditBoutiqueVente(id) {
 function updateCommFieldEdit() {
   const boutique = document.getElementById('bve-boutique')?.value;
   const prix = +document.getElementById('bve-prix')?.value || 0;
+  const qty = Math.max(1, parseInt(document.getElementById('bve-qty')?.value)||1);
+  const isMini = document.getElementById('bve-minimaux')?.checked;
   const commInput = document.getElementById('bve-comm');
   const netDiv = document.getElementById('bve-net-preview');
   if(!commInput) return;
-  if(boutique==='boutB') {
-    // Arts Complices : 10% automatique
-    const comm = Math.round(prix * 0.10 * 100)/100;
-    commInput.value = comm.toFixed(2);
-    if(netDiv) netDiv.innerHTML = `Prix net : <strong style="color:var(--accent2);">${(prix-comm).toFixed(2)} €</strong>`;
-  } else if(boutique==='boutA') {
-    // La Boutique de Véro : pas de commission
-    commInput.value = '0.00';
-    if(netDiv) netDiv.innerHTML = `Prix net : <strong style="color:var(--accent2);">${prix.toFixed(2)} €</strong>`;
-  }
+  const brut = prix*qty;
+  let comm = 0;
+  if(boutique==='boutB') comm = Math.round(brut*0.10*100)/100;
+  else if(boutique==='boutA') comm = (isMini?0.50:1.00)*qty;
+  commInput.value = comm.toFixed(2);
+  if(netDiv) netDiv.innerHTML = `${qty} × ${prix.toFixed(2)}€ = ${brut.toFixed(2)}€ — Prix net : <strong style="color:var(--accent2);">${(brut-comm).toFixed(2)} €</strong>`;
 }
 
 function doEditBoutiqueVente(id) {
@@ -11690,6 +11709,8 @@ function doEditBoutiqueVente(id) {
   v.boutique = document.getElementById('bve-boutique').value;
   v.mois = document.getElementById('bve-mois').value;
   v.produit = document.getElementById('bve-produit').value.trim().toUpperCase();
+  v.qty = Math.max(1, parseInt(document.getElementById('bve-qty').value)||1);
+  v.categorie = document.getElementById('bve-minimaux')?.checked ? 'Minimaux' : '';
   v.prixVente = +document.getElementById('bve-prix').value;
   v.comm = +document.getElementById('bve-comm').value;
   saveData(); closeModal(); showToast('Vente mise à jour ✅', true); render('boutiques');
