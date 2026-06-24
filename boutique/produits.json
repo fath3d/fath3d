@@ -629,5 +629,22 @@
       }
     ],
     "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p41_1782332007897_0.jpg"
+  },
+  {
+    "id": 42,
+    "nom": "FLORIZARRE",
+    "cat": "Autre",
+    "prix": 0,
+    "stock": 0,
+    "desc": "",
+    "emoji": "📦",
+    "vis": "public",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p42_1782332116768_0.jpg"
+      }
+    ],
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p42_1782332116768_0.jpg"
   }
 ]
