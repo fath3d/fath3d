@@ -612,5 +612,22 @@
       }
     ],
     "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p40_1782331943125_0.jpg"
+  },
+  {
+    "id": 41,
+    "nom": "RENGOKU",
+    "cat": "Cadre (Hueforge)",
+    "prix": 15,
+    "stock": 0,
+    "desc": "Imprimé en couches fines pour de belles couleurs et plein de détails. À accrocher au mur ou à poser sur un meuble (les petits pieds sont fournis).\nImprimé en PLA.\nTaille : 22 × 22 cm\nLes couleurs peuvent varier légèrement selon la marque de filament utilisée.\n⚠️ À garder à l'abri du soleil et de la chaleur",
+    "emoji": "📦",
+    "vis": "vip",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p41_1782332007897_0.jpg"
+      }
+    ],
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p41_1782332007897_0.jpg"
   }
 ]
