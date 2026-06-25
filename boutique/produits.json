@@ -1,15 +1,5 @@
 [
   {
-    "id": 1,
-    "nom": "Dragon articulé",
-    "cat": "Articulés",
-    "prix": 20,
-    "desc": "Grand dragon souple, coloris variés",
-    "stock": 5,
-    "emoji": "🐉",
-    "vis": "public"
-  },
-  {
     "id": 2,
     "nom": "Serpent articulé",
     "cat": "Articulés",
