@@ -1291,5 +1291,22 @@
       }
     ],
     "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p88_1782378903798_0.jpg"
+  },
+  {
+    "id": 89,
+    "nom": "K POP",
+    "cat": "Marque Page",
+    "prix": 5,
+    "stock": 1,
+    "desc": "Imprimé en couches fines pour de belles couleurs et plein de détails.\nImprimé en PLA.\nDimensions : 15 × 5 cm.\nLes couleurs peuvent varier légèrement selon la marque de filament utilisée.\n⚠️ À garder à l'abri du soleil et de la chaleur",
+    "emoji": "📦",
+    "vis": "vip",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p89_1782378978830_0.jpg"
+      }
+    ],
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p89_1782378978830_0.jpg"
   }
 ]
