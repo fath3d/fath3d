@@ -1168,5 +1168,22 @@
       }
     ],
     "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p99_1782394659098_0.jpg"
+  },
+  {
+    "id": 100,
+    "nom": "JAPON TEMPLE",
+    "cat": "Marque Page",
+    "prix": 5,
+    "stock": 6,
+    "desc": "Imprimé en couches fines pour de belles couleurs et plein de détails.\nImprimé en PLA.\nDimensions : 15 × 5 cm.\nLes couleurs peuvent varier légèrement selon la marque de filament utilisée.\n⚠️ À garder à l'abri du soleil et de la chaleur",
+    "emoji": "📦",
+    "vis": "vip",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p100_1782394715955_0.jpg"
+      }
+    ],
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p100_1782394715955_0.jpg"
   }
 ]
