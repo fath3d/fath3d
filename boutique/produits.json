@@ -30,16 +30,6 @@
     "vis": "public"
   },
   {
-    "id": 6,
-    "nom": "Tortue articulée",
-    "cat": "Articulés",
-    "prix": 12,
-    "desc": "Tortue souple",
-    "stock": 3,
-    "emoji": "🐢",
-    "vis": "public"
-  },
-  {
     "id": 7,
     "nom": "Axolotl articulé",
     "cat": "Articulés",
