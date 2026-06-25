@@ -20,16 +20,6 @@
     "vis": "public"
   },
   {
-    "id": 3,
-    "nom": "Œuf anti-stress",
-    "cat": "Anti-stress",
-    "prix": 8,
-    "desc": "Œuf dragon qui s'ouvre",
-    "stock": 2,
-    "emoji": "🥚",
-    "vis": "public"
-  },
-  {
     "id": 4,
     "nom": "Panda minimaux",
     "cat": "Minimaux",
