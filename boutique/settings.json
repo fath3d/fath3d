@@ -7,5 +7,9 @@
   "agendaTexte": "",
   "bandeauActif": false,
   "bandeauTexte": "",
-  "bannerImg": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/pbanniere_1782415240933.jpg"
+  "bannerImg": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/pbanniere_1782415240933.jpg",
+  "adminPass": "Pat160906*",
+  "vipPass": "VIP2026",
+  "logoImg": "",
+  "couleurAccent": ""
 }
