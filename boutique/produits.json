@@ -1,15 +1,5 @@
 [
   {
-    "id": 2,
-    "nom": "Serpent articulé",
-    "cat": "Articulés",
-    "prix": 10,
-    "desc": "Serpent flexible multicolore",
-    "stock": 8,
-    "emoji": "🐍",
-    "vis": "public"
-  },
-  {
     "id": 4,
     "nom": "Panda minimaux",
     "cat": "Minimaux",
