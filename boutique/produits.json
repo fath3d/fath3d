@@ -20,16 +20,6 @@
     "vis": "public"
   },
   {
-    "id": 7,
-    "nom": "Axolotl articulé",
-    "cat": "Articulés",
-    "prix": 10,
-    "desc": "Axolotl tout doux",
-    "stock": 7,
-    "emoji": "🦎",
-    "vis": "public"
-  },
-  {
     "id": 9,
     "nom": "ZORO",
     "cat": "Cadre (Hueforge)",
