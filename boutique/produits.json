@@ -1223,5 +1223,22 @@
       }
     ],
     "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p83_1782378329852_0.jpg"
+  },
+  {
+    "id": 84,
+    "nom": "CROKMOU",
+    "cat": "Cadre (Hueforge)",
+    "prix": 15,
+    "stock": 1,
+    "desc": "Imprimé en couches fines pour de belles couleurs et plein de détails. À accrocher au mur ou à poser sur un meuble (les petits pieds sont fournis).\nImprimé en PLA.\nTaille : 22 × 22 cm\nLes couleurs peuvent varier légèrement selon la marque de filament utilisée.\n⚠️ À garder à l'abri du soleil et de la chaleur",
+    "emoji": "📦",
+    "vis": "vip",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p84_1782378418799_0.jpg"
+      }
+    ],
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p84_1782378418799_0.jpg"
   }
 ]
