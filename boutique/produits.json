@@ -1376,5 +1376,22 @@
       }
     ],
     "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p93_1782379242601_0.jpg"
+  },
+  {
+    "id": 94,
+    "nom": "LICORNE",
+    "cat": "Marque Page",
+    "prix": 5,
+    "stock": 1,
+    "desc": "Imprimé en couches fines pour de belles couleurs et plein de détails.\nImprimé en PLA.\nDimensions : 15 × 5 cm.\nLes couleurs peuvent varier légèrement selon la marque de filament utilisée.\n⚠️ À garder à l'abri du soleil et de la chaleur",
+    "emoji": "📦",
+    "vis": "vip",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p94_1782379308043_0.jpg"
+      }
+    ],
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p94_1782379308043_0.jpg"
   }
 ]
