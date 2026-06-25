@@ -1,15 +1,5 @@
 [
   {
-    "id": 4,
-    "nom": "Panda minimaux",
-    "cat": "Minimaux",
-    "prix": 6,
-    "desc": "Petit panda collectionnable",
-    "stock": 6,
-    "emoji": "🐼",
-    "vis": "public"
-  },
-  {
     "id": 9,
     "nom": "ZORO",
     "cat": "Cadre (Hueforge)",
