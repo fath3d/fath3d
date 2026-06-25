@@ -10,16 +10,6 @@
     "vis": "public"
   },
   {
-    "id": 5,
-    "nom": "Panneau cerisier",
-    "cat": "Déco",
-    "prix": 25,
-    "desc": "Panneau mural japonais sur chevalet",
-    "stock": 4,
-    "emoji": "🌸",
-    "vis": "public"
-  },
-  {
     "id": 9,
     "nom": "ZORO",
     "cat": "Cadre (Hueforge)",
