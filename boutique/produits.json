@@ -991,10 +991,11 @@
     "medias": [
       {
         "type": "image",
-        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p92_1782379182037_0.jpg"
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p92_1788465128119_0.jpg"
       }
     ],
-    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p92_1782379182037_0.jpg"
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p92_1788465128119_0.jpg",
+    "dim": ""
   },
   {
     "id": 93,
