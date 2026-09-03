@@ -811,10 +811,11 @@
     "medias": [
       {
         "type": "image",
-        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p82_1782378261842_0.jpg"
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p82_1788464077542_0.jpg"
       }
     ],
-    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p82_1782378261842_0.jpg"
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p82_1788464077542_0.jpg",
+    "dim": ""
   },
   {
     "id": 83,
