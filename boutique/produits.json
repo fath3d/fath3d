@@ -1133,9 +1133,14 @@
       {
         "type": "image",
         "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p100_1782394715955_0.jpg"
+      },
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p100_1788465380400_1.jpg"
       }
     ],
-    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p100_1782394715955_0.jpg"
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p100_1782394715955_0.jpg",
+    "dim": ""
   },
   {
     "id": 101,
