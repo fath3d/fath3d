@@ -1093,8 +1093,14 @@
     "desc": "Imprimé en couches fines pour de belles couleurs et plein de détails.\nImprimé en PLA.\nDimensions : 15 × 5 cm.\nLes couleurs peuvent varier légèrement selon la marque de filament utilisée.\n⚠️ À garder à l'abri du soleil et de la chaleur",
     "emoji": "📦",
     "vis": "vip",
-    "medias": [],
-    "photo": ""
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p98_1788465215822_0.jpg"
+      }
+    ],
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p98_1788465215822_0.jpg",
+    "dim": ""
   },
   {
     "id": 99,
