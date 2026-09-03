@@ -901,10 +901,11 @@
     "medias": [
       {
         "type": "image",
-        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p87_1782378842558_0.jpg"
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p87_1788464833499_0.jpg"
       }
     ],
-    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p87_1782378842558_0.jpg"
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p87_1788464833499_0.jpg",
+    "dim": ""
   },
   {
     "id": 88,
