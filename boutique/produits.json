@@ -1199,5 +1199,105 @@
     "vis": "vip",
     "medias": [],
     "photo": ""
+  },
+  {
+    "id": 106,
+    "nom": "Diplodocus",
+    "cat": "Les articulés",
+    "sfam": "Les Minimaux",
+    "univ": "Dinosaures",
+    "prix": 2,
+    "stock": 5,
+    "desc": "",
+    "dim": "",
+    "emoji": "🦕",
+    "vis": "public",
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p106_1788525918148.jpg",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p106_1788525918148.jpg"
+      }
+    ]
+  },
+  {
+    "id": 107,
+    "nom": "Stégosaure",
+    "cat": "Les articulés",
+    "sfam": "Les Minimaux",
+    "univ": "Dinosaures",
+    "prix": 2,
+    "stock": 5,
+    "desc": "",
+    "dim": "",
+    "emoji": "🦕",
+    "vis": "public",
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p107_1788525919425.jpg",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p107_1788525919425.jpg"
+      }
+    ]
+  },
+  {
+    "id": 108,
+    "nom": "Ptérodactyle",
+    "cat": "Les articulés",
+    "sfam": "Les Minimaux",
+    "univ": "Dinosaures",
+    "prix": 2,
+    "stock": 5,
+    "desc": "",
+    "dim": "",
+    "emoji": "🦕",
+    "vis": "public",
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p108_1788525920695.jpg",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p108_1788525920695.jpg"
+      }
+    ]
+  },
+  {
+    "id": 109,
+    "nom": "Tricératops",
+    "cat": "Les articulés",
+    "sfam": "Les Minimaux",
+    "univ": "Dinosaures",
+    "prix": 2,
+    "stock": 5,
+    "desc": "",
+    "dim": "",
+    "emoji": "🦕",
+    "vis": "public",
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p109_1788525921980.jpg",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p109_1788525921980.jpg"
+      }
+    ]
+  },
+  {
+    "id": 110,
+    "nom": "T-Rex",
+    "cat": "Les articulés",
+    "sfam": "Les Minimaux",
+    "univ": "Dinosaures",
+    "prix": 2,
+    "stock": 5,
+    "desc": "",
+    "dim": "",
+    "emoji": "🦕",
+    "vis": "public",
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p110_1788525923544.jpg",
+    "medias": [
+      {
+        "type": "image",
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p110_1788525923544.jpg"
+      }
+    ]
   }
 ]
