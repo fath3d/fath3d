@@ -1116,10 +1116,11 @@
     "medias": [
       {
         "type": "image",
-        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p99_1782394659098_0.jpg"
+        "data": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p99_1788508568520_0.jpg"
       }
     ],
-    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p99_1782394659098_0.jpg"
+    "photo": "https://raw.githubusercontent.com/fath3d/fath3d/main/boutique/photos/p99_1788508568520_0.jpg",
+    "dim": ""
   },
   {
     "id": 100,
