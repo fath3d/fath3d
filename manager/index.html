@@ -17443,18 +17443,50 @@ function ivSaveCategory(fromReview){
 var _ivRecog = null;
 
 function ivWordToNum(tok){
-  if(/^\d+$/.test(tok)) return parseInt(tok,10);
-  const m={zero:0,un:1,une:1,deux:2,trois:3,quatre:4,cinq:5,six:6,sept:7,huit:8,neuf:9,dix:10,onze:11,douze:12,treize:13,quatorze:14,quinze:15,seize:16,vingt:20};
-  return (tok in m) ? m[tok] : null;
+  tok=vocalNorm(String(tok||'')).trim();
+  if(/^\d{1,3}$/.test(tok)) return parseInt(tok,10);
+  const m={zero:0,un:1,une:1,deux:2,trois:3,quatre:4,cinq:5,six:6,sept:7,huit:8,neuf:9,dix:10,onze:11,douze:12,treize:13,quatorze:14,quinze:15,seize:16,dixsept:17,dixhuit:18,dixneuf:19,vingt:20,trente:30,quarante:40,cinquante:50,soixante:60,cent:100,cents:100};
+  return Object.prototype.hasOwnProperty.call(m,tok) ? m[tok] : null;
+}
+// Lit un nombre français explicite de 0 à 999. Retourne null en cas de doute :
+// une quantité incertaine ne doit jamais devenir un stock certain.
+function ivReadNumber(tokens,start){
+  let i=start, parts=[];
+  while(i<tokens.length && /^(\d{1,3}|zero|un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|treize|quatorze|quinze|seize|vingt|trente|quarante|cinquante|soixante|cent|cents|et|vingts|quatrevingt|quatrevingts)$/.test(tokens[i])){ parts.push(tokens[i++]); }
+  if(!parts.length) return null;
+  if(parts.length===1 && /^\d{1,3}$/.test(parts[0])) return {value:+parts[0],next:i};
+  parts=parts.filter(x=>x!=='et');
+  let hundred=0, rest=0, seen=false;
+  if(parts[0]==='cent'||parts[0]==='cents'){ hundred=100; parts.shift(); seen=true; }
+  else if(parts.length>=2 && ivWordToNum(parts[0])>=1 && ivWordToNum(parts[0])<=9 && (parts[1]==='cent'||parts[1]==='cents')){ hundred=ivWordToNum(parts[0])*100; parts.splice(0,2); seen=true; }
+  if(parts.length){
+    let p=parts.join(' '), v=null;
+    const direct={zero:0,un:1,une:1,deux:2,trois:3,quatre:4,cinq:5,six:6,sept:7,huit:8,neuf:9,dix:10,onze:11,douze:12,treize:13,quatorze:14,quinze:15,seize:16};
+    if(Object.prototype.hasOwnProperty.call(direct,p)) v=direct[p];
+    else {
+      const u=direct[parts[parts.length-1]], head=parts.slice(0,-1).join(' ');
+      const tens={vingt:20,trente:30,quarante:40,cinquante:50,soixante:60};
+      if(Object.prototype.hasOwnProperty.call(tens,p)) v=tens[p];
+      else if(Object.prototype.hasOwnProperty.call(tens,head) && u!==undefined && u<10) v=tens[head]+u;
+      else if(head==='soixante' && u!==undefined && u>=10 && u<=16) v=60+u;
+      else if(p==='quatre vingt'||p==='quatre vingts'||p==='quatrevingt'||p==='quatrevingts') v=80;
+      else if((head==='quatre vingt'||head==='quatre vingts'||head==='quatrevingt'||head==='quatrevingts') && u!==undefined && u<10) v=80+u;
+      else if(head==='quatre vingt dix'||head==='quatre vingts dix'||head==='quatrevingt dix'||head==='quatrevingts dix') v=90+(u||0);
+      else if(parts.length===2 && parts[0]==='dix' && u!==undefined && u<10) v=10+u;
+      else if(parts.length===2 && parts[0]==='soixante' && (u===10||u===11||u===12||u===13||u===14||u===15||u===16)) v=60+u;
+      else if(parts.length===3 && parts[0]==='soixante' && parts[1]==='dix' && u!==undefined && u<10) v=70+u;
+    }
+    if(v===null) return null; rest=v; seen=true;
+  }
+  const value=hundred+rest;
+  return seen && value>=0 && value<=999 ? {value:value,next:i} : null;
 }
 // Détection tolérante des mots-clés (la reco entend souvent "marcher"/"marchez" pour "marché")
 function ivIsMarche(t){ return t.indexOf('march')===0; }   // marche, marché, marcher, marchez, marchés…
 function ivIsMaison(t){ return t.indexOf('maiso')===0; }    // maison, maisons
 function ivIsStock(t){  return t.indexOf('stock')===0; }
 function ivFindVal(tokens, isKw){
-  for(let i=0;i<tokens.length;i++){
-    if(isKw(tokens[i])){ for(let j=i+1;j<tokens.length;j++){ const v=ivWordToNum(tokens[j]); if(v!==null) return v; } }
-  }
+  for(let i=0;i<tokens.length;i++) if(isKw(tokens[i])){ const n=ivReadNumber(tokens,i+1); if(n) return n.value; }
   return null;
 }
 function ivLeven(a,b){
@@ -17471,25 +17503,35 @@ function ivPhonKey(s){
     return w.replace(/[aeiouy]/g,'').replace(/(.)\\1+/g,'$1') || w;
   }).join(' ');
 }
+const IV_PRODUCT_ALIASES = Object.freeze({
+  eren:['irene'],
+  'luffy enerve':['luffy enerve','luffy enervé','lufi enerve','lufi enervé']
+});
+function ivProductKey(s){
+  // Même clé pour le catalogue et pour la dictée : accents, tirets, apostrophes
+  // et espaces multiples ne peuvent plus empêcher une correspondance exacte.
+  return vocalNorm(s).replace(/\s+/g,' ').trim();
+}
 function ivMatchProduct(nameCand, prods){
-  const q=vocalNorm(nameCand);
+  const q=ivProductKey(nameCand);
+  window._ivMatchIssue=null;
   if(!q || q.length<2) return null;
-  let best=null,bestScore=1e9;
-  prods.forEach(p=>{
-    const nm=vocalNorm(p.name); if(!nm) return;
-    if(nm===q || (q.length>=3 && (nm.includes(q)||q.includes(nm)))){ if(bestScore>0){bestScore=0;best=p;} return; }
-    const score=ivLeven(q,nm)/Math.max(nm.length,q.length);
-    if(score<bestScore){ bestScore=score; best=p; }
-  });
-  if(bestScore<=0.34) return best;
-
-  // Si la reconnaissance écrit un homophone (ex. « Irène » pour Eren),
-  // on accepte seulement si UNE SEULE référence de la catégorie partage cette clé.
-  const pk=ivPhonKey(q);
-  if(pk){
-    const phon=prods.filter(p=>ivPhonKey(p.name)===pk);
-    if(phon.length===1) return phon[0];
+  const exact=prods.filter(p=>ivProductKey(p.name)===q);
+  if(exact.length===1) return exact[0];
+  const alias=prods.filter(p=>(IV_PRODUCT_ALIASES[ivProductKey(p.name)]||[]).map(ivProductKey).includes(q));
+  if(alias.length===1) return alias[0];
+  const contained=prods.filter(p=>{ const n=ivProductKey(p.name); return q.length>=3 && (n.includes(q)||q.includes(n)); });
+  if(contained.length){
+    const longest=Math.max(...contained.map(p=>ivProductKey(p.name).length));
+    const specific=contained.filter(p=>ivProductKey(p.name).length===longest);
+    if(specific.length===1) return specific[0];
+    window._ivMatchIssue='ambiguous'; return null;
   }
+  const ranked=prods.map(p=>({p:p,s:ivLeven(q,vocalNorm(p.name))/Math.max(q.length,vocalNorm(p.name).length)})).sort((a,b)=>a.s-b.s);
+  if(ranked[0] && ranked[0].s<=0.24 && (!ranked[1] || ranked[1].s-ranked[0].s>=0.08)) return ranked[0].p;
+  const pk=ivPhonKey(q), phon=pk?prods.filter(p=>ivPhonKey(p.name)===pk):[];
+  if(phon.length===1) return phon[0];
+  if((ranked[0]&&ranked[0].s<=0.34)||phon.length>1) window._ivMatchIssue='ambiguous';
   return null;
 }
 // Applique une saisie réussie (temporaire) + mémorise l'état précédent pour l'annulation
@@ -17505,6 +17547,12 @@ function ivApplyEntry(prod, marche, maison){
   window._ivLastId = prod.id;
   window._ivMsg = {type:'ok', text:''};
   vocalSpeak(prod.name+'. Marché '+marche+'. Maison '+maison+'.');
+}
+function ivApplyPartial(prod, marche, maison){
+  const current=window._ivEdits[prod.id]||{};
+  const mar=marche===null ? (current.marche!==undefined?current.marche:Number((prod.stocks||{}).marche)||0) : marche;
+  const mai=maison===null ? (current.maison!==undefined?current.maison:Number((prod.stocks||{}).maison)||0) : maison;
+  ivApplyEntry(prod,mar,mai);
 }
 // « annule la dernière » / « non » : restaure l'état précédent (pas juste effacer)
 function ivUndo(spoken){
@@ -17526,8 +17574,10 @@ function ivUndo(spoken){
   ivRerender();
 }
 // « corrige » : passe en mode correction sur le dernier produit saisi
-function ivEnterCorrection(){
-  const p = (window._ivLastId!=null) ? (db.products||[]).find(x=>x.id===window._ivLastId) : null;
+function ivEnterCorrection(targetName){
+  const prods=(db.products||[]).filter(p=>p.categorie===window._ivCat);
+  const named=targetName ? ivMatchProduct(targetName,prods) : null;
+  const p = named || ((window._ivLastId!=null) ? (db.products||[]).find(x=>x.id===window._ivLastId) : null);
   if(!p){ window._ivMsg={type:'err',text:"⚠️ Rien à corriger — dicte d'abord un produit."}; vocalSpeak('Rien à corriger.'); ivRerender(); return; }
   window._ivCorrMode = p.id; window._ivMsg=null;
   vocalSpeak('Correction. '+p.name+'. Dis marché et maison.');
@@ -17583,10 +17633,10 @@ function ivBurstParse(raw){
   const chunks=[];
   let begin=0;
   for(let i=0;i<tokens.length;i++){
-    const v=ivWordToNum(tokens[i]);
-    if(v!==null && i>begin){
-      chunks.push({name:tokens.slice(begin,i).join(' '),val:v});
-      begin=i+1;
+    const n=ivReadNumber(tokens,i);
+    if(n && i>begin){
+      chunks.push({name:tokens.slice(begin,i).join(' '),val:n.value});
+      begin=n.next; i=n.next-1;
     }
   }
   if(!chunks.length){
@@ -17623,26 +17673,46 @@ function ivProcess(raw){
   const isCorr  = tokens.some(t=>t.indexOf('corrig')===0 || t.indexOf('correct')===0); // corrige, corrigé, corriges, corrigez, correction…
   const isCatEnd = tokens.some(t=>t.indexOf('categor')===0) && tokens.some(t=>t.indexOf('termin')===0 || t.indexOf('fini')===0);
   if(isCatEnd){ ivStartReview(); return; }
+  // Pendant une correction, « non » abandonne uniquement la correction en cours :
+  // il ne doit pas annuler une précédente saisie correcte.
+  if(window._ivCorrMode!=null && (nrm==='non' || nrm==='no')){
+    window._ivCorrMode=null; window._ivMsg={type:'ok',text:'Correction annulée.'};
+    vocalSpeak('Correction annulée.'); ivRerender(); return;
+  }
   if(nrm==='non' || nrm==='no' || isAnnul){
     ivUndo((nrm==='non'||nrm==='no') ? 'Saisie annulée.' : 'Dernière saisie annulée.'); return;
   }
-  if(isCorr){ ivEnterCorrection(); return; }
 
-  // 2) MODE CORRECTION : la phrase ne contient que les valeurs, le produit est déjà connu
+  // 2) MODE CORRECTION : la phrase ne contient que les valeurs, le produit est déjà connu.
+  // Cette étape doit passer AVANT une éventuelle nouvelle commande « corrige ».
   if(window._ivCorrMode!=null){
     const p=(db.products||[]).find(x=>x.id===window._ivCorrMode);
     if(!p){ window._ivCorrMode=null; }
     else {
       const cMar=ivFindVal(tokens,ivIsMarche), cMai=ivFindVal(tokens,ivIsMaison);
-      if(cMar===null || cMai===null){
-        window._ivMsg={type:'incomplete', text:'⚠️ Correction incomplète pour '+p.name+' — dis « marché X, maison Y ».'};
+      if(cMar===null && cMai===null){
+        window._ivMsg={type:'incomplete', text:'⚠️ Correction incomplète pour '+p.name+' — dis « marché X » ou « maison Y ».'};
         vocalSpeak("Je n'ai pas compris."); ivRerender(); return;
       }
-      ivApplyEntry(p, cMar, cMai); window._ivCorrMode=null; ivRerender(); return;
+      ivApplyPartial(p, cMar, cMai); window._ivCorrMode=null; ivRerender(); return;
     }
   }
 
-  // 3) RECONNAISSANCE NORMALE (logique de l'étape 2, inchangée)
+  // « Corrige Itachi, marché 1, maison 0 » fonctionne en une phrase ;
+  // « corrige Itachi » conserve le dialogue en deux temps.
+  if(isCorr){
+    const corrAt=tokens.findIndex(t=>t.indexOf('corrig')===0 || t.indexOf('correct')===0);
+    let end=tokens.length;
+    for(let i=corrAt+1;i<tokens.length;i++) if(ivIsMarche(tokens[i])||ivIsMaison(tokens[i])||ivIsStock(tokens[i])||ivReadNumber(tokens,i)){ end=i; break; }
+    const target=tokens.slice(corrAt+1,end).join(' ');
+    const cMar=ivFindVal(tokens,ivIsMarche), cMai=ivFindVal(tokens,ivIsMaison);
+    const prods=(db.products||[]).filter(p=>p.categorie===window._ivCat);
+    const p=target ? ivMatchProduct(target,prods) : ((window._ivLastId!=null)?(db.products||[]).find(x=>x.id===window._ivLastId):null);
+    if(p && (cMar!==null || cMai!==null)){ ivApplyPartial(p,cMar,cMai); window._ivCorrMode=null; ivRerender(); return; }
+    ivEnterCorrection(target); return;
+  }
+
+  // 3) RECONNAISSANCE NORMALE
   const prods = (db.products||[]).filter(p=>p.categorie===window._ivCat);
   let cut = tokens.length;
   for(let i=0;i<tokens.length;i++){ const t=tokens[i]; if(ivIsMarche(t)||ivIsMaison(t)||ivIsStock(t)||ivWordToNum(t)!==null){ cut=i; break; } }
@@ -17653,7 +17723,7 @@ function ivProcess(raw){
 
   if(!prod){
     window._ivLast=null;
-    window._ivMsg={type:'err', text:'⚠️ Produit non reconnu — rien n\'a été modifié'};
+    window._ivMsg={type:'err', text:window._ivMatchIssue==='ambiguous'?'⚠️ Plusieurs produits correspondent — corrige le nom. Rien n\'a été modifié.':'⚠️ Produit non reconnu — rien n\'a été modifié'};
     vocalSpeak("Je n'ai pas compris."); ivRerender(); return;
   }
   if(marche===null || maison===null){
@@ -17664,9 +17734,34 @@ function ivProcess(raw){
   ivApplyEntry(prod, marche, maison);
   ivRerender();
 }
+function ivScoreAlternative(raw){
+  const tokens=vocalNorm(raw||'').trim().split(' ').filter(Boolean);
+  if(!tokens.length) return -100;
+  if(window._ivBurst&&window._ivBurst.active){
+    let score=0, begin=0, prods=(db.products||[]).filter(p=>p.categorie===window._ivCat);
+    for(let i=0;i<tokens.length;i++){ const n=ivReadNumber(tokens,i); if(n&&i>begin){ if(ivMatchProduct(tokens.slice(begin,i).join(' '),prods)) score+=10; else score-=5; begin=n.next; i=n.next-1; } }
+    return score;
+  }
+  if(tokens.some(t=>t.indexOf('annul')===0||t.indexOf('corrig')===0)) return 5;
+  const mar=ivFindVal(tokens,ivIsMarche), mai=ivFindVal(tokens,ivIsMaison);
+  let cut=tokens.length; for(let i=0;i<tokens.length;i++) if(ivIsMarche(tokens[i])||ivIsMaison(tokens[i])||ivIsStock(tokens[i])||ivReadNumber(tokens,i)){cut=i;break;}
+  const prod=ivMatchProduct(tokens.slice(0,cut).join(' '),(db.products||[]).filter(p=>p.categorie===window._ivCat));
+  return (prod?10:0)+(mar!==null?3:0)+(mai!==null?3:0);
+}
+function ivChooseAlternative(result){
+  let best=null, bestScore=-Infinity, tied=false;
+  for(let i=0;i<result.length;i++){
+    const text=result[i]&&result[i].transcript;
+    const score=ivScoreAlternative(text);
+    if(score>bestScore){ best=text; bestScore=score; tied=false; }
+    else if(score===bestScore) tied=true;
+  }
+  // En cas d'égalité, ne privilégier aucune dictée incertaine.
+  return !best || (tied&&bestScore<16) ? null : best;
+}
 function ivMicStart(){
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if(!SR){ window._ivMsg={type:'err',text:"⚠️ Ton navigateur ne gère pas la reconnaissance vocale. Utilise Google Chrome."}; ivRerender(); return; }
+  if(!SR){ window._ivMsg={type:'err',text:"⚠️ Reconnaissance vocale indisponible. Utilise la saisie manuelle existante."}; ivRerender(); return; }
   if(window._ivListening){ try{ _ivRecog.stop(); }catch(e){} return; }
   try{ _ivRecog = new SR(); }catch(e){ window._ivMsg={type:'err',text:"⚠️ Micro indisponible."}; ivRerender(); return; }
   _ivRecog.lang='fr-FR'; _ivRecog.interimResults=false; _ivRecog.maxAlternatives=5;
@@ -17674,12 +17769,17 @@ function ivMicStart(){
   window._ivMsg=null; window._ivListening=true; ivRerender();
   _ivRecog.onresult=function(e){
     for(let r=e.resultIndex||0;r<e.results.length;r++){
-      if(e.results[r].isFinal!==false) ivProcess(e.results[r][0].transcript);
+      if(e.results[r].isFinal!==false){
+        const chosen=ivChooseAlternative(e.results[r]);
+        if(chosen) ivProcess(chosen);
+        else { window._ivMsg={type:'err',text:'⚠️ Dictée ambiguë — répète ou utilise la saisie manuelle.'}; ivRerender(); }
+      }
     }
   };
   _ivRecog.onerror=function(e){
     window._ivListening=false;
     if(e&&e.error==='not-allowed'){ window._ivMsg={type:'err',text:"⚠️ Micro bloqué. Autorise le micro pour ce site dans Chrome, puis réessaie."}; if(window._ivBurst) window._ivBurst.active=false; }
+    else { window._ivMsg={type:'err',text:"⚠️ La dictée a échoué. Utilise la saisie manuelle existante puis réessaie si besoin."}; if(window._ivBurst) window._ivBurst.active=false; }
     ivRerender();
   };
   _ivRecog.onend=function(){
