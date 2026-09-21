@@ -455,93 +455,6 @@ if ('serviceWorker' in navigator) {
     background: #f5f5f5 !important;
   }
 
-  /* ===================== MODE PLEIN SOLEIL ===================== */
-  /* Thème ultra-contrasté pour utilisation en extérieur sur tablette */
-  .app.solaire, .app.solaire .content, body.solaire {
-    --bg: #f4f1ea;
-    --surface: #f4f1ea;
-    --card: #faf8f2;
-    --border: #444444;
-    --text: #1a1a1a;
-    --muted: #555555;
-    --accent: #1a1a1a;
-    --accent2: #1a1a1a;
-    --accent3: #1a1a1a;
-    background: #f4f1ea !important;
-    color: #1a1a1a !important;
-    transition: background .4s ease, color .4s ease;
-  }
-  body.solaire { background:#f4f1ea !important; transition:background .4s ease; }
-  .app.solaire { background:#f4f1ea !important; transition:background .4s ease; }
-  /* Texte noir et épais partout dans la zone solaire */
-  .app.solaire .content, .app.solaire .content * {
-    color: #1a1a1a !important;
-  }
-  .app.solaire .content {
-    font-size: 17px !important;
-    font-weight: 600 !important;
-  }
-  /* Cartes et conteneurs : fond blanc, bordure noire nette */
-  .app.solaire .content [style*="background:var(--bg)"],
-  .app.solaire .content [style*="background: var(--bg)"],
-  .app.solaire .card,
-  .app.solaire .cart-item {
-    background: #faf8f2 !important;
-    border: 2px solid #444444 !important;
-  }
-  /* Boutons plus grands et contrastés */
-  .app.solaire .content button {
-    font-size: 16px !important;
-    font-weight: 800 !important;
-    border: 2px solid #444444 !important;
-    color: #1a1a1a !important;
-    background: #ffe066 !important;
-    padding: 12px 16px !important;
-  }
-  /* Champs de saisie */
-  .app.solaire .content input,
-  .app.solaire .content select {
-    font-size: 17px !important;
-    font-weight: 700 !important;
-    color: #1a1a1a !important;
-    background: #faf8f2 !important;
-    border: 2px solid #444444 !important;
-  }
-  /* Prix et chiffres importants bien noirs */
-  .app.solaire .content [style*="--accent"] {
-    color: #1a1a1a !important;
-  }
-  /* Bouton bascule soleil */
-  .solaire-btn {
-    background: #ffe500 !important;
-    color: #000 !important;
-    border: 2px solid #000 !important;
-    font-weight: 800 !important;
-  }
-  /* Renfort mode soleil : tout passe en clair */
-  body.solaire, body.solaire .app, body.solaire .content,
-  body.solaire .sidebar, body.solaire .topbar {
-    background: #f4f1ea !important;
-    color: #1a1a1a !important;
-    transition: background .4s ease, color .4s ease;
-  }
-  body.solaire .content, body.solaire .content * {
-    color: #1a1a1a !important;
-  }
-  body.solaire .content { font-size:17px !important; }
-  body.solaire .content button {
-    background:#ffe066 !important; color:#1a1a1a !important;
-    border:2px solid #444444 !important; font-weight:800 !important; padding:12px 16px !important;
-  }
-  body.solaire .content input, body.solaire .content select {
-    background:#faf8f2 !important; color:#1a1a1a !important; border:2px solid #444444 !important; font-size:17px !important;
-  }
-  body.solaire .card, body.solaire .cart-item,
-  body.solaire .content [style*="background:var(--bg)"],
-  body.solaire .content [style*="background: var(--bg)"] {
-    background:#faf8f2 !important; border:2px solid #444444 !important;
-  }
-
   .mobile-nav.open { display: block !important; }
   .mobile-nav-btn {
     display: none;
@@ -1305,6 +1218,7 @@ let firebaseDataLoaded = false;
 let pendingSaves = 0;
 
 function saveData() {
+  if(window.managerSyncBoutiques)managerSyncBoutiques();
   localStorage.setItem(DB_KEY, JSON.stringify(db));
   // 🛡️ Sécurité : ne pas pousser vers Firebase tant qu'on n'a pas chargé ses données
   // Sinon on risque d'écraser les modifs faites depuis un autre appareil
@@ -13223,6 +13137,7 @@ function planningJourDelTache(date, idx) {
 function autoStatutMarches() {
   let changed = false;
   (db.marches||[]).forEach(m => {
+    if(m.statutManuel)return;
     if((m.ca||0) > 0 && m.statut !== 'annule' && m.statut !== 'done') {
       m.statut = 'done';
       changed = true;
@@ -13991,7 +13906,7 @@ function renderBoutiques(el, actions) {
   const totalNetB = totalB - totalCommB;
 
   // boutiquesVentes pour le tableau détail
-  const bv = db.boutiquesVentes || [];
+  const bv = (db.boutiquesVentes || []).filter(v=>!v.annee||Number(v.annee)===Number(window.managerRecapYear||new Date().getFullYear()));
 
   // Group ventes by mois for table
   const ventesByMois = {};
@@ -14106,7 +14021,7 @@ function renderBoutiques(el, actions) {
       ${MOIS_ORDER.filter(m => ventesByMois[m]).map(m => {
         const lignes = ventesByMois[m];
         const totalMoisBrut = lignes.reduce((s,v)=>s+v.prixVente*(v.qty||1),0);
-        const totalMoisComm = lignes.reduce((s,v)=>{ const qty=v.qty||1; if(v.boutique==='boutB') return s + Math.round(v.prixVente*qty*0.10*100)/100; if(v.boutique==='boutA') return s + (v.categorie==='Minimaux'?0.50:1.00)*qty; return s; },0);
+        const totalMoisComm = lignes.reduce((s,v)=>s+Number(v.comm||0),0);
         const totalMoisNet  = totalMoisBrut - totalMoisComm;
         return `
         <div style="margin-bottom:16px;">
@@ -14125,7 +14040,7 @@ function renderBoutiques(el, actions) {
                 ${lignes.map(v => {
                   const qty = v.qty || 1;
                   const brut = v.prixVente * qty;
-                  const comm = v.boutique==='boutB' ? brut*0.10 : v.boutique==='boutA' ? (v.categorie==='Minimaux'?0.50:1.00)*qty : 0;
+                  const comm = Number(v.comm)||0;
                   const net = brut - comm;
                   return `<tr>
                   <td><span style="display:inline-flex;align-items:center;gap:6px;">
@@ -14222,6 +14137,7 @@ function doAddBoutiqueVente() {
   else commVal = +document.getElementById('bv-comm').value || 0;
   window._lastBoutiqueMois = moisVal;   // mémorise le dernier mois choisi
   const v = {
+    annee:Number(document.getElementById("bv-year").value), recapEligible:true,
     id: db.nextBoutiqueVenteId++,
     boutique: boutiqueVal,
     mois: moisVal,
@@ -14298,6 +14214,7 @@ function updateCommFieldEdit() {
 function doEditBoutiqueVente(id) {
   const v = db.boutiquesVentes.find(x=>x.id===id);
   if(!v) return;
+  v.annee=Number(document.getElementById("bve-year").value);
   v.boutique = document.getElementById('bve-boutique').value;
   v.mois = document.getElementById('bve-mois').value;
   v.produit = document.getElementById('bve-produit').value.trim().toUpperCase();
@@ -14311,7 +14228,9 @@ function doEditBoutiqueVente(id) {
 function adjBoutiqueVente(id, delta) {
   const v = db.boutiquesVentes.find(x=>x.id===id);
   if(!v) return;
+  const oldQty=Number(v.qty)||1, oldComm=Number(v.comm)||0;
   v.qty = Math.max(1, (v.qty||1) + delta);
+  v.comm=Math.round(oldComm/oldQty*v.qty*100)/100;
   saveData(); render('boutiques');
 }
 
@@ -14733,8 +14652,9 @@ function renderVentesMarche(el, actions) {
     <button class="btn btn-secondary btn-sm" onclick="migrerMarchesPlanning()" style="border-color:#16a085;color:#16a085;">🔄 Sync Planning</button>
     <button class="btn btn-primary btn-sm" onclick="openAddVenteMarche()">+ Vente</button>
   `;
-  const allVentes = db.ventesMarche || [];
+  const allVentes = (db.ventesMarche || []).map(managerMarketDisplay);
   const allCaisse = db.caisseHistory || [];
+  const correctionDates=new Set(allVentes.filter(v=>v.manualOverride).map(v=>v.date));
 
   // Available years
   const allDates = [...allVentes.map(v=>v.date), ...allCaisse.map(h=>h.date)];
@@ -14752,11 +14672,11 @@ function renderVentesMarche(el, actions) {
   };
 
   const totalCA = ventes.reduce((s,v)=>s+venteTotal(v),0);
-  const totalCaisse = caisse.reduce((s,h)=>s+h.total,0);
+  const totalCaisse = caisse.filter(h=>!correctionDates.has(h.date)).reduce((s,h)=>s+h.total,0);
 
   // FIX DOUBLON : repérer les dates où on a À LA FOIS caisse ET vente manuelle
   // Dans ce cas, on ne compte QUE la caisse (la caisse est la source officielle)
-  const datesCaisse = new Set(caisse.map(h => h.date));
+  const datesCaisse = new Set(caisse.filter(h=>!correctionDates.has(h.date)).map(h => h.date));
   const ventesDoublons = ventes.filter(v => datesCaisse.has(v.date));
   const totalDoublons = ventesDoublons.reduce((s,v) => s + venteTotal(v), 0);
 
@@ -14771,7 +14691,7 @@ function renderVentesMarche(el, actions) {
     if(datesCaisse.has(v.date)) return; // skip si caisse existe ce jour-là
     const m=v.date.slice(0,7); months[m]=(months[m]||0)+venteTotal(v);
   });
-  caisse.forEach(h => { const m=h.date.slice(0,7); months[m]=(months[m]||0)+h.total; });
+  caisse.filter(h=>!correctionDates.has(h.date)).forEach(h => { const m=h.date.slice(0,7); months[m]=(months[m]||0)+h.total; });
 
   const sparkline = (() => {
     const sorted = Object.entries(months).sort();
@@ -14884,18 +14804,12 @@ function renderVentesMarche(el, actions) {
               // SYNCHRO AUTO : si tickets caisse présents ET (autoCreated OU date correspond à un marché du Planning)
               const hasCaisse = (db.caisseHistory||[]).some(h => h.date === v.date);
               const hasMarcheInPlanning = (db.marches||[]).some(m => m.date === v.date);
-              const isSynchro = (v.autoCreated || v.marcheId || hasMarcheInPlanning) && hasCaisse;
-              let vDisplay = v;
-              if(isSynchro) {
-                const tickets = (db.caisseHistory||[]).filter(h => h.date === v.date);
-                const esp = tickets.filter(t => t.payment === 'ESP').reduce((s,t) => s + (t.total||0), 0);
-                const cb = tickets.filter(t => t.payment === 'CB').reduce((s,t) => s + (t.total||0), 0);
-                vDisplay = {...v, totalEsp: esp, totalCb: cb, totalOther: 0, total: esp + cb};
-              }
+              const isSynchro = !v.manualOverride && (v.autoCreated || v.marcheId || hasMarcheInPlanning) && hasCaisse;
+              const vDisplay = managerMarketDisplay(v);
               const tot = venteTotal(vDisplay);
               return `<tr onclick="highlightRow(this)" style="cursor:pointer;">
               <td style="font-size:12px;font-weight:600;">${formatDateMarche(v.date)}</td>
-              <td style="font-weight:700;">${v.marche||'—'} ${isSynchro?`<span title="Paiements synchronisés depuis la caisse" style="font-size:9px;padding:2px 6px;border-radius:8px;background:rgba(155,89,182,.15);color:#9b59b6;font-weight:700;margin-left:4px;">🔄 AUTO</span>`:''}</td>
+              <td style="font-weight:700;">${v.marche||'—'} ${v.manualOverride?'<strong>✏️ CORRIGÉ</strong>':''} ${isSynchro?`<span title="Paiements synchronisés depuis la caisse" style="font-size:9px;padding:2px 6px;border-radius:8px;background:rgba(155,89,182,.15);color:#9b59b6;font-weight:700;margin-left:4px;">🔄 AUTO</span>`:''}</td>
               <td style="font-size:12px;">${v.designation||'—'}</td>
               <td style="font-size:12px;">${payCell(vDisplay)}</td>
               <td style="text-align:right;font-weight:800;color:var(--accent);">${tot.toFixed(2)}€</td>
@@ -15109,11 +15023,11 @@ function doEditVenteMarche(id) {
 
 function nettoyerDoublonsVentesMarche() {
   const datesCaisse = new Set((db.caisseHistory||[]).map(h => h.date));
-  const doublons = (db.ventesMarche||[]).filter(v => datesCaisse.has(v.date));
+  const doublons = (db.ventesMarche||[]).filter(v => datesCaisse.has(v.date) && !v.manualOverride);
   if(doublons.length === 0) { showToast('Aucun doublon à nettoyer', false); return; }
   const detailStr = doublons.map(v => `📅 ${v.date} — ${v.marche||'?'} (${((v.totalEsp||0)+(v.totalCb||0)+(v.totalOther||0)+(v.total||0)).toFixed(2)}€)`).join('\n');
   if(!confirm(`Supprimer ${doublons.length} ligne${doublons.length>1?'s':''} manuelle${doublons.length>1?'s':''} (les montants sont déjà dans la caisse) ?\n\n${detailStr}\n\n✅ Tes données caisse restent intactes.`)) return;
-  db.ventesMarche = (db.ventesMarche||[]).filter(v => !datesCaisse.has(v.date));
+  db.ventesMarche = (db.ventesMarche||[]).filter(v => !datesCaisse.has(v.date) || v.manualOverride);
   saveData();
   showToast(`${doublons.length} doublon${doublons.length>1?'s':''} supprimé${doublons.length>1?'s':''} ✅`, true);
   renderVentesMarche(document.getElementById('content'), document.getElementById('topbar-actions'));
@@ -18957,4 +18871,141 @@ function fathExportCurrent(){
 })();
 </script>
 
+<style>body.solaire,body.solaire .app{--bg:var(--outside-bg);--surface:var(--outside-bg);--card:var(--outside-panel);--text:var(--outside-text);--muted:var(--outside-text);--border:var(--outside-border);--accent:#dfc64b;background:var(--outside-bg)!important;color:var(--outside-text)!important}
+body.solaire :is(.sidebar,.topbar,.content,.card,.stat,.modal,.toast,.cart-item){background:var(--outside-panel)!important;color:var(--outside-text)!important;background-image:none!important}
+body.solaire .content{background:var(--outside-bg)!important}
+body.solaire :is(.content,.modal,.sidebar,.topbar) [style*="background"]{background-color:var(--outside-panel)!important;background-image:none!important}
+body.solaire :is(.content,.modal,.sidebar,.topbar) :is(div,span,p,label,td,th,a,strong,small,h1,h2,h3){color:var(--outside-text)!important;text-shadow:none!important}
+body.solaire :is(.content,.modal) :is(p,label,td,th,small,.stat-label,.stat-sub){font-size:var(--outside-size)!important;line-height:1.4!important}
+body.solaire .content [style*="font-size"],body.solaire .content :is(.p-name,.p-price,.p-stock){font-size:var(--outside-size)!important;line-height:1.35!important}
+body.solaire :is(.content,.modal,.sidebar,.topbar) :is(button,input,select,textarea){background:var(--outside-panel)!important;color:var(--outside-text)!important;border:2px solid var(--outside-border)!important;font-size:var(--outside-size)!important;min-height:44px;line-height:1.3!important}
+body.solaire :is(.btn-primary,.solaire-btn){background:#dfc64b!important;color:#121212!important}
+body.solaire .modal{max-width:min(760px,96vw);border:2px solid var(--outside-border)!important}
+body.solaire #topbar-actions{flex-wrap:wrap!important;gap:8px!important}
+body.solaire .topbar{height:auto!important;flex-wrap:wrap!important}
+body.solaire .topbar{flex-direction:column;align-items:stretch;gap:10px}
+body.solaire #topbar-actions{width:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+body.solaire #topbar-actions .btn{white-space:normal;justify-content:center}
+body.solaire .main{overflow-y:auto}
+body.solaire .content{flex-shrink:0;min-height:360px}
+body.solaire .outside-settings-btn{white-space:normal}
+body.solaire input::placeholder,body.solaire textarea::placeholder{color:var(--outside-text)!important;opacity:.75}
+body.solaire :is(input,select,textarea,button):focus-visible{outline:3px solid #dfc64b;outline-offset:2px}
+@media(max-width:650px){body.solaire :is(.grid-2,.grid-3){grid-template-columns:minmax(0,1fr)!important}}
+</style>
+<script>
+/* FATH 3D Manager — quatre corrections validées sur copie isolée. */
+(function () {
+  const TEST_SETTINGS = 'fath3d_manager_exterior_settings_v1';
+  const money=n=>Math.round((Number(n)||0)*100)/100;
+  window.managerMarketDisplay = function (v) {
+    if(!v)return v;
+    if(v.manualOverride&&typeof v.manualOverride==='object'){const c=v.manualOverride;return {...v,totalEsp:money(c.esp),totalCb:money(c.cb),totalOther:money(c.oth),total:money(c.esp+c.cb+c.oth)};}
+    const tickets=(db.caisseHistory||[]).filter(t=>t.date===v.date);
+    if(!v.manualOverride&&tickets.length&&(v.autoCreated||v.marcheId||(db.marches||[]).some(m=>m.date===v.date))){const d={...v,totalEsp:0,totalCb:0,totalOther:0};tickets.forEach(t=>{const k=t.payment==='ESP'?'totalEsp':t.payment==='CB'?'totalCb':'totalOther';d[k]=money(d[k]+Number(t.total||0));});d.total=money(d.totalEsp+d.totalCb+d.totalOther);return d;}
+    if(['totalEsp','totalCb','totalOther'].some(k=>Object.hasOwn(v,k)))return {...v,totalEsp:money(v.totalEsp),totalCb:money(v.totalCb),totalOther:money(v.totalOther),total:money(Number(v.totalEsp||0)+Number(v.totalCb||0)+Number(v.totalOther||0))};
+    return {...v,totalEsp:v.payment==='ESP'?money(v.total):0,totalCb:v.payment==='CB'?money(v.total):0,totalOther:!['ESP','CB'].includes(v.payment)?money(v.total):0};
+  };
+  const originalEditMarket=openEditVenteMarche;
+  window.openEditVenteMarche=function(id){originalEditMarket(id);const v=(db.ventesMarche||[]).find(v=>v.id===id);if(!v)return;const d=managerMarketDisplay(v);['esp','cb','other'].forEach((k,i)=>document.getElementById('vm-'+k).value=d[['totalEsp','totalCb','totalOther'][i]]);};
+  window.doEditVenteMarche=function(id){
+    const v=(db.ventesMarche||[]).find(v=>v.id===id);if(!v)return;
+    const nums=['esp','cb','other'].map(k=>Number(document.getElementById('vm-'+k).value)),date=document.getElementById('vm-date').value;
+    if(!date||nums.some(n=>!Number.isFinite(n)||n<0)){showToast('Date et montants positifs ou nuls requis',false);return;}
+    if(date!==v.date&&(db.caisseHistory||[]).some(t=>t.date===v.date)){showToast('Garde la date des tickets pour corriger cette journée',false);return;}
+    const [esp,cb,oth]=nums.map(money);
+    Object.assign(v,{date,marche:document.getElementById('vm-marche').value,designation:document.getElementById('vm-desig').value,totalEsp:esp,totalCb:cb,totalOther:oth,manualOverride:{esp,cb,oth},payment:'MIX'});
+    // Older aggregate fields must never reappear as fallback values, including at zero.
+    delete v.total;delete v.totalVrt;delete v.totalChq;
+    saveData();closeModal();render('ventesMarche');showToast('Correction enregistrée',true);
+  };
+
+  function esc(v) { return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+  function materialValues(m) {
+    const text = String(m.materiel || '');
+    const tables = m.tables != null ? Number(m.tables) : /fourni|rien|aucun/i.test(text)?0:Number((text.match(/(\d+)\s*tab/i)||[,/table/i.test(text)?1:0])[1]);
+    const grilles = m.grilles != null ? Number(m.grilles) : Number((text.match(/(\d+)\s*grille/i)||[,0])[1]);
+    const barnum = m.barnum || (/barnum/i.test(text)&&!/sans\s+barnum|barnum\s+(?:fourni|non)/i.test(text) ? 'oui' : 'non');
+    return {tables:Math.max(0,Number.isFinite(tables)?tables:0), grilles:Math.max(0,Number.isFinite(grilles)?grilles:0), barnum};
+  }
+  function materialText(tables,barnum,grilles) {
+    const p=[]; p.push(tables>0 ? `${tables} table${tables>1?'s':''}` : 'Tables fournies');
+    if(barnum==='oui') p.push('Barnum'); if(grilles>0) p.push(`${grilles} grille${grilles>1?'s':''}`);
+    return p.join(' + ');
+  }
+  window.openEditMarche = function (id) {
+    const m=(db.marches||[]).find(x=>x.id===id); if(!m) return;
+    const x=materialValues(m); const pay=[...new Set(['ESP','CB','VIREMENT','CHQ','CHQ + CAUTION','CHQ PAS ENCORE','GRATUIT',m.paiement].filter(Boolean))];
+    openModal(`<div class="modal-title">Modifier — ${esc(m.ville)}</div>
+      <div class="grid-2"><div class="form-group"><label class="form-label">Date début</label><input type="date" class="form-input" id="me-date" value="${esc(m.date)}"></div><div class="form-group"><label class="form-label">Date fin (optionnel)</label><input type="date" class="form-input" id="me-date-fin" value="${esc(m.dateFin||'')}"></div></div>
+      <div class="form-group"><label class="form-label">Ville</label><input class="form-input" id="me-ville" value="${esc(m.ville)}"></div>
+      <div class="grid-2"><div class="form-group"><label class="form-label">Distance</label><input class="form-input" id="me-distance" value="${esc(m.distance)}"></div><div class="form-group"><label class="form-label">Type</label><select class="form-select" id="me-type"><option value="EXT" ${m.type==='EXT'?'selected':''}>🌤️ Extérieur</option><option value="INT" ${m.type==='INT'?'selected':''}>🏠 Intérieur</option></select></div></div>
+      <div class="grid-3"><div class="form-group"><label class="form-label">Tables</label><select class="form-select" id="me-tables">${[0,1,2,3].map(n=>`<option value="${n}" ${x.tables===n?'selected':''}>${n===0?'Aucune (fournies)':n+' table'+(n>1?'s':'')}</option>`).join('')}</select></div><div class="form-group"><label class="form-label">Barnum</label><select class="form-select" id="me-barnum"><option value="oui" ${x.barnum==='oui'?'selected':''}>Oui</option><option value="non" ${x.barnum==='non'?'selected':''}>Non</option></select></div><div class="form-group"><label class="form-label">Grilles</label><select class="form-select" id="me-grilles">${[0,1,2].map(n=>`<option value="${n}" ${x.grilles===n?'selected':''}>${n===0?'Aucune':n+' grille'+(n>1?'s':'')}</option>`).join('')}</select></div></div>
+      <div class="grid-2"><div class="form-group"><label class="form-label">Prix place (€)</label><input type="number" class="form-input" id="me-prix" value="${Number(m.prixPlace)||0}" min="0" step="0.5"></div><div class="form-group"><label class="form-label">Paiement place</label><select class="form-select" id="me-paiement">${pay.map(p=>`<option value="${p}" ${m.paiement===p?'selected':''}>${p}</option>`).join('')}</select></div></div>
+      <div class="grid-2"><div class="form-group"><label class="form-label">Installation</label><input class="form-input" id="me-install" value="${esc(m.installation)}"></div><div class="form-group"><label class="form-label">Horaires</label><input class="form-input" id="me-horaires" value="${esc(m.horaires)}"></div></div>
+      <div class="grid-2"><div class="form-group"><label class="form-label">CA réalisé (€)</label><input type="number" class="form-input" id="me-ca" value="${Number(m.ca)||0}" min="0"></div><div class="form-group"><label class="form-label">Notes</label><input class="form-input" id="me-notes" value="${esc(m.notes)}"></div></div>
+      <div class="form-group"><label class="form-label">Observations</label><textarea class="form-input" id="me-observations" rows="3">${esc(m.observations)}</textarea></div>
+      <div class="form-group"><label class="form-label">Statut</label><select class="form-select" id="me-statut"><option value="upcoming" ${m.statut==='upcoming'?'selected':''}>⏳ À venir</option><option value="done" ${m.statut==='done'?'selected':''}>✅ Fait</option><option value="annule" ${m.statut==='annule'?'selected':''}>❌ Annulé</option></select></div>
+      <div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="doEditMarche(${id})">Sauvegarder</button></div>`);
+    for(const [id,value] of [['me-tables',x.tables],['me-grilles',x.grilles]]){const input=document.getElementById(id);if(![...input.options].some(o=>Number(o.value)===value))input.add(new Option(String(value),String(value)));input.value=String(value);}
+  };
+  window.doEditMarche = function(id) {
+    const m=(db.marches||[]).find(x=>x.id===id); if(!m) return;
+    const get=id=>document.getElementById(id).value; const tables=Number(get('me-tables')), grilles=Number(get('me-grilles')), barnum=get('me-barnum');
+    if(!get('me-ville').trim()||!get('me-date')||[tables,grilles,Number(get('me-prix')),Number(get('me-ca'))].some(n=>!Number.isFinite(n)||n<0)){showToast('Vérifie la ville, la date et les montants',false);return;}
+    m.statutManuel=true;
+    Object.assign(m,{date:get('me-date'),dateFin:get('me-date-fin')||null,ville:get('me-ville').trim().toUpperCase(),distance:get('me-distance'),type:get('me-type'),tables,barnum,grilles,materiel:materialText(tables,barnum,grilles),prixPlace:Number(get('me-prix'))||0,paiement:get('me-paiement'),installation:get('me-install'),horaires:get('me-horaires'),ca:Number(get('me-ca'))||0,notes:get('me-notes'),observations:get('me-observations'),statut:get('me-statut')});
+    saveData(); closeModal(); showToast('Marché mis à jour ✅',true); render('marches');
+  };
+
+  function groupKey(g){return `${g.boutique}|${g.annee}|${g.mois}`;}
+  function validGroup(g){return Number.isInteger(Number(g.annee))&&Number(g.annee)>=2020&&Number(g.annee)<=2100&&MOIS_ORDER.includes(g.mois)&&['boutA','boutB','boutC'].includes(g.boutique);}
+  function dateFor(g){const d=new Date(Number(g.annee),MOIS_ORDER.indexOf(g.mois)+1,3,12);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-03`;}
+  function groupRows(g,undated=false){return (db.boutiquesVentes||[]).filter(v=>v.boutique===g.boutique&&v.mois===g.mois&&(Number(v.annee)===Number(g.annee)||(undated&&!v.annee)));}
+  function netRows(rows){return money(rows.reduce((s,v)=>s+money(Number(v.prixVente||0)*Number(v.qty||1))-money(v.comm),0));}
+  function conflicts(g,rows){const next=dateFor(g).slice(0,7),current=String(g.annee)+'-'+String(MOIS_ORDER.indexOf(g.mois)+1).padStart(2,'0');return (db.sales||[]).filter(s=>!s.autoBoutiqueRecap&&s.depot===g.boutique&&([next,current].includes(String(s.date||'').slice(0,7))||(money(s.total)===netRows(rows)&&String(s.date||'').startsWith(String(g.annee)))));}
+  window.managerSyncBoutiques=function(){
+    const groups=new Map();
+    (db.boutiquesVentes||[]).filter(v=>v.recapEligible&&validGroup(v)).forEach(v=>groups.set(groupKey(v),v));
+    (db.sales||[]).filter(s=>s.autoBoutiqueRecap).forEach(s=>groups.set(s.boutiqueRecapKey,{boutique:s.depot,annee:s.boutiqueRecapYear,mois:s.boutiqueRecapMonth}));
+    groups.forEach((g,key)=>{
+      if((db.recapProtectedKeys||[]).includes(key))return;
+      const rows=groupRows(g),lines=db.sales.filter(s=>s.autoBoutiqueRecap&&s.boutiqueRecapKey===key);
+      if(lines.length>1)return;
+      if(lines.length===1){lines[0].total=netRows(rows);return;}
+      // An unresolved old detail or a plausible historic receipt blocks automatic creation.
+      if(!rows.length||groupRows(g,true).some(v=>!v.annee||!v.recapEligible)||conflicts(g,rows).length)return;
+      db.nextId.sale=Math.max(Number(db.nextId.sale)||1,...db.sales.map(s=>(Number(s.id)||0)+1));
+      db.sales.push({id:db.nextId.sale++,date:dateFor(g),productId:0,productName:`AUTO — Récap ${g.mois} ${g.annee}`,client:BOUTIQUE_NAMES[g.boutique]||'La Créatique',qty:1,total:netRows(rows),depot:g.boutique,payment:'VRT',autoBoutiqueRecap:true,boutiqueRecapKey:key,boutiqueRecapMonth:g.mois,boutiqueRecapYear:Number(g.annee)});
+    });
+  };
+  function migrationGroup(){return {boutique:document.getElementById('sync-shop').value,mois:document.getElementById('sync-month').value,annee:Number(document.getElementById('sync-year').value)};}
+  window.openBoutiqueFirstSync=function(){
+    openModal(`<div class="modal-title">Première synchronisation des anciens récapitulatifs</div><p>Choisis l’année réelle des anciens détails sans année. Les ventes historiques existantes seront conservées exactement.</p><label class="form-label" for="sync-shop">Boutique</label><select class="form-select" id="sync-shop" onchange="previewBoutiqueSync()"><option value="boutB">Arts Complices</option><option value="boutA">La Boutique de Véro</option></select><label class="form-label" for="sync-month">Mois du récap</label><select class="form-select" id="sync-month" onchange="previewBoutiqueSync()">${MOIS_ORDER.map(m=>`<option ${m==='SEPTEMBRE'?'selected':''}>${m}</option>`).join('')}</select><label class="form-label" for="sync-year">Année du récap</label><input class="form-input" id="sync-year" type="number" min="2020" max="2100" value="2026" oninput="previewBoutiqueSync()"><div id="sync-preview"></div><p>Si ces ventes sont déjà enregistrées à une autre date, choisis « Déjà comptabilisé » pour empêcher une création automatique.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-secondary" onclick="protectBoutiqueHistory()">Déjà comptabilisé : préserver l’historique</button><button id="sync-create" class="btn btn-primary" onclick="confirmBoutiqueFirstSync()">Créer la ligne manquante</button></div>`);previewBoutiqueSync();
+  };
+  window.previewBoutiqueSync=function(){const g=migrationGroup(),rows=groupRows(g,true),existing=validGroup(g)?conflicts(g,rows):[];document.getElementById('sync-preview').textContent=!validGroup(g)?'Année invalide':`${rows.length} détails — net ${netRows(rows).toFixed(2)} € — date proposée ${dateFor(g)}. `+(existing.length?`${existing.length} vente(s) historique(s) possible(s) : création bloquée. ${existing.map(s=>s.date+' : '+money(s.total).toFixed(2)+' €').join(' ; ')}`:'Aucune vente correspondante détectée.');document.getElementById('sync-create').disabled=!validGroup(g)||!rows.length||existing.length>0||(db.recapProtectedKeys||[]).includes(groupKey(g));};
+  window.protectBoutiqueHistory=function(){const g=migrationGroup();if(!validGroup(g))return;if(!db.recapProtectedKeys)db.recapProtectedKeys=[];if(!db.recapProtectedKeys.includes(groupKey(g)))db.recapProtectedKeys.push(groupKey(g));saveData();closeModal();render('boutiques');showToast('Historique préservé : aucune ligne ajoutée ni modifiée',true);};
+  window.confirmBoutiqueFirstSync=function(){const g=migrationGroup(),rows=groupRows(g,true);if(!validGroup(g)||!rows.length||conflicts(g,rows).length||(db.recapProtectedKeys||[]).includes(groupKey(g)))return;if(!confirm(`Confirmer que ${g.mois} ${g.annee} n’est pas déjà comptabilisé ? Une ligne de ${netRows(rows).toFixed(2)} € sera créée le ${dateFor(g)}.`))return;rows.forEach(v=>{v.annee=g.annee;v.recapEligible=true;});saveData();closeModal();render('boutiques');showToast('Récapitulatif synchronisé',true);};
+  const baseRenderBoutiques=renderBoutiques;window.renderBoutiques=function(el,actions){baseRenderBoutiques(el,actions);actions.insertAdjacentHTML('beforeend',' <button class="btn btn-secondary btn-sm" onclick="openBoutiqueFirstSync()">Première synchronisation</button>');const year=document.createElement('input');year.type='number';year.min=2020;year.max=2100;year.className='form-input';year.style.width='110px';year.value=window.managerRecapYear||new Date().getFullYear();year.setAttribute('aria-label','Année du récap');year.onchange=()=>{if(year.checkValidity()){window.managerRecapYear=Number(year.value);render('boutiques');}};actions.appendChild(year);const p=document.createElement('p');p.textContent='Les nouveaux détails créent une ligne AUTO au net. Les anciens détails nécessitent la première synchronisation. Une vente historique possible bloque la création pour éviter un doublon.';el.prepend(p);};
+  function addYear(prefix,year){const div=document.createElement('div');div.className='form-group';div.innerHTML=`<label class="form-label" for="${prefix}-year">Année du récap</label><input class="form-input" id="${prefix}-year" type="number" min="2020" max="2100" value="${year||''}" required>`;document.querySelector('#modal-content .modal-actions').before(div);}
+  const baseOpenAdd=openAddBoutiqueVente;window.openAddBoutiqueVente=function(){baseOpenAdd();addYear('bv',window.managerRecapYear||new Date().getFullYear());};
+  const baseOpenEdit=openEditBoutiqueVente;window.openEditBoutiqueVente=function(id){baseOpenEdit(id);addYear('bve',(db.boutiquesVentes||[]).find(v=>v.id===id)?.annee);};
+  function validDetail(prefix){const year=Number(document.getElementById(prefix+'-year').value),qty=Number(document.getElementById(prefix+'-qty').value),price=Number(document.getElementById(prefix+'-prix').value),comm=Number(document.getElementById(prefix+'-comm').value);if(!Number.isInteger(year)||year<2020||year>2100||!Number.isInteger(qty)||qty<1||![price,comm].every(n=>Number.isFinite(n)&&n>=0)||comm>price*qty){showToast('Vérifie année, quantité, prix et commission',false);return false;}return true;}
+  const baseAdd=doAddBoutiqueVente;window.doAddBoutiqueVente=function(){if(validDetail('bv'))baseAdd();};
+  const baseEdit=doEditBoutiqueVente;window.doEditBoutiqueVente=function(id){if(validDetail('bve'))baseEdit(id);};
+  const baseSaleEdit=openEditSale;window.openEditSale=function(id){baseSaleEdit(id);const s=db.sales.find(s=>s.id===id);if(s?.autoBoutiqueRecap){document.getElementById('s-total').readOnly=true;document.getElementById('s-depot').disabled=true;const note=document.createElement('p');note.textContent='Ligne AUTO : montant net calculé depuis le récap. La date reste modifiable.';document.getElementById('modal-content').prepend(note);}};
+  const baseDeleteSale=deleteSale;window.deleteSale=function(id){const sale=db.sales.find(s=>s.id===id);if(!sale?.autoBoutiqueRecap)return baseDeleteSale(id);if(!confirm('Supprimer cette ligne AUTO et arrêter sa synchronisation ?'))return;(db.recapProtectedKeys||= []).push(sale.boutiqueRecapKey);db.sales=db.sales.filter(s=>s.id!==id);saveData();render('sales');};
+
+  function exterior(){ try{return {...{size:'grand',contrast:'renforce',background:'anthracite'},...JSON.parse(localStorage.getItem(TEST_SETTINGS)||'{}')};}catch(e){return {size:'grand',contrast:'renforce',background:'anthracite'};} }
+  function applyExterior(){ const s=exterior(), r=document.documentElement; r.style.setProperty('--outside-size',s.size==='normal'?'17px':s.size==='grand'?'21px':'25px');r.style.setProperty('--outside-text',s.contrast==='maximum'?'#fff':s.contrast==='renforce'?'#f2eee5':'#dedbd5');r.style.setProperty('--outside-bg',s.background==='noir'?'#050607':s.background==='bleu'?'#080d18':'#17191b');r.style.setProperty('--outside-panel',s.background==='noir'?'#101112':s.background==='bleu'?'#152035':'#252729');r.style.setProperty('--outside-border',s.contrast==='maximum'?'#ffffff':s.contrast==='renforce'?'#b8b5ad':'#747779'); }
+  window.openExteriorSettings=function(){ if(!document.body.classList.contains('solaire')){showToast('Active d’abord le mode extérieur',false);return;} const s=exterior();openModal(`<div class="modal-title">Réglages extérieur</div><div class="form-group"><label class="form-label">Taille de texte</label><select class="form-select" id="outside-size"><option value="normal" ${s.size==='normal'?'selected':''}>Normal</option><option value="grand" ${s.size==='grand'?'selected':''}>Grand</option><option value="tres-grand" ${s.size==='tres-grand'?'selected':''}>Très grand</option></select></div><div class="form-group"><label class="form-label">Contraste</label><select class="form-select" id="outside-contrast"><option value="normal" ${s.contrast==='normal'?'selected':''}>Normal</option><option value="renforce" ${s.contrast==='renforce'?'selected':''}>Renforcé</option><option value="maximum" ${s.contrast==='maximum'?'selected':''}>Maximum</option></select></div><div class="form-group"><label class="form-label">Fond</label><select class="form-select" id="outside-background"><option value="anthracite" ${s.background==='anthracite'?'selected':''}>Anthracite</option><option value="noir" ${s.background==='noir'?'selected':''}>Noir profond</option><option value="bleu" ${s.background==='bleu'?'selected':''}>Bleu nuit</option></select></div><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveExteriorSettings()">Mémoriser</button></div>`);};
+  window.saveExteriorSettings=function(){localStorage.setItem(TEST_SETTINGS,JSON.stringify({size:document.getElementById('outside-size').value,contrast:document.getElementById('outside-contrast').value,background:document.getElementById('outside-background').value}));applyExterior();closeModal();showToast('Réglages extérieur mémorisés ✅',true);};
+  function exteriorButton(){document.querySelectorAll('.solaire-btn').forEach(btn=>{let b=btn.nextElementSibling;if(!b?.classList.contains('outside-settings-btn')){b=document.createElement('button');b.className='btn btn-secondary outside-settings-btn';b.textContent='Réglages extérieur';b.onclick=openExteriorSettings;btn.insertAdjacentElement('afterend',b);}const on=document.body.classList.contains('solaire');btn.textContent=on?'Mode normal':'Mode extérieur';btn.setAttribute('aria-pressed',String(on));});}
+  const baseToggle=toggleSolaire; window.toggleSolaire=function(){baseToggle();applyExterior();exteriorButton();};
+  const baseRender=render; window.render=function(page){baseRender(page);exteriorButton();};
+  const ready=()=>{applyExterior();exteriorButton();};
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready);else ready();
+})();
+
+</script>
 </body></html>
