@@ -19750,8 +19750,8 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     if(threshold===null) return result('consult.stock_needs','Le seuil minimum n’est pas renseigné dans le Manager.');
     const genericRequest=/\b(quels? produits?|quoi|qu est ce que|sous (leur|le) minimum|a reimprimer|dois reimprimer)\b/.test(normalize(message));
     if(!found.matches.length&&!genericRequest) return result('consult.stock_needs','Je ne trouve pas cette référence dans le catalogue.');
-    const candidates=found.matches.length?found.matches:products;
-    if(found.matches.length>1&&!found.category&&candidates.length<products.length){
+    const candidates=genericRequest?products:(found.matches.length?found.matches:products);
+    if(!genericRequest&&found.matches.length>1&&!found.category&&candidates.length<products.length){
       const response=ambiguityAnswer(found.matches,'produits'); response.pending.actionId='consult.stock_needs';
       return result('consult.stock_needs',response.answer,{outcome:response.outcome,pending:response.pending});
     }
