@@ -19394,7 +19394,7 @@ aucun accès direct à db et aucun appel automatique ne sont présents dans ce b
   const MANAGER_ORIGIN='https://fath3d.github.io';
   const GATEWAY_ENDPOINT='https://fath3d-jarvis-gateway.pat-gwen69.workers.dev';
   const TIMEOUT_MS=30000;
-  const MAX_FACTS=40;
+  const MAX_FACTS=12;
   const MAX_FINANCIAL_SUMMARIES=8;
 
   const STATE=Object.freeze({
@@ -19581,6 +19581,261 @@ aucun accès direct à db et aucun appel automatique ne sont présents dans ce b
 })(typeof window!=='undefined'?window:globalThis);
 </script>
 
+<!-- ===================== JARVIS CONSULTATIONS — ETAPE 5A =====================
+Lecteurs fermés et locaux pour catalogue, stocks, besoins et filaments.
+Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
+============================================================================ -->
+<script id="jarvis-consultation-step5a">
+(function(root){
+  'use strict';
+
+  const VERSION='5.1.0-step5a';
+  const ALLOWED_ACTIONS=Object.freeze(['consult.catalog','consult.stocks','consult.stock_needs','consult.filaments']);
+  const MAX_FACTS=12;
+  const LOCATION_LABELS=Object.freeze({maison:'Maison',marche:'Marché',artComplices:'Arts Complices',btvero:'Boutique de Véro'});
+  const STOP_WORDS=new Set('a ai au aux avec ce ces combien dans de des du elle en est et il je j le la les leur ma mes mon ne nos on ou pour que quel quelle quels quelles qu reste se si son sont sous sur ta tes ton tu un une vos votre y jai j ai catalogue catalog produit produits stock stocks piece pieces article articles coute cout prix categorie categories emplacement emplacements filament filaments bobine bobines marque matiere couleur poids gramme grammes'.split(' '));
+
+  function clone(value){ return value===undefined?undefined:JSON.parse(JSON.stringify(value)); }
+  function freeze(value){
+    if(value&&typeof value==='object'&&!Object.isFrozen(value)){
+      Object.values(value).forEach(freeze); Object.freeze(value);
+    }
+    return value;
+  }
+  function normalize(value){
+    return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().replace(/\s+/g,' ');
+  }
+  function tokens(value){ return normalize(value).split(' ').filter(token=>token&&token.length>1&&!STOP_WORDS.has(token)); }
+  function numberOrNull(value){ return typeof value==='number'&&Number.isFinite(value)?value:null; }
+  function euro(value){ return Number(value).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €'; }
+  function plural(count,singular,pluralValue){ return count+' '+(count>1?(pluralValue||singular+'s'):singular); }
+  function codedError(code,message){ const error=new Error(message); error.code=code; return error; }
+  function levenshtein(a,b){
+    const left=normalize(a),right=normalize(b);
+    if(!left)return right.length;if(!right)return left.length;
+    const row=Array.from({length:right.length+1},(_,index)=>index);
+    for(let i=1;i<=left.length;i++){
+      let previous=row[0]; row[0]=i;
+      for(let j=1;j<=right.length;j++){
+        const saved=row[j]; row[j]=Math.min(row[j]+1,row[j-1]+1,previous+(left[i-1]===right[j-1]?0:1)); previous=saved;
+      }
+    }
+    return row[right.length];
+  }
+  function similarity(a,b){
+    const left=normalize(a),right=normalize(b),size=Math.max(left.length,right.length);
+    return size?1-levenshtein(left,right)/size:1;
+  }
+  function sourceData(){
+    if(typeof db==='undefined'||!db||typeof db!=='object') throw codedError('READ_SOURCE_UNAVAILABLE','Les données du Manager ne sont pas disponibles.');
+    return db;
+  }
+  function projectProducts(data){
+    return (Array.isArray(data.products)?data.products:[]).map(product=>({
+      id:clone(product.id),name:String(product.name||''),category:String(product.categorie||product.category||''),
+      price:numberOrNull(product.price),variant:product.variant===undefined?null:String(product.variant),
+      stocks:product.stocks&&typeof product.stocks==='object'?Object.fromEntries(Object.entries(product.stocks).map(([key,value])=>[key,numberOrNull(value)])):{}
+    }));
+  }
+  function projectFilaments(data){
+    return (Array.isArray(data.filaments)?data.filaments:[]).map(item=>({
+      id:clone(item.id),brand:item.brand===undefined?null:String(item.brand),type:item.type===undefined?null:String(item.type),
+      material:item.material===undefined?null:String(item.material),color:item.colorName===undefined?(item.color===undefined?null:String(item.color)):String(item.colorName),
+      weightTotal:numberOrNull(item.weightTotal),weightLeft:numberOrNull(item.weightLeft),threshold:numberOrNull(item.seuilAlerte),
+      reference:item.reference===undefined?(item.ref===undefined?null:String(item.ref)):String(item.reference)
+    }));
+  }
+  function resolveItems(items,message,fields){
+    const q=normalize(message),qTokens=tokens(message);
+    const scored=items.map(item=>{
+      const values=fields.map(field=>normalize(item[field])).filter(Boolean);
+      let score=0;
+      values.forEach(value=>{
+        const valueTokens=value.split(' ').filter(Boolean);
+        if(value===q) score=Math.max(score,1);
+        if(value.length>2&&q.includes(value)) score=Math.max(score,.98);
+        const overlap=valueTokens.filter(token=>qTokens.includes(token)).length;
+        if(overlap) score=Math.max(score,.45+.5*(overlap/valueTokens.length));
+        const subject=qTokens.join(' ');
+        if(subject&&value.length>2) score=Math.max(score,similarity(subject,value)*.86);
+      });
+      return {item,score};
+    }).filter(entry=>entry.score>=.58).sort((a,b)=>b.score-a.score||String(a.item.name||a.item.color||'').localeCompare(String(b.item.name||b.item.color||'')));
+    if(!scored.length) return {matches:[],ambiguous:false};
+    const best=scored[0].score;
+    const matches=scored.filter(entry=>entry.score>=Math.max(.58,best-.08)).map(entry=>entry.item);
+    return {matches,ambiguous:matches.length>1};
+  }
+  function productMatches(products,message){
+    const q=normalize(message);
+    const categoryMatches=products.filter(product=>product.category&&q.includes(normalize(product.category)));
+    if(categoryMatches.length) return {matches:categoryMatches,ambiguous:false,category:true};
+    return resolveItems(products,message,['name','category','variant']);
+  }
+  function availableLocations(products){
+    const keys=[];
+    products.forEach(product=>Object.keys(product.stocks||{}).forEach(key=>{if(!keys.includes(key))keys.push(key);}));
+    return keys;
+  }
+  function locationLabel(key){ return LOCATION_LABELS[key]||String(key).replace(/([a-z])([A-Z])/g,'$1 $2'); }
+  function extractLocation(message,available){
+    const q=normalize(message);
+    if(/\b(total|tout|tous|ensemble|global)\b/.test(q)) return 'total';
+    const aliases={maison:['maison','chez moi'],marche:['marche'],artComplices:['arts complices','art complices'],btvero:['boutique de vero','chez vero','btvero']};
+    for(const key of available){
+      const candidates=[key,locationLabel(key),...(aliases[key]||[])].map(normalize);
+      if(candidates.some(value=>value&&q.includes(value))) return key;
+    }
+    return null;
+  }
+  function ambiguityAnswer(matches,label){
+    const choices=matches.slice(0,6).map(item=>item.name+(item.category?' — '+item.category:'')+(item.id!==undefined?' (n°'+item.id+')':'')).join(', ');
+    return {outcome:'clarification',answer:'J’ai trouvé plusieurs '+label+' possibles : '+choices+'. Lequel veux-tu ?',pending:{kind:'entity',actionId:null,candidates:matches.slice(0,6).map(item=>item.id)}};
+  }
+  function fact(type,label,value,unit){ const item={type,label:String(label).slice(0,120),value}; if(unit)item.unit=unit; return item; }
+  function result(actionId,answer,options={}){
+    return freeze({actionId,outcome:options.outcome||'direct_answer',answer,facts:(options.facts||[]).slice(0,MAX_FACTS),pending:options.pending||null,local:true,writesEnabled:false});
+  }
+  function catalogReader(data,message){
+    const products=projectProducts(data);
+    const found=productMatches(products,message);
+    if(!found.matches.length) return result('consult.catalog','Je ne trouve aucun produit correspondant dans le catalogue.');
+    if(found.category){
+      const names=found.matches.slice(0,12).map(item=>item.name).join(', ');
+      const more=found.matches.length>12?' et '+(found.matches.length-12)+' autre(s)':'';
+      return result('consult.catalog','Dans la catégorie '+found.matches[0].category+', j’ai trouvé : '+names+more+'.',{facts:found.matches.slice(0,12).map(item=>fact('other_non_sensitive',item.name,item.price===null?'prix non renseigné':item.price,'EUR'))});
+    }
+    if(found.ambiguous){
+      const response=ambiguityAnswer(found.matches,'produits'); response.pending.actionId='consult.catalog';
+      return result('consult.catalog',response.answer,{outcome:response.outcome,pending:response.pending});
+    }
+    const product=found.matches[0];
+    const details=[product.category||'catégorie non renseignée',product.price===null?'prix non renseigné':euro(product.price)];
+    if(product.variant) details.push('variante '+product.variant);
+    return result('consult.catalog',product.name+' est bien dans le catalogue : '+details.join(' · ')+'.',{facts:[fact('other_non_sensitive',product.name,details.join(' · '))]});
+  }
+  function stockReader(data,message,pending){
+    const products=projectProducts(data);
+    let matches;
+    if(pending&&pending.productId!==undefined) matches=products.filter(product=>product.id===pending.productId);
+    else if(pending&&Array.isArray(pending.candidates)) matches=products.filter(product=>pending.candidates.includes(product.id));
+    else matches=productMatches(products,message).matches;
+    if(!matches.length) return result('consult.stocks','Je ne trouve pas ce produit dans le catalogue.');
+    if(matches.length>1){
+      const response=ambiguityAnswer(matches,'produits'); response.pending.actionId='consult.stocks';
+      return result('consult.stocks',response.answer,{outcome:response.outcome,pending:response.pending});
+    }
+    const product=matches[0],locations=availableLocations([product]);
+    const location=extractLocation(message,locations)||(pending&&pending.location)||null;
+    if(!location){
+      const choices=locations.map(locationLabel).concat('total').join(', ');
+      return result('consult.stocks','Tu veux le stock '+choices+' ?',{
+        outcome:'clarification',pending:{kind:'stock_location',actionId:'consult.stocks',productId:product.id,locations}
+      });
+    }
+    if(location==='total'){
+      const values=locations.map(key=>product.stocks[key]).filter(value=>value!==null);
+      if(!values.length) return result('consult.stocks','Le stock total de '+product.name+' n’est pas renseigné.');
+      const total=values.reduce((sum,value)=>sum+value,0);
+      return result('consult.stocks','Tu as '+plural(total,'pièce')+' de '+product.name+' au total.',{facts:[fact('product_stock',product.name,total,'pièces')]});
+    }
+    if(!Object.prototype.hasOwnProperty.call(product.stocks,location)||product.stocks[location]===null) return result('consult.stocks','Le stock '+locationLabel(location)+' de '+product.name+' n’est pas renseigné.');
+    const quantity=product.stocks[location];
+    return result('consult.stocks','Tu as '+plural(quantity,'pièce')+' de '+product.name+' à '+locationLabel(location)+'.',{facts:[fact('product_stock',product.name+' — '+locationLabel(location),quantity,'pièces')]});
+  }
+  function stockNeedsReader(data,message){
+    const products=projectProducts(data),found=productMatches(products,message);
+    const threshold=numberOrNull(data.stockAlertSeuil)!==null?numberOrNull(data.stockAlertSeuil):(numberOrNull(data.stockMinDefaut)!==null?numberOrNull(data.stockMinDefaut):null);
+    if(threshold===null) return result('consult.stock_needs','Le seuil minimum n’est pas renseigné dans le Manager.');
+    const genericRequest=/\b(quels? produits?|quoi|qu est ce que|sous (leur|le) minimum|a reimprimer|dois reimprimer)\b/.test(normalize(message));
+    if(!found.matches.length&&!genericRequest) return result('consult.stock_needs','Je ne trouve pas cette référence dans le catalogue.');
+    const candidates=found.matches.length?found.matches:products;
+    if(found.matches.length>1&&!found.category&&candidates.length<products.length){
+      const response=ambiguityAnswer(found.matches,'produits'); response.pending.actionId='consult.stock_needs';
+      return result('consult.stock_needs',response.answer,{outcome:response.outcome,pending:response.pending});
+    }
+    const needs=candidates.map(product=>{
+      const stock=Object.prototype.hasOwnProperty.call(product.stocks,'marche')?product.stocks.marche:null;
+      return {product,stock,missing:stock===null?null:Math.max(0,threshold-stock)};
+    }).filter(item=>item.stock!==null&&item.stock<=threshold).sort((a,b)=>a.stock-b.stock||a.product.name.localeCompare(b.product.name));
+    if(!needs.length) return result('consult.stock_needs','Aucun produit correspondant n’est au seuil d’alerte Marché de '+threshold+' pièce(s).');
+    const shown=needs.slice(0,12);
+    const text=shown.map(item=>item.product.name+' : '+item.stock+' au Marché, '+item.missing+' manquante(s) pour revenir à '+threshold).join(' ; ');
+    const more=needs.length>12?' ; '+(needs.length-12)+' autre(s) produit(s) non affiché(s)':'';
+    return result('consult.stock_needs','Besoins selon le seuil Marché enregistré ('+threshold+') : '+text+more+'.',{facts:shown.map(item=>fact('product_stock',item.product.name+' — besoin Marché',item.missing,'pièces'))});
+  }
+  function filamentReader(data,message){
+    const filaments=projectFilaments(data),q=normalize(message);
+    if(!filaments.length) return result('consult.filaments','Aucune bobine n’est enregistrée.');
+    let matches;
+    if(/\b(presque vide|presque vides|faible|faibles|a commander|alerte)\b/.test(q)){
+      matches=filaments.filter(item=>item.weightLeft!==null&&item.weightLeft<=(item.threshold===null?100:item.threshold));
+    }else{
+      const requested=tokens(message);
+      matches=filaments.filter(item=>{
+        const haystack=normalize([item.brand,item.type,item.material,item.color,item.reference].filter(Boolean).join(' '));
+        return requested.length&&requested.every(token=>haystack.includes(token)||similarity(token,haystack.split(' ').find(part=>similarity(token,part)>=.75)||'')>=.75);
+      });
+      if(!matches.length) matches=resolveItems(filaments,message,['brand','type','material','color','reference']).matches;
+    }
+    if(!matches.length) return result('consult.filaments','Je ne trouve aucune bobine correspondant à cette demande.');
+    const shown=matches.slice(0,12);
+    const descriptions=shown.map(item=>{
+      const identity=[item.brand,item.type||item.material,item.color].filter(Boolean).join(' ');
+      const remaining=item.weightLeft===null?'poids restant non renseigné':item.weightLeft+' g restants';
+      const total=item.weightTotal===null?'poids total non renseigné':'sur '+item.weightTotal+' g';
+      return identity+' : '+remaining+', '+total;
+    });
+    const more=matches.length>12?' ; '+(matches.length-12)+' autre(s) bobine(s) non affichée(s)':'';
+    return result('consult.filaments',descriptions.join(' ; ')+more+'.',{facts:shown.map(item=>fact('filament',[item.brand,item.type||item.material,item.color].filter(Boolean).join(' '),item.weightLeft===null?'non renseigné':item.weightLeft,item.weightLeft===null?undefined:'g'))});
+  }
+  const READERS=Object.freeze({
+    'consult.catalog':catalogReader,
+    'consult.stocks':stockReader,
+    'consult.stock_needs':stockNeedsReader,
+    'consult.filaments':filamentReader
+  });
+  function verifyAction(actionId){
+    if(!ALLOWED_ACTIONS.includes(actionId)||!Object.prototype.hasOwnProperty.call(READERS,actionId)) throw codedError('READ_ACTION_FORBIDDEN','Lecteur non autorisé.');
+    const security=root.JarvisSecurity;
+    if(!security||typeof security.getAction!=='function'||typeof security.auditCandidate!=='function') throw codedError('SECURITY_KERNEL_MISSING','Le registre de sécurité est indisponible.');
+    const action=security.getAction(actionId);
+    if(action.category!==security.categories.READ||action.readOnly!==true) throw codedError('READ_ACTION_FORBIDDEN','Cette action n’est pas une consultation autorisée.');
+    return security;
+  }
+  function consult(actionId,input={}){
+    const security=verifyAction(actionId),data=sourceData(),before=clone(data);
+    const response=READERS[actionId](data,String(input.message||''),input.pending||null);
+    const audit=security.auditCandidate(actionId,before,clone(sourceData()));
+    if(!audit||audit.ok!==true||audit.changes.length!==0||audit.protectedFinancialDataUnchanged!==true) throw codedError('READ_AUDIT_FAILED','La consultation n’a pas passé le contrôle d’intégrité.');
+    return freeze({...clone(response),audit:{changes:[],protectedFinancialDataUnchanged:true}});
+  }
+  function route(message,pending){
+    const q=normalize(message);
+    if(pending&&pending.kind==='stock_location'){
+      const location=extractLocation(q,pending.locations||[]);
+      if(location) return freeze({kind:'read',actionId:'consult.stocks',message:q,pending:{...clone(pending),location}});
+      if(/^(non|plutot|je voulais dire)\b/.test(q)) return freeze({kind:'read',actionId:'consult.stocks',message:q,pending:clone(pending)});
+    }
+    if(pending&&pending.kind==='entity'&&pending.actionId&&q) return freeze({kind:'read',actionId:pending.actionId,message:q,pending:null});
+    if(/\b(prix|coute|categorie|catalogue)\b/.test(q)&&/\b(stock|quantite|reste)\b/.test(q)) return freeze({kind:'clarification',answer:'Tu veux d’abord les informations du catalogue ou la quantité en stock ?'});
+    const scores={
+      'consult.filaments':(/\b(filament|filaments|bobine|bobines|pla|petg|abs|tpu)\b/.test(q)?4:0)+(/\b(poids|gramme|grammes|couleur|matiere|marque|vide|vides)\b/.test(q)?1:0),
+      'consult.stock_needs':(/\b(reimprim|reimprimer|reappro|reapprovision|minimum|seuil)\w*\b/.test(q)?4:0)+(/\b(manque|manquent|remonter|bas|rupture)\b/.test(q)&&/\b(stock|marche|produit|produits)\b/.test(q)?3:0),
+      'consult.stocks':(/\b(stock|stocks|quantite|quantites|reste|restent)\b/.test(q)?2:0)+(/\b(combien|total|maison|marche|arts? complices|vero)\b/.test(q)?2:0)+(/\bcombien\b/.test(q)&&!/\b(prix|coute|coutent)\b/.test(q)&&/\b(j ai|reste|maison|marche|total|tout)\b/.test(q)?2:0),
+      'consult.catalog':(/\b(catalogue|catalog|categorie|categories|prix|coute|coutent)\b/.test(q)?4:0)+(/\b(produit|produits|article|articles)\b/.test(q)?1:0)
+    };
+    const ranked=Object.entries(scores).sort((a,b)=>b[1]-a[1]);
+    if(ranked[0][1]>=4&&ranked[0][1]-ranked[1][1]>=1) return freeze({kind:'read',actionId:ranked[0][0],message:String(message),pending:null});
+    if(ranked[0][1]>=3&&ranked[0][1]===ranked[1][1]) return freeze({kind:'clarification',answer:'Parles-tu du catalogue, du stock, des besoins de réapprovisionnement ou des filaments ?'});
+    return freeze({kind:'gateway'});
+  }
+  function getState(){ return {stage:'5A',version:VERSION,writesEnabled:false,persistentConversation:false,genericReadPath:false,maxFacts:MAX_FACTS,allowedActions:[...ALLOWED_ACTIONS]}; }
+  const API=freeze({version:VERSION,getState,getAllowedActions:()=>[...ALLOWED_ACTIONS],route,consult,normalize,similarity});
+  Object.defineProperty(root,'JarvisReadBroker',{value:API,enumerable:false,configurable:false,writable:false});
+})(typeof window!=='undefined'?window:globalThis);
+</script>
+
 <!-- ===================== JARVIS TEXTE — ETAPE 4 =====================
 Interface conversationnelle temporaire. Aucun stockage persistant, aucune donnée
 métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
@@ -19642,6 +19897,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   const PROPOSABLE_ACTIONS=Object.freeze([
     'stock.adjust','inventory.commit','market.create','market.update','cash.pending_ticket.prepare'
   ]);
+  const READ_ACTIONS_5A=Object.freeze(['consult.catalog','consult.stocks','consult.stock_needs','consult.filaments']);
   const LABELS=Object.freeze({
     clarification:'Précision nécessaire',
     future_capability:'Fonction future',
@@ -19687,7 +19943,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     return Array.from(bytes,value=>value.toString(16).padStart(2,'0')).join('');
   }
   function createSession(now=Date.now()){
-    return {id:'j4-'+secureId(),createdAt:now,lastActivity:now,messages:[],pendingClarification:null,pendingProposal:null};
+    return {id:'j5a-'+secureId(),createdAt:now,lastActivity:now,messages:[],pendingClarification:null,pendingConsultation:null,pendingProposal:null};
   }
   function securityCheck(){
     const security=root.JarvisSecurity;
@@ -19741,7 +19997,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       const action=root.JarvisSecurity.getAction(response.proposal.actionId);
       if(action.category===root.JarvisSecurity.categories.FORBIDDEN) throw codedError('ACTION_FORBIDDEN','Action interdite.');
     }
-    return {outcome,answer:response.answer,proposal:response.proposal?clone(response.proposal):null,topic:meta.topic||null,missingInformation:Array.isArray(meta.missingInformation)?clone(meta.missingInformation):[]};
+    const readAction=typeof meta.readAction==='string'&&READ_ACTIONS_5A.includes(meta.readAction)?meta.readAction:null;
+    return {outcome,answer:response.answer,proposal:response.proposal?clone(response.proposal):null,topic:meta.topic||null,missingInformation:Array.isArray(meta.missingInformation)?clone(meta.missingInformation):[],readAction};
   }
   function errorMessage(error){
     if(!root.navigator || root.navigator.onLine===false) return ERROR_MESSAGES.OFFLINE;
@@ -19754,14 +20011,29 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     expireIfInactive();
     if(!root.navigator || root.navigator.onLine===false) throw codedError('OFFLINE',ERROR_MESSAGES.OFFLINE);
     const gateway=securityCheck();
+    const broker=root.JarvisReadBroker||null;
+    if(broker&&(broker.getState().writesEnabled!==false||broker.getState().genericReadPath!==false)) throw codedError('SECURITY_KERNEL_UNSAFE','Le courtier de consultation n est pas verrouillé.');
     const previous=contextMessages();
     busy=true; transientMessage=message; lastFailedMessage=''; setBusy(true); setStatus('Jarvis réfléchit…',false); render();
     try{
-      const response=await gateway.send({sessionId:session.id,message,conversation:previous,facts:[],financialSummary:[],requestedActions:PROPOSABLE_ACTIONS});
-      const result=classifyResponse(response);
+      const route=broker?broker.route(message,session.pendingConsultation):{kind:'gateway'};
+      let result;
+      if(route.kind==='clarification'){
+        result={outcome:'clarification',answer:route.answer,proposal:null,topic:'consultation 5A',missingInformation:['domaine'],readAction:null};
+      }else if(route.kind==='read'){
+        result=broker.consult(route.actionId,{message:route.message,pending:route.pending});
+      }else{
+        const response=await gateway.send({sessionId:session.id,message,conversation:previous,facts:[],financialSummary:[],requestedActions:[...READ_ACTIONS_5A,...PROPOSABLE_ACTIONS]});
+        result=classifyResponse(response);
+        if(result.readAction){
+          if(!broker) throw codedError('SECURITY_KERNEL_MISSING','Le courtier de consultation sécurisé est indisponible.');
+          result=broker.consult(result.readAction,{message,pending:session.pendingConsultation});
+        }
+      }
       appendMessage('user',message,'direct_answer',null);
       appendMessage('assistant',result.answer,result.outcome,result.proposal);
       session.pendingClarification=result.outcome==='clarification'?{topic:result.topic,missingInformation:result.missingInformation}:null;
+      session.pendingConsultation=result.pending?clone(result.pending):null;
       session.pendingProposal=result.proposal?clone(result.proposal):null;
       transientMessage='';
       setStatus('',false);
@@ -19820,7 +20092,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function open(){ expireIfInactive(); elements.panel.hidden=false; elements.backdrop.hidden=false; elements.open.hidden=true; render(); elements.input.focus(); }
   function close(){ elements.panel.hidden=true; elements.backdrop.hidden=true; elements.open.hidden=false; elements.open.focus(); }
   function getSession(){ return clone(session); }
-  function getState(){ return {stage:4,version:VERSION,maxMessages:MAX_MESSAGES,inactivityMs:INACTIVITY_MS,writesEnabled:false,persistentConversation:false,voiceEnabled:false,firebaseDirectAccess:false,genericDbAccess:false,printerPhysicalControl:false}; }
+  function getState(){ return {stage:4,consultationStage:'5A',version:VERSION,maxMessages:MAX_MESSAGES,inactivityMs:INACTIVITY_MS,writesEnabled:false,persistentConversation:false,voiceEnabled:false,firebaseDirectAccess:false,genericDbAccess:false,genericReadPath:false,printerPhysicalControl:false}; }
 
   elements.open.addEventListener('click',open);
   elements.close.addEventListener('click',close);
