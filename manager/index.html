@@ -19716,17 +19716,18 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
   }
   function stockReader(data,message,pending){
     const products=projectProducts(data);
+    const requestedLocation=extractLocation(message,availableLocations(products));
     let matches;
     if(pending&&pending.productId!==undefined) matches=products.filter(product=>product.id===pending.productId);
     else if(pending&&Array.isArray(pending.candidates)) matches=products.filter(product=>pending.candidates.includes(product.id));
-    else matches=productMatches(products,message).matches;
+    else matches=productMatches(products,tokens(message).join(' ')||message).matches;
     if(!matches.length) return result('consult.stocks','Je ne trouve pas ce produit dans le catalogue.');
     if(matches.length>1){
       const response=ambiguityAnswer(matches,'produits'); response.pending.actionId='consult.stocks';
       return result('consult.stocks',response.answer,{outcome:response.outcome,pending:response.pending});
     }
     const product=matches[0],locations=availableLocations([product]);
-    const location=extractLocation(message,locations)||(pending&&pending.location)||null;
+    const location=requestedLocation||(pending&&pending.location)||null;
     if(!location){
       const choices=locations.map(locationLabel).concat('total').join(', ');
       return result('consult.stocks','Tu veux le stock '+choices+' ?',{
