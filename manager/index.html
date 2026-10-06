@@ -19008,4 +19008,833 @@ body.solaire :is(input,select,textarea,button):focus-visible{outline:3px solid #
 })();
 
 </script>
+
+<!-- ===================== JARVIS SECURITY KERNEL — ETAPE 2 =====================
+Registre des actions et verrou financier.
+Ce bloc ne lit pas la variable globale db, ne sauvegarde rien et ne contacte aucun service.
+Les écritures réelles restent volontairement désactivées jusqu'aux étapes autorisées.
+============================================================================ -->
+<script id="jarvis-security-step2">
+(function(root){
+  'use strict';
+
+  const VERSION = '2.0.0-step2';
+  const CATEGORY = Object.freeze({
+    READ: 'consultation_autorisee',
+    WRITE_CONFIRMED: 'ecriture_apres_confirmation',
+    FORBIDDEN: 'action_interdite'
+  });
+
+  const SECURITY_STATE = Object.freeze({
+    stage: 2,
+    writesEnabled: false,
+    dataBackupVerified: false,
+    restoreTestVerified: false,
+    firebaseDirectAccess: false,
+    genericWriteTool: false,
+    realExecutionReason: 'Aucune écriture Jarvis réelle n est autorisée pendant l étape 2'
+  });
+
+  class JarvisSecurityError extends Error {
+    constructor(code, message, details){
+      super(message);
+      this.name = 'JarvisSecurityError';
+      this.code = code;
+      this.details = details || null;
+    }
+  }
+
+  function deepClone(value){
+    if(value === undefined) return undefined;
+    if(typeof structuredClone === 'function') return structuredClone(value);
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function deepFreeze(value){
+    if(!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+    Object.freeze(value);
+    Object.keys(value).forEach(key => deepFreeze(value[key]));
+    return value;
+  }
+
+  function stableValue(value){
+    if(value === undefined) return '__JARVIS_UNDEFINED__';
+    if(value === null || typeof value !== 'object') {
+      if(typeof value === 'number' && !Number.isFinite(value)) return String(value);
+      return value;
+    }
+    if(Array.isArray(value)) return value.map(stableValue);
+    const out = {};
+    Object.keys(value).sort().forEach(key => { out[key] = stableValue(value[key]); });
+    return out;
+  }
+
+  function stableStringify(value){
+    return JSON.stringify(stableValue(value));
+  }
+
+  function fingerprint(value){
+    const text = stableStringify(value);
+    let hash = 2166136261;
+    for(let i=0; i<text.length; i++){
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return ('00000000' + (hash >>> 0).toString(16)).slice(-8) + ':' + text.length;
+  }
+
+  function defineAction(config){
+    const required = ['id','name','objective','category','readPaths','mutablePaths','readOnly','confirmationRequired','unchangedZones','indirectEffectsToBlock','status'];
+    required.forEach(key => {
+      if(!Object.prototype.hasOwnProperty.call(config,key)) {
+        throw new Error('Définition action incomplète : ' + config.id + ' / ' + key);
+      }
+    });
+    return deepFreeze({...config});
+  }
+
+  const FINANCIAL_ZONES = deepFreeze({
+    topLevelKeys: [
+      'sales','ventesMarche','ventesLigne','recettesManuelles','caisseHistory',
+      'marchesArchives','boutiquesVentes','depenses','fondCaisse','retraitsJour',
+      'reconciliations','acomptes','reservations','urssafDeclarations',
+      'recapProtectedKeys','nextVenteMarcheId','nextVenteLigneId','nextRecetteId',
+      'nextBoutiqueVenteId'
+    ],
+    protectedNextIdKeys: ['sale','caisseHistory','depense','purchase','client'],
+    protectedMarketField: 'ca',
+    labels: [
+      'Livre de recettes','URSSAF','CA global','CA marchés','champs ca des marchés',
+      'tickets validés','ventes boutiques','ventes en ligne','dépenses',
+      'acomptes','paiements de réservations','fond et contrôle de caisse'
+    ]
+  });
+
+  const READ_COMMON = ['products','filaments','planningJobs','planningJour','plansImpression','plansLibres','printQueue','printersConfig','marches'];
+  const FINANCIAL_UNCHANGED = ['$financial'];
+
+  const actions = [
+    defineAction({id:'consult.catalog',name:'Consulter le catalogue',objective:'Consulter les produits et variantes.',category:CATEGORY.READ,readPaths:['products'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Toute sauvegarde','Toute modification de produit'],status:'lecture_disponible'}),
+    defineAction({id:'consult.stocks',name:'Consulter les stocks',objective:'Consulter les quantités par emplacement.',category:CATEGORY.READ,readPaths:['products.*.stocks','stockHistory','reassortHistory'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Ajustement automatique','Réassort automatique'],status:'lecture_disponible'}),
+    defineAction({id:'consult.stock_needs',name:'Consulter les besoins de stock',objective:'Identifier les seuils et besoins de réapprovisionnement.',category:CATEGORY.READ,readPaths:['products','stockAlertSeuil','stockMinDefaut'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Création automatique de tâche','Modification de stock'],status:'lecture_disponible'}),
+    defineAction({id:'consult.filaments',name:'Consulter les filaments',objective:'Consulter les matières, couleurs et quantités disponibles.',category:CATEGORY.READ,readPaths:['filaments','customFilColors'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Consommation automatique de filament'],status:'lecture_disponible'}),
+    defineAction({id:'consult.printing',name:'Consulter les impressions',objective:'Consulter projets, tâches, files, durées, contraintes et planning.',category:CATEGORY.READ,readPaths:['planningJobs','planningJour','plansImpression','plansLibres','printQueue','printersConfig','hfTemplates'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Pilotage imprimante','Validation de production','Ajout automatique au stock'],status:'lecture_disponible'}),
+    defineAction({id:'consult.markets',name:'Consulter les marchés',objective:'Consulter les marchés et informations pratiques.',category:CATEGORY.READ,readPaths:['marches','checklistMarche'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Création de vente marché','Modification du champ ca'],status:'lecture_disponible'}),
+    defineAction({id:'consult.cash',name:'Consulter la caisse',objective:'Consulter les ventes et tickets à la demande.',category:CATEGORY.READ,readPaths:['caisseHistory','fondCaisse','retraitsJour','reconciliations'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Validation de vente','Correction de ticket','Décrément de stock'],status:'lecture_disponible'}),
+    defineAction({id:'consult.recipe_book',name:'Consulter le Livre de recettes',objective:'Répondre à une demande explicite en lecture seule.',category:CATEGORY.READ,readPaths:['sales','ventesLigne','recettesManuelles'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Toute écriture financière'],status:'lecture_sur_demande'}),
+    defineAction({id:'consult.urssaf',name:'Consulter l URSSAF',objective:'Répondre à une demande explicite en lecture seule.',category:CATEGORY.READ,readPaths:['sales','recettesManuelles','urssafDeclarations'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Modification de déclaration','Modification de taux ou préférence'],status:'lecture_sur_demande'}),
+    defineAction({id:'consult.global_revenue',name:'Consulter le CA global',objective:'Calculer et présenter le CA global sur demande.',category:CATEGORY.READ,readPaths:['sales','ventesMarche','ventesLigne','recettesManuelles','caisseHistory','marchesArchives','boutiquesVentes'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Toute écriture dans une source du CA'],status:'lecture_sur_demande'}),
+    defineAction({id:'consult.market_revenue',name:'Consulter le CA marchés',objective:'Calculer et présenter le CA marchés sur demande.',category:CATEGORY.READ,readPaths:['ventesMarche','caisseHistory','marches.*.ca','marchesArchives'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Modification de vente','Modification du champ ca'],status:'lecture_sur_demande'}),
+
+    defineAction({id:'stock.adjust',name:'Modifier un stock',objective:'Préparer puis appliquer une correction de quantité précisément identifiée.',category:CATEGORY.WRITE_CONFIRMED,readPaths:['products.*.stocks','stockHistory'],mutablePaths:['products.*.stocks.maison','products.*.stocks.marche','products.*.stocks.artComplices','products.*.stocks.btvero','stockHistory.length','stockHistory.**','reassortHistory.length','reassortHistory.**'],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Synchronisation financière','Vente automatique','Sauvegarde générique'],status:'reserve_non_implemente'}),
+    defineAction({id:'inventory.commit',name:'Enregistrer un inventaire',objective:'Appliquer après bilan confirmé plusieurs quantités de stock.',category:CATEGORY.WRITE_CONFIRMED,readPaths:['products.*.stocks','stockHistory'],mutablePaths:['products.*.stocks.maison','products.*.stocks.marche','products.*.stocks.artComplices','products.*.stocks.btvero','stockHistory.length','stockHistory.**'],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Enregistrement avant bilan','Synchronisation financière','Réutilisation ancien inventaire vocal'],status:'reserve_etape_inventaire'}),
+    defineAction({id:'print_task.create',name:'Créer une tâche impression',objective:'Créer une tâche ou un projet d impression après confirmation.',category:CATEGORY.WRITE_CONFIRMED,readPaths:READ_COMMON,mutablePaths:['planningJobs.length','planningJobs.**','nextPlanningId','plansImpression.**','plansLibres.length','plansLibres.**','printQueue.length','printQueue.**','nextPrintQueueId'],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Démarrage imprimante','Ajout de stock','Synchronisation financière'],status:'reserve_non_implemente'}),
+    defineAction({id:'print_task.update',name:'Modifier une tâche impression',objective:'Modifier une tâche ou un projet d impression après confirmation.',category:CATEGORY.WRITE_CONFIRMED,readPaths:READ_COMMON,mutablePaths:['planningJobs.**','plansImpression.**','plansLibres.**','printQueue.**'],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Démarrage imprimante','Validation de production','Ajout de stock'],status:'reserve_non_implemente'}),
+    defineAction({id:'print_schedule.create',name:'Créer un planning impression',objective:'Créer un planning sans piloter les imprimantes.',category:CATEGORY.WRITE_CONFIRMED,readPaths:READ_COMMON,mutablePaths:['planningJour.**','planningJobs.length','planningJobs.**','nextPlanningId'],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Commande imprimante','Validation de travail','Modification stock'],status:'reserve_non_implemente'}),
+    defineAction({id:'print_schedule.update',name:'Modifier un planning impression',objective:'Modifier un planning existant sans piloter les imprimantes.',category:CATEGORY.WRITE_CONFIRMED,readPaths:READ_COMMON,mutablePaths:['planningJour.**','planningJobs.**'],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Commande imprimante','Validation de travail','Modification stock'],status:'reserve_non_implemente'}),
+    defineAction({id:'market.create',name:'Créer un marché',objective:'Créer uniquement la fiche pratique d un marché.',category:CATEGORY.WRITE_CONFIRMED,readPaths:['marches'],mutablePaths:['marches.length','marches.*.id','marches.*.date','marches.*.dateFin','marches.*.ville','marches.*.prixPlace','marches.*.distance','marches.*.type','marches.*.materiel','marches.*.paiement','marches.*.installation','marches.*.horaires','marches.*.notes','marches.*.observations','marches.*.statut','nextId.marche'],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Création de ventesMarche','Initialisation du champ ca','Synchronisation financière'],status:'reserve_non_implemente'}),
+    defineAction({id:'market.update',name:'Modifier un marché',objective:'Modifier uniquement les informations pratiques autorisées.',category:CATEGORY.WRITE_CONFIRMED,readPaths:['marches'],mutablePaths:['marches.*.date','marches.*.dateFin','marches.*.ville','marches.*.prixPlace','marches.*.distance','marches.*.type','marches.*.materiel','marches.*.paiement','marches.*.installation','marches.*.horaires','marches.*.notes','marches.*.observations','marches.*.statut'],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Modification du champ ca','Modification de ventesMarche','Synchronisation financière'],status:'reserve_non_implemente'}),
+    defineAction({id:'cash.pending_ticket.prepare',name:'Préparer un ticket en attente',objective:'Créer un brouillon temporaire sans valider la vente.',category:CATEGORY.WRITE_CONFIRMED,readPaths:['products','promoSettings','customPromos'],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Écriture caisseHistory','Consommation nextId caisseHistory','Décrément de stock','Validation automatique'],status:'reserve_etape_caisse'}),
+    defineAction({id:'pending_action.correct',name:'Corriger une proposition en attente',objective:'Remplacer un brouillon temporaire sans modifier les données réelles.',category:CATEGORY.WRITE_CONFIRMED,readPaths:[],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Réutilisation d une confirmation précédente'],status:'preparation_session_uniquement'}),
+    defineAction({id:'pending_action.cancel',name:'Annuler une proposition en attente',objective:'Annuler un brouillon temporaire sans supprimer de donnée réelle.',category:CATEGORY.WRITE_CONFIRMED,readPaths:[],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Suppression de donnée réelle'],status:'preparation_session_uniquement'}),
+
+    defineAction({id:'financial.generic_write',name:'Modifier des données financières',objective:'Interdiction générale.',category:CATEGORY.FORBIDDEN,readPaths:[],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Toute écriture financière'],status:'interdit_absolu'}),
+    defineAction({id:'db.generic_write',name:'Modifier librement db',objective:'Interdire tout outil générique de modification.',category:CATEGORY.FORBIDDEN,readPaths:[],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Contournement des fonctions métier'],status:'interdit_absolu'}),
+    defineAction({id:'firebase.generic_write',name:'Modifier directement Firebase',objective:'Interdire tout accès direct ou générique à Firebase.',category:CATEGORY.FORBIDDEN,readPaths:[],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Contournement du Manager'],status:'interdit_absolu'}),
+    defineAction({id:'printer.control',name:'Piloter une imprimante',objective:'Interdire démarrage arrêt pause ou pilotage direct.',category:CATEGORY.FORBIDDEN,readPaths:[],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Commande matérielle'],status:'interdit_absolu'}),
+    defineAction({id:'delete.permanent',name:'Supprimer définitivement',objective:'Interdire toute suppression définitive de données.',category:CATEGORY.FORBIDDEN,readPaths:[],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Perte de données'],status:'interdit_absolu'}),
+    defineAction({id:'cash.sale.auto_validate',name:'Valider automatiquement une vente',objective:'Interdire toute validation automatique de caisse.',category:CATEGORY.FORBIDDEN,readPaths:[],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Écriture caisseHistory','Modification stock','Modification CA'],status:'interdit_absolu'}),
+    defineAction({id:'cash.ticket.validate',name:'Valider un ticket précis',objective:'Réserver la décision et la fonction métier au futur bloc caisse.',category:CATEGORY.FORBIDDEN,readPaths:[],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Décision prématurée sur la validation finale'],status:'interdit_etape_2_reserve_bloc_caisse'}),
+    defineAction({id:'conversation.persist',name:'Conserver les conversations',objective:'Interdire la conservation permanente actuellement.',category:CATEGORY.FORBIDDEN,readPaths:[],mutablePaths:[],readOnly:false,confirmationRequired:true,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Écriture Firebase','Historique permanent'],status:'interdit_actuellement'})
+  ];
+
+  const ACTION_REGISTRY = deepFreeze(actions.reduce((out, action) => {
+    if(out[action.id]) throw new Error('Identifiant action dupliqué : ' + action.id);
+    out[action.id] = action;
+    return out;
+  }, {}));
+
+  function getAction(actionId){
+    const action = ACTION_REGISTRY[actionId];
+    if(!action) throw new JarvisSecurityError('UNKNOWN_ACTION','Action Jarvis inconnue : ' + actionId,{actionId});
+    return action;
+  }
+
+  function captureFinancialSnapshot(data){
+    const source = data && typeof data === 'object' ? data : {};
+    const snapshot = {};
+    FINANCIAL_ZONES.topLevelKeys.forEach(key => {
+      snapshot[key] = Object.prototype.hasOwnProperty.call(source,key) ? deepClone(source[key]) : '__JARVIS_ABSENT__';
+    });
+    const nextId = source.nextId && typeof source.nextId === 'object' ? source.nextId : {};
+    snapshot.protectedNextIds = {};
+    FINANCIAL_ZONES.protectedNextIdKeys.forEach(key => {
+      snapshot.protectedNextIds[key] = Object.prototype.hasOwnProperty.call(nextId,key) ? deepClone(nextId[key]) : '__JARVIS_ABSENT__';
+    });
+    snapshot.marketCA = (Array.isArray(source.marches) ? source.marches : [])
+      .filter(m => m && Object.prototype.hasOwnProperty.call(m,FINANCIAL_ZONES.protectedMarketField))
+      .map(m => ({id:deepClone(m.id),ca:deepClone(m.ca)}))
+      .sort((a,b) => String(a.id).localeCompare(String(b.id)));
+    return deepFreeze(snapshot);
+  }
+
+  function collectLeafPaths(value, path, out){
+    if(Array.isArray(value)){
+      out.push(path ? path + '.length' : 'length');
+      value.forEach((item,index) => collectLeafPaths(item,path ? path + '.' + index : String(index),out));
+      return;
+    }
+    if(value && typeof value === 'object'){
+      const keys = Object.keys(value);
+      if(!keys.length && path) out.push(path);
+      keys.forEach(key => collectLeafPaths(value[key],path ? path + '.' + key : key,out));
+      return;
+    }
+    if(path) out.push(path);
+  }
+
+  function diffPaths(before, after, path, out){
+    const changes = out || [];
+    const currentPath = path || '';
+    if(Object.is(before,after)) return changes;
+    const beforeArray = Array.isArray(before), afterArray = Array.isArray(after);
+    if(beforeArray || afterArray){
+      if(!(beforeArray && afterArray)){
+        collectLeafPaths(afterArray ? after : before,currentPath,changes);
+        return changes;
+      }
+      if(before.length !== after.length) changes.push(currentPath ? currentPath + '.length' : 'length');
+      const max = Math.max(before.length,after.length);
+      for(let i=0;i<max;i++){
+        const p = currentPath ? currentPath + '.' + i : String(i);
+        if(i >= before.length) collectLeafPaths(after[i],p,changes);
+        else if(i >= after.length) collectLeafPaths(before[i],p,changes);
+        else diffPaths(before[i],after[i],p,changes);
+      }
+      return changes;
+    }
+    const beforeObj = before && typeof before === 'object';
+    const afterObj = after && typeof after === 'object';
+    if(beforeObj || afterObj){
+      if(!(beforeObj && afterObj)){
+        collectLeafPaths(afterObj ? after : before,currentPath,changes);
+        return changes;
+      }
+      const keys = new Set([...Object.keys(before),...Object.keys(after)]);
+      keys.forEach(key => {
+        const p = currentPath ? currentPath + '.' + key : key;
+        if(!Object.prototype.hasOwnProperty.call(before,key)) collectLeafPaths(after[key],p,changes);
+        else if(!Object.prototype.hasOwnProperty.call(after,key)) collectLeafPaths(before[key],p,changes);
+        else diffPaths(before[key],after[key],p,changes);
+      });
+      return changes;
+    }
+    if(currentPath) changes.push(currentPath);
+    return changes;
+  }
+
+  function patternMatches(path, pattern){
+    const segments = String(pattern).split('.');
+    const regex = segments.map(segment => {
+      if(segment === '**') return '.*';
+      if(segment === '*') return '[^.]*';
+      return segment.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    }).join('\\.');
+    return new RegExp('^' + regex + '$').test(path);
+  }
+
+  function assertFinancialIntegrity(beforeData, afterData){
+    const beforeSnapshot = captureFinancialSnapshot(beforeData);
+    const afterSnapshot = captureFinancialSnapshot(afterData);
+    const changed = diffPaths(beforeSnapshot,afterSnapshot).sort();
+    if(changed.length){
+      throw new JarvisSecurityError(
+        'FINANCIAL_LOCK_VIOLATION',
+        'Le verrou financier a détecté une modification interdite.',
+        {changedProtectedPaths:changed}
+      );
+    }
+    return deepFreeze({ok:true,fingerprint:fingerprint(beforeSnapshot),changedProtectedPaths:[]});
+  }
+
+  function auditCandidate(actionId, beforeData, candidateData){
+    const action = getAction(actionId);
+    if(action.category === CATEGORY.FORBIDDEN){
+      throw new JarvisSecurityError('FORBIDDEN_ACTION','Action interdite : ' + actionId,{actionId});
+    }
+    const changes = [...new Set(diffPaths(beforeData,candidateData))].sort();
+    if(action.readOnly && changes.length){
+      throw new JarvisSecurityError('READ_ONLY_ACTION_CHANGED_DATA','Une consultation a tenté de modifier les données.',{actionId,changes});
+    }
+    assertFinancialIntegrity(beforeData,candidateData);
+    const unauthorized = changes.filter(path => !action.mutablePaths.some(pattern => patternMatches(path,pattern)));
+    if(unauthorized.length){
+      throw new JarvisSecurityError('UNAUTHORIZED_PATH_CHANGE','Modification hors périmètre de l action.',{actionId,unauthorized,changes});
+    }
+    return deepFreeze({ok:true,actionId,changes,protectedFinancialDataUnchanged:true});
+  }
+
+  const proposals = new Map();
+
+  function proposalId(){
+    if(root.crypto && typeof root.crypto.randomUUID === 'function') return 'jarvis-' + root.crypto.randomUUID();
+    return 'jarvis-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,10);
+  }
+
+  function createProposal(actionId, payload, currentData, summary, options){
+    const action = getAction(actionId);
+    if(action.category === CATEGORY.FORBIDDEN) throw new JarvisSecurityError('FORBIDDEN_ACTION','Impossible de préparer une action interdite.',{actionId});
+    if(action.readOnly) throw new JarvisSecurityError('READ_ACTION_NEEDS_NO_PROPOSAL','Une consultation ne doit pas créer de proposition d écriture.',{actionId});
+    if(!String(summary||'').trim()) throw new JarvisSecurityError('MISSING_PROPOSAL_SUMMARY','Le résumé précis de l action est obligatoire.',{actionId});
+    const ttl = Math.max(1,Math.min(Number(options && options.ttlMs)||300000,1800000));
+    const now = Date.now();
+    const proposal = deepFreeze({
+      id:proposalId(),
+      actionId,
+      payload:deepClone(payload),
+      summary:String(summary).trim(),
+      createdAt:now,
+      expiresAt:now+ttl,
+      baseFingerprint:fingerprint(currentData),
+      confirmationRequired:true,
+      state:'pending'
+    });
+    proposals.set(proposal.id,proposal);
+    return deepClone(proposal);
+  }
+
+  function getProposal(id){
+    const proposal = proposals.get(id);
+    if(!proposal) throw new JarvisSecurityError('UNKNOWN_PROPOSAL','Proposition Jarvis inconnue.',{proposalId:id});
+    return proposal;
+  }
+
+  function cancelProposal(id){
+    const proposal = getProposal(id);
+    proposals.delete(id);
+    return deepFreeze({ok:true,proposalId:id,actionId:proposal.actionId,state:'cancelled',realDataChanged:false});
+  }
+
+  function reviseProposal(id, payload, summary, currentData){
+    const oldProposal = getProposal(id);
+    proposals.delete(id);
+    return createProposal(oldProposal.actionId,payload,currentData,summary);
+  }
+
+  function validateConfirmation(proposalIdValue, confirmation, currentData){
+    const proposal = getProposal(proposalIdValue);
+    if(!confirmation || typeof confirmation !== 'object' || Array.isArray(confirmation)){
+      throw new JarvisSecurityError('AMBIGUOUS_CONFIRMATION','Une confirmation vague ou textuelle ne suffit pas.',{proposalId:proposalIdValue});
+    }
+    if(confirmation.explicit !== true || confirmation.proposalId !== proposal.id || confirmation.actionId !== proposal.actionId){
+      throw new JarvisSecurityError('CONFIRMATION_MISMATCH','La confirmation ne désigne pas précisément la proposition.',{proposalId:proposal.id,actionId:proposal.actionId});
+    }
+    if(Date.now() > proposal.expiresAt){
+      proposals.delete(proposal.id);
+      throw new JarvisSecurityError('EXPIRED_PROPOSAL','La proposition a expiré.',{proposalId:proposal.id});
+    }
+    const currentFingerprint = fingerprint(currentData);
+    if(currentFingerprint !== proposal.baseFingerprint){
+      throw new JarvisSecurityError('STALE_PROPOSAL','Les données ont changé depuis la préparation. Une nouvelle proposition est nécessaire.',{proposalId:proposal.id});
+    }
+    return deepFreeze({ok:true,proposalId:proposal.id,actionId:proposal.actionId,explicit:true,currentFingerprint});
+  }
+
+  function prepareCandidate(proposalIdValue, currentData){
+    const proposal = getProposal(proposalIdValue);
+    throw new JarvisSecurityError(
+      'ACTION_HANDLER_NOT_IMPLEMENTED',
+      'Aucun gestionnaire d écriture réel n est installé pendant l étape 2.',
+      {proposalId:proposal.id,actionId:proposal.actionId,candidateWasCreated:false,currentFingerprint:fingerprint(currentData)}
+    );
+  }
+
+  function executeConfirmedAction(){
+    if(!SECURITY_STATE.writesEnabled) throw new JarvisSecurityError('JARVIS_WRITES_DISABLED',SECURITY_STATE.realExecutionReason);
+    if(!SECURITY_STATE.dataBackupVerified) throw new JarvisSecurityError('DATA_BACKUP_REQUIRED','Une sauvegarde complète vérifiée est obligatoire.');
+    if(!SECURITY_STATE.restoreTestVerified) throw new JarvisSecurityError('RESTORE_TEST_REQUIRED','La restauration des données doit être testée.');
+    throw new JarvisSecurityError('NO_COMMIT_ADAPTER','Aucun adaptateur d écriture n est installé.');
+  }
+
+  const API = deepFreeze({
+    version:VERSION,
+    categories:CATEGORY,
+    getState:() => deepClone(SECURITY_STATE),
+    getRegistry:() => deepClone(ACTION_REGISTRY),
+    getAction:(actionId) => deepClone(getAction(actionId)),
+    captureFinancialSnapshot:(data) => deepClone(captureFinancialSnapshot(data)),
+    auditCandidate,
+    createProposal,
+    reviseProposal,
+    cancelProposal,
+    validateConfirmation,
+    prepareCandidate,
+    executeConfirmedAction
+  });
+
+  Object.defineProperty(root,'JarvisSecurity',{
+    value:API,
+    enumerable:false,
+    configurable:false,
+    writable:false
+  });
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+
+<!-- ===================== JARVIS GATEWAY CLIENT — ETAPE 3 =====================
+Client isolé pour la future passerelle Cloudflare. Aucun secret, aucune écriture,
+aucun accès direct à db et aucun appel automatique ne sont présents dans ce bloc.
+============================================================================ -->
+<script id="jarvis-gateway-step3">
+(function(root){
+  'use strict';
+
+  const VERSION='3.0.0-step3';
+  const PROTOCOL='jarvis/1';
+  const MANAGER_ORIGIN='https://fath3d.github.io';
+  const GATEWAY_ENDPOINT='https://fath3d-jarvis-gateway.pat-gwen69.workers.dev';
+  const TIMEOUT_MS=30000;
+  const MAX_FACTS=40;
+  const MAX_FINANCIAL_SUMMARIES=8;
+
+  const STATE=Object.freeze({
+    stage:3,
+    configured:Boolean(GATEWAY_ENDPOINT),
+    managerOrigin:MANAGER_ORIGIN,
+    protocol:PROTOCOL,
+    writesEnabled:false,
+    automaticRetry:false,
+    persistentConversation:false,
+    firebaseDirectAccess:false,
+    genericDbAccess:false
+  });
+
+  class JarvisGatewayError extends Error {
+    constructor(code,message,details){
+      super(message);
+      this.name='JarvisGatewayError';
+      this.code=code;
+      this.details=details||null;
+    }
+  }
+
+  function fail(code,message,details){ throw new JarvisGatewayError(code,message,details); }
+  function isObject(value){ return Boolean(value) && typeof value==='object' && !Array.isArray(value); }
+  function clone(value){ return value===undefined ? undefined : JSON.parse(JSON.stringify(value)); }
+  function freeze(value){
+    if(!value || typeof value!=='object' || Object.isFrozen(value)) return value;
+    Object.freeze(value);
+    Object.keys(value).forEach(key=>freeze(value[key]));
+    return value;
+  }
+  function text(value,label,min,max){
+    if(typeof value!=='string' || value.length<min || value.length>max) fail('REQUEST_INVALID',label+' invalide.');
+    return value;
+  }
+  function requestId(){
+    if(root.crypto && typeof root.crypto.randomUUID==='function') return root.crypto.randomUUID();
+    if(!root.crypto || typeof root.crypto.getRandomValues!=='function') fail('CRYPTO_UNAVAILABLE','Générateur sécurisé indisponible.');
+    const bytes=new Uint8Array(16);
+    root.crypto.getRandomValues(bytes);
+    return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+  }
+  function nonce(){ return requestId()+'-'+requestId(); }
+
+  function security(){
+    const api=root.JarvisSecurity;
+    if(!api || typeof api.getRegistry!=='function' || typeof api.getState!=='function') fail('SECURITY_KERNEL_MISSING','Le registre de sécurité Jarvis est indisponible.');
+    const state=api.getState();
+    if(state.writesEnabled!==false || state.firebaseDirectAccess!==false || state.genericWriteTool!==false) fail('SECURITY_KERNEL_UNSAFE','Le socle de sécurité Jarvis n est pas verrouillé.');
+    return api;
+  }
+
+  function sanitizeConversation(value){
+    if(value===undefined) return [];
+    if(!Array.isArray(value) || value.length>12) fail('REQUEST_INVALID','Contexte conversationnel invalide.');
+    return value.map(item=>{
+      if(!isObject(item) || !['user','assistant'].includes(item.role)) fail('REQUEST_INVALID','Rôle conversationnel invalide.');
+      return {role:item.role,content:text(item.content,'Contenu conversationnel',1,1500)};
+    });
+  }
+
+  function sanitizeFacts(value){
+    if(value===undefined) return [];
+    if(!Array.isArray(value) || value.length>MAX_FACTS) fail('REQUEST_INVALID','Trop de faits métier.');
+    return value.map(item=>{
+      if(!isObject(item) || !['product_stock','filament','printing_task','market_info','cash_summary','other_non_sensitive'].includes(item.type)) fail('REQUEST_INVALID','Fait métier invalide.');
+      if(!['string','number','boolean'].includes(typeof item.value)) fail('REQUEST_INVALID','Valeur métier invalide.');
+      if(typeof item.value==='string' && item.value.length>300) fail('REQUEST_INVALID','Valeur métier trop longue.');
+      const fact={type:item.type,label:text(item.label,'Libellé métier',1,120),value:item.value};
+      if(item.unit!==undefined) fact.unit=text(item.unit,'Unité',0,40);
+      return fact;
+    });
+  }
+
+  function sanitizeFinancial(value){
+    if(value===undefined) return [];
+    if(!Array.isArray(value) || value.length>MAX_FINANCIAL_SUMMARIES) fail('REQUEST_INVALID','Résumé financier trop détaillé.');
+    return value.map(item=>{
+      if(!isObject(item) || typeof item.value!=='number' || !Number.isFinite(item.value)) fail('REQUEST_INVALID','Indicateur financier invalide.');
+      const metric={label:text(item.label,'Libellé financier',1,100),value:item.value};
+      if(item.period!==undefined) metric.period=text(item.period,'Période financière',0,80);
+      return metric;
+    });
+  }
+
+  function sanitizeActions(actionIds,api){
+    if(actionIds===undefined) return [];
+    if(!Array.isArray(actionIds) || actionIds.length>12 || new Set(actionIds).size!==actionIds.length) fail('REQUEST_INVALID','Liste d actions invalide.');
+    return actionIds.map(actionId=>{
+      const action=api.getAction(actionId);
+      if(action.category===api.categories.FORBIDDEN) fail('ACTION_FORBIDDEN','Action interdite : '+actionId);
+      return actionId;
+    });
+  }
+
+  function buildRequest(input){
+    if(!isObject(input)) fail('REQUEST_INVALID','Demande Jarvis invalide.');
+    const api=security();
+    return freeze({
+      protocol:PROTOCOL,
+      requestId:requestId(),
+      timestamp:new Date().toISOString(),
+      nonce:nonce(),
+      sessionId:text(input.sessionId||'session-courante','Identifiant de session',1,100),
+      message:text(input.message,'Message Jarvis',1,4000),
+      conversation:sanitizeConversation(input.conversation),
+      businessContext:{facts:sanitizeFacts(input.facts),financialSummary:sanitizeFinancial(input.financialSummary)},
+      requestedActions:sanitizeActions(input.requestedActions,api)
+    });
+  }
+
+  function validateResponse(response,expectedRequestId){
+    if(!isObject(response)) fail('GATEWAY_RESPONSE_INVALID','Réponse de passerelle invalide.');
+    if(response.ok!==true){
+      const error=isObject(response.error)?response.error:{};
+      fail(typeof error.code==='string'?error.code:'GATEWAY_ERROR',typeof error.message==='string'?error.message:'Passerelle indisponible.');
+    }
+    if(response.protocol!==PROTOCOL || response.requestId!==expectedRequestId) fail('GATEWAY_RESPONSE_INVALID','Réponse ne correspondant pas à la demande.');
+    if(typeof response.answer!=='string' || response.answer.length>10000) fail('GATEWAY_RESPONSE_INVALID','Texte de réponse invalide.');
+    let proposal=null;
+    if(response.proposal!==null && response.proposal!==undefined){
+      if(!isObject(response.proposal) || typeof response.proposal.actionId!=='string' || !isObject(response.proposal.args)) fail('GATEWAY_RESPONSE_INVALID','Proposition invalide.');
+      const action=security().getAction(response.proposal.actionId);
+      if(action.category===security().categories.FORBIDDEN) fail('ACTION_FORBIDDEN','Proposition interdite par le Manager.');
+      if(response.proposal.confirmationRequired!==true || response.proposal.executionAllowed!==false) fail('GATEWAY_RESPONSE_INVALID','Proposition non verrouillée.');
+      proposal={actionId:response.proposal.actionId,args:clone(response.proposal.args),confirmationRequired:true,executionAllowed:false};
+    }
+    return freeze({answer:response.answer,proposal,requestId:response.requestId,meta:clone(response.meta||{})});
+  }
+
+  async function firebaseToken(){
+    const user=root.firebaseUser;
+    if(!user || typeof user.getIdToken!=='function') fail('AUTH_REQUIRED','Connexion Google/Firebase requise.');
+    return user.getIdToken(false);
+  }
+
+  async function send(input){
+    if(!GATEWAY_ENDPOINT) fail('GATEWAY_NOT_CONFIGURED','La passerelle Cloudflare n est pas encore configurée.');
+    const payload=buildRequest(input);
+    const tokenValue=await firebaseToken();
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+    let response;
+    try {
+      response=await fetch(GATEWAY_ENDPOINT+'/v1/jarvis/message',{
+        method:'POST',
+        headers:{'Authorization':'Bearer '+tokenValue,'Content-Type':'application/json','X-Jarvis-Protocol':PROTOCOL},
+        body:JSON.stringify(payload),
+        cache:'no-store',
+        credentials:'omit',
+        signal:controller.signal
+      });
+    } catch(error){
+      if(error && error.name==='AbortError') fail('GATEWAY_TIMEOUT','La passerelle ne répond pas.');
+      fail('GATEWAY_UNAVAILABLE','La passerelle Jarvis est indisponible.');
+    } finally { clearTimeout(timer); }
+    let body;
+    try { body=await response.json(); }
+    catch { fail('GATEWAY_RESPONSE_INVALID','Réponse de passerelle illisible.'); }
+    return validateResponse(body,payload.requestId);
+  }
+
+  async function healthCheck(){
+    if(!GATEWAY_ENDPOINT) return freeze({ok:false,configured:false,writesEnabled:false});
+    try {
+      const response=await fetch(GATEWAY_ENDPOINT+'/v1/health',{method:'GET',cache:'no-store',credentials:'omit'});
+      const body=await response.json();
+      return freeze({ok:response.ok && body.ok===true,configured:true,writesEnabled:false});
+    } catch { return freeze({ok:false,configured:true,writesEnabled:false}); }
+  }
+
+  const API=freeze({
+    version:VERSION,
+    protocol:PROTOCOL,
+    getState:()=>clone(STATE),
+    buildRequest,
+    validateResponse,
+    send,
+    healthCheck
+  });
+
+  Object.defineProperty(root,'JarvisGateway',{value:API,enumerable:false,configurable:false,writable:false});
+})(typeof window!=='undefined'?window:globalThis);
+</script>
+
+<!-- ===================== JARVIS TEXTE — ETAPE 4 =====================
+Interface conversationnelle temporaire. Aucun stockage persistant, aucune donnée
+métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
+==================================================================== -->
+<style id="jarvis-text-step4-style">
+  .j4-launcher{position:fixed;right:18px;bottom:18px;z-index:2147482000;border:0;border-radius:999px;padding:12px 18px;background:#162235;color:#fff;font:700 15px/1 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.28);cursor:pointer}
+  .j4-launcher:focus-visible,.j4-panel button:focus-visible,.j4-panel textarea:focus-visible{outline:3px solid #60a5fa;outline-offset:2px}
+  .j4-backdrop{position:fixed;inset:0;z-index:2147481998;background:rgba(15,23,42,.38)}
+  .j4-panel{position:fixed;top:0;right:0;bottom:0;z-index:2147481999;width:min(430px,100vw);display:flex;flex-direction:column;background:#f8fafc;color:#172033;box-shadow:-12px 0 40px rgba(15,23,42,.25);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+  .j4-panel[hidden],.j4-backdrop[hidden]{display:none!important}
+  .j4-head{display:flex;align-items:center;gap:10px;padding:14px 16px;background:#162235;color:#fff}
+  .j4-title{flex:1}.j4-title strong{display:block;font-size:17px}.j4-title small{display:block;color:#cbd5e1}
+  .j4-icon{border:0;background:transparent;color:inherit;font-size:22px;line-height:1;padding:7px;cursor:pointer}
+  .j4-messages{flex:1;overflow:auto;padding:16px;overscroll-behavior:contain}
+  .j4-empty{max-width:310px;margin:18vh auto 0;text-align:center;color:#64748b}.j4-empty strong{display:block;color:#172033;font-size:18px;margin-bottom:6px}
+  .j4-row{display:flex;margin:0 0 12px}.j4-row.user{justify-content:flex-end}
+  .j4-bubble{max-width:86%;padding:10px 12px;border-radius:14px;background:#fff;border:1px solid #dbe3ee;white-space:pre-wrap;overflow-wrap:anywhere}
+  .j4-row.user .j4-bubble{background:#1d4ed8;color:#fff;border-color:#1d4ed8;border-bottom-right-radius:4px}
+  .j4-row.assistant .j4-bubble{border-bottom-left-radius:4px}
+  .j4-row.clarification .j4-bubble{background:#eff6ff;border-color:#93c5fd}
+  .j4-row.future_capability .j4-bubble{background:#f5f3ff;border-color:#c4b5fd}
+  .j4-row.refusal .j4-bubble,.j4-error{background:#fff1f2;border-color:#fda4af;color:#881337}
+  .j4-row.action_proposal .j4-bubble{background:#fffbeb;border-color:#fbbf24}
+  .j4-badge{display:block;margin-bottom:5px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
+  .j4-proposal{margin-top:8px;padding-top:8px;border-top:1px solid rgba(120,80,0,.25);font-size:13px}.j4-proposal code{font:12px/1.4 ui-monospace,monospace}
+  .j4-status{min-height:24px;padding:3px 16px;color:#64748b;font-size:13px}.j4-status.error{color:#b91c1c}
+  .j4-retry{margin-left:8px;border:1px solid currentColor;border-radius:6px;background:transparent;color:inherit;padding:3px 8px;cursor:pointer}
+  .j4-compose{padding:12px 14px max(12px,env(safe-area-inset-bottom));border-top:1px solid #dbe3ee;background:#fff}
+  .j4-compose textarea{display:block;width:100%;min-height:72px;max-height:180px;resize:vertical;box-sizing:border-box;border:1px solid #94a3b8;border-radius:10px;padding:10px 11px;background:#fff;color:#172033;font:inherit}
+  .j4-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:9px}.j4-note{color:#64748b;font-size:11px}
+  .j4-send{border:0;border-radius:9px;padding:10px 16px;background:#1d4ed8;color:#fff;font-weight:750;cursor:pointer}.j4-send:disabled{opacity:.55;cursor:wait}
+  @media (max-width:760px){.j4-panel{width:100%;left:0}.j4-launcher{right:12px;bottom:12px}.j4-bubble{max-width:90%}.j4-backdrop{display:none!important}}
+  @media (prefers-reduced-motion:no-preference){.j4-panel{animation:j4-in .16s ease-out}@keyframes j4-in{from{transform:translateX(18px);opacity:.6}to{transform:none;opacity:1}}}
+</style>
+<button id="jarvis-text-open" class="j4-launcher" type="button" aria-haspopup="dialog" aria-controls="jarvis-text-panel">Jarvis</button>
+<div id="jarvis-text-backdrop" class="j4-backdrop" hidden></div>
+<aside id="jarvis-text-panel" class="j4-panel" role="dialog" aria-modal="true" aria-labelledby="jarvis-text-title" hidden>
+  <header class="j4-head">
+    <div class="j4-title"><strong id="jarvis-text-title">Jarvis</strong><small>Conversation texte · aucune action exécutée</small></div>
+    <button id="jarvis-text-reset" class="j4-icon" type="button" title="Nouvelle conversation" aria-label="Nouvelle conversation">↻</button>
+    <button id="jarvis-text-close" class="j4-icon" type="button" title="Fermer" aria-label="Fermer">×</button>
+  </header>
+  <div id="jarvis-text-messages" class="j4-messages" aria-live="polite"></div>
+  <div id="jarvis-text-status" class="j4-status" role="status"></div>
+  <form id="jarvis-text-form" class="j4-compose">
+    <label for="jarvis-text-input" class="sr-only">Message à Jarvis</label>
+    <textarea id="jarvis-text-input" maxlength="4000" placeholder="Écris ta demande…" autocomplete="off"></textarea>
+    <div class="j4-actions"><span class="j4-note">Entrée pour envoyer · Maj+Entrée pour une ligne</span><button id="jarvis-text-send" class="j4-send" type="submit">Envoyer</button></div>
+  </form>
+</aside>
+<script id="jarvis-text-step4">
+(function(root){
+  'use strict';
+
+  const VERSION='4.0.0-step4';
+  const MAX_MESSAGES=12;
+  const INACTIVITY_MS=30*60*1000;
+  const ALLOWED_OUTCOMES=Object.freeze(['direct_answer','clarification','future_capability','refusal','action_proposal']);
+  const PROPOSABLE_ACTIONS=Object.freeze([
+    'stock.adjust','inventory.commit','market.create','market.update','cash.pending_ticket.prepare'
+  ]);
+  const LABELS=Object.freeze({
+    clarification:'Précision nécessaire',
+    future_capability:'Fonction future',
+    refusal:'Action interdite',
+    action_proposal:'Proposition — aucune action exécutée'
+  });
+  const ERROR_MESSAGES=Object.freeze({
+    AUTH_REQUIRED:'Connexion à ton compte requise.',
+    GATEWAY_TIMEOUT:'Jarvis met trop de temps à répondre. Tu peux réessayer.',
+    GEMINI_TIMEOUT:'Gemini met trop de temps à répondre. Tu peux réessayer.',
+    GATEWAY_UNAVAILABLE:'La passerelle Jarvis est temporairement indisponible.',
+    GEMINI_UNAVAILABLE:'Gemini est temporairement indisponible.',
+    FREE_QUOTA_REACHED:'Le quota gratuit de Gemini est atteint. Réessaie plus tard.',
+    RATE_LIMITED:'Trop de demandes rapprochées. Attends un instant puis réessaie.',
+    MODEL_RESPONSE_INVALID:'La réponse reçue est invalide et a été bloquée.',
+    GATEWAY_RESPONSE_INVALID:'La réponse reçue est invalide et a été bloquée.',
+    ACTION_FORBIDDEN:'Cette action est interdite par les règles de sécurité.',
+    OFFLINE:'Aucune connexion réseau. Ton message n a pas été envoyé.'
+  });
+
+  const elements={
+    open:document.getElementById('jarvis-text-open'),
+    backdrop:document.getElementById('jarvis-text-backdrop'),
+    panel:document.getElementById('jarvis-text-panel'),
+    close:document.getElementById('jarvis-text-close'),
+    reset:document.getElementById('jarvis-text-reset'),
+    messages:document.getElementById('jarvis-text-messages'),
+    status:document.getElementById('jarvis-text-status'),
+    form:document.getElementById('jarvis-text-form'),
+    input:document.getElementById('jarvis-text-input'),
+    send:document.getElementById('jarvis-text-send')
+  };
+
+  let session=createSession();
+  let busy=false;
+  let lastFailedMessage='';
+  let transientMessage='';
+
+  function clone(value){ return value===undefined ? undefined : JSON.parse(JSON.stringify(value)); }
+  function secureId(){
+    if(root.crypto && typeof root.crypto.randomUUID==='function') return root.crypto.randomUUID();
+    const bytes=new Uint8Array(16); root.crypto.getRandomValues(bytes);
+    return Array.from(bytes,value=>value.toString(16).padStart(2,'0')).join('');
+  }
+  function createSession(now=Date.now()){
+    return {id:'j4-'+secureId(),createdAt:now,lastActivity:now,messages:[],pendingClarification:null,pendingProposal:null};
+  }
+  function securityCheck(){
+    const security=root.JarvisSecurity;
+    const gateway=root.JarvisGateway;
+    if(!security || !gateway) throw codedError('SECURITY_KERNEL_MISSING','Le socle Jarvis est indisponible.');
+    const state=security.getState();
+    if(state.writesEnabled!==false || state.firebaseDirectAccess!==false || state.genericWriteTool!==false) throw codedError('SECURITY_KERNEL_UNSAFE','Le socle Jarvis n est pas verrouillé.');
+    const gatewayState=gateway.getState();
+    if(gatewayState.writesEnabled!==false || gatewayState.persistentConversation!==false || gatewayState.firebaseDirectAccess!==false) throw codedError('SECURITY_KERNEL_UNSAFE','La passerelle Jarvis n est pas verrouillée.');
+    return gateway;
+  }
+  function codedError(code,message){ const error=new Error(message); error.code=code; return error; }
+  function normalizeText(value){ return String(value||'').trim().slice(0,4000); }
+  function appendMessage(role,content,outcome='direct_answer',proposal=null){
+    const item={id:secureId(),role,content:normalizeText(content),outcome,proposal:proposal?clone(proposal):null,createdAt:Date.now()};
+    session.messages.push(item);
+    if(session.messages.length>MAX_MESSAGES) session.messages.splice(0,session.messages.length-MAX_MESSAGES);
+    session.lastActivity=Date.now();
+    return item;
+  }
+  function contextMessages(){
+    return session.messages.slice(-MAX_MESSAGES).map(item=>{
+      let content=item.content;
+      if(item.role==='assistant' && item.proposal){
+        const proposalContext=' Brouillon non exécuté : '+item.proposal.actionId+' '+JSON.stringify(item.proposal.args||{});
+        content=(content+proposalContext).slice(0,1500);
+      }
+      return {role:item.role,content:content.slice(0,1500)};
+    });
+  }
+  function reset(reason=''){
+    session=createSession();
+    lastFailedMessage=''; transientMessage='';
+    setStatus(reason,false);
+    render();
+    return getSession();
+  }
+  function expireIfInactive(now=Date.now()){
+    if(now-session.lastActivity<INACTIVITY_MS) return false;
+    reset('La conversation précédente a expiré après 30 minutes d inactivité.');
+    return true;
+  }
+  function classifyResponse(response){
+    if(!response || typeof response.answer!=='string') throw codedError('GATEWAY_RESPONSE_INVALID','Réponse Jarvis invalide.');
+    const meta=response.meta||{};
+    if(meta.writesEnabled!==false) throw codedError('GATEWAY_RESPONSE_INVALID','Réponse non verrouillée.');
+    const outcome=response.proposal ? 'action_proposal' : (typeof meta.outcome==='string'?meta.outcome:'direct_answer');
+    if(!ALLOWED_OUTCOMES.includes(outcome)) throw codedError('GATEWAY_RESPONSE_INVALID','Type de réponse inconnu.');
+    if(response.proposal){
+      if(response.proposal.executionAllowed!==false || response.proposal.confirmationRequired!==true) throw codedError('GATEWAY_RESPONSE_INVALID','Proposition exécutable refusée.');
+      const action=root.JarvisSecurity.getAction(response.proposal.actionId);
+      if(action.category===root.JarvisSecurity.categories.FORBIDDEN) throw codedError('ACTION_FORBIDDEN','Action interdite.');
+    }
+    return {outcome,answer:response.answer,proposal:response.proposal?clone(response.proposal):null,topic:meta.topic||null,missingInformation:Array.isArray(meta.missingInformation)?clone(meta.missingInformation):[]};
+  }
+  function errorMessage(error){
+    if(!root.navigator || root.navigator.onLine===false) return ERROR_MESSAGES.OFFLINE;
+    return ERROR_MESSAGES[error&&error.code] || 'Jarvis n a pas pu répondre. Aucune action n a été exécutée.';
+  }
+  async function sendText(value){
+    const message=normalizeText(value);
+    if(!message) throw codedError('REQUEST_INVALID','Écris un message avant l envoi.');
+    if(busy) throw codedError('REQUEST_IN_PROGRESS','Une demande est déjà en cours.');
+    expireIfInactive();
+    if(!root.navigator || root.navigator.onLine===false) throw codedError('OFFLINE',ERROR_MESSAGES.OFFLINE);
+    const gateway=securityCheck();
+    const previous=contextMessages();
+    busy=true; transientMessage=message; lastFailedMessage=''; setBusy(true); setStatus('Jarvis réfléchit…',false); render();
+    try{
+      const response=await gateway.send({sessionId:session.id,message,conversation:previous,facts:[],financialSummary:[],requestedActions:PROPOSABLE_ACTIONS});
+      const result=classifyResponse(response);
+      appendMessage('user',message,'direct_answer',null);
+      appendMessage('assistant',result.answer,result.outcome,result.proposal);
+      session.pendingClarification=result.outcome==='clarification'?{topic:result.topic,missingInformation:result.missingInformation}:null;
+      session.pendingProposal=result.proposal?clone(result.proposal):null;
+      transientMessage='';
+      setStatus('',false);
+      render();
+      return clone(result);
+    }catch(error){
+      lastFailedMessage=message; transientMessage='';
+      setStatus(errorMessage(error),true,true);
+      render();
+      throw error;
+    }finally{ busy=false; setBusy(false); }
+  }
+  function setBusy(value){
+    elements.send.disabled=value;
+    elements.input.disabled=value;
+    elements.send.textContent=value?'Envoi…':'Envoyer';
+  }
+  function setStatus(message,isError,withRetry=false){
+    elements.status.textContent='';
+    elements.status.className='j4-status'+(isError?' error':'');
+    if(!message) return;
+    elements.status.append(document.createTextNode(message));
+    if(withRetry && lastFailedMessage){
+      const button=document.createElement('button'); button.type='button'; button.className='j4-retry'; button.textContent='Réessayer';
+      button.addEventListener('click',()=>{ sendText(lastFailedMessage).catch(()=>{}); });
+      elements.status.append(button);
+    }
+  }
+  function bubble(item){
+    const row=document.createElement('div'); row.className='j4-row '+item.role+(item.role==='assistant'?' '+item.outcome:'');
+    const box=document.createElement('div'); box.className='j4-bubble';
+    if(item.role==='assistant' && LABELS[item.outcome]){
+      const badge=document.createElement('span'); badge.className='j4-badge'; badge.textContent=LABELS[item.outcome]; box.append(badge);
+    }
+    const text=document.createElement('span'); text.textContent=item.content; box.append(text);
+    if(item.proposal){
+      const proposal=document.createElement('div'); proposal.className='j4-proposal';
+      const code=document.createElement('code'); code.textContent=item.proposal.actionId;
+      proposal.append('Action proposée : ',code,'. Confirmation et exécution indisponibles à cette étape.'); box.append(proposal);
+    }
+    row.append(box); return row;
+  }
+  function render(){
+    elements.messages.textContent='';
+    if(!session.messages.length && !transientMessage){
+      const empty=document.createElement('div'); empty.className='j4-empty';
+      const title=document.createElement('strong'); title.textContent='Comment puis-je t aider ?';
+      const detail=document.createElement('span'); detail.textContent='La conversation reste uniquement en mémoire pendant cette page.';
+      empty.append(title,detail); elements.messages.append(empty);
+    }else{
+      session.messages.forEach(item=>elements.messages.append(bubble(item)));
+      if(transientMessage) elements.messages.append(bubble({role:'user',content:transientMessage,outcome:'direct_answer',proposal:null}));
+    }
+    elements.messages.scrollTop=elements.messages.scrollHeight;
+  }
+  function open(){ expireIfInactive(); elements.panel.hidden=false; elements.backdrop.hidden=false; elements.open.hidden=true; render(); elements.input.focus(); }
+  function close(){ elements.panel.hidden=true; elements.backdrop.hidden=true; elements.open.hidden=false; elements.open.focus(); }
+  function getSession(){ return clone(session); }
+  function getState(){ return {stage:4,version:VERSION,maxMessages:MAX_MESSAGES,inactivityMs:INACTIVITY_MS,writesEnabled:false,persistentConversation:false,voiceEnabled:false,firebaseDirectAccess:false,genericDbAccess:false,printerPhysicalControl:false}; }
+
+  elements.open.addEventListener('click',open);
+  elements.close.addEventListener('click',close);
+  elements.backdrop.addEventListener('click',close);
+  elements.reset.addEventListener('click',()=>reset('Nouvelle conversation.'));
+  elements.form.addEventListener('submit',event=>{ event.preventDefault(); const value=elements.input.value; elements.input.value=''; sendText(value).catch(()=>{}); });
+  elements.input.addEventListener('keydown',event=>{ if(event.key==='Enter'&&!event.shiftKey){ event.preventDefault(); elements.form.requestSubmit(); } });
+  root.addEventListener('offline',()=>setStatus(ERROR_MESSAGES.OFFLINE,true,false));
+  root.addEventListener('online',()=>setStatus('Connexion rétablie.',false));
+  root.setInterval(()=>{ if(!elements.panel.hidden) expireIfInactive(); },60000);
+  render();
+
+  const API=Object.freeze({version:VERSION,getState,getSession,open,close,reset,sendText,classifyResponse,expireIfInactive});
+  Object.defineProperty(root,'JarvisConversation',{value:API,enumerable:false,configurable:false,writable:false});
+})(typeof window!=='undefined'?window:globalThis);
+</script>
 </body></html>
