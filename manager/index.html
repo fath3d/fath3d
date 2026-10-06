@@ -19593,7 +19593,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
   const ALLOWED_ACTIONS=Object.freeze(['consult.catalog','consult.stocks','consult.stock_needs','consult.filaments']);
   const MAX_FACTS=12;
   const LOCATION_LABELS=Object.freeze({maison:'Maison',marche:'Marché',artComplices:'Arts Complices',btvero:'Boutique de Véro'});
-  const STOP_WORDS=new Set('a ai au aux avec ce ces combien dans de des du elle en est et il je j le la les leur ma mes mon ne nos on ou pour que quel quelle quels quelles qu reste se si son sont sous sur ta tes ton tu un une vos votre y jai j ai catalogue catalog produit produits stock stocks piece pieces article articles coute cout prix categorie categories emplacement emplacements filament filaments bobine bobines marque matiere couleur poids gramme grammes'.split(' '));
+  const STOP_WORDS=new Set('a ai au aux avec ce ces combien dans de des du elle en est et il je j le la les leur ma mes mon ne nos on ou pour que quel quelle quels quelles qu reste se si son sont sous sur ta tes ton tu un une vos votre y jai j ai catalogue catalog produit produits stock stocks piece pieces article articles coute cout prix categorie categories emplacement emplacements filament filaments bobine bobines marque matiere couleur poids gramme grammes maison marche art arts complices boutique vero btvero chez moi total tout tous ensemble global'.split(' '));
 
   function clone(value){ return value===undefined?undefined:JSON.parse(JSON.stringify(value)); }
   function freeze(value){
