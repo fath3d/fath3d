@@ -19820,7 +19820,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     if(pending&&pending.kind==='entity'&&pending.actionId&&q) return freeze({kind:'read',actionId:pending.actionId,message:q,pending:null});
     if(/\b(prix|coute|categorie|catalogue)\b/.test(q)&&/\b(stock|quantite|reste)\b/.test(q)) return freeze({kind:'clarification',answer:'Tu veux d’abord les informations du catalogue ou la quantité en stock ?'});
     const scores={
-      'consult.filaments':(/\b(filament|filaments|bobine|bobines|pla|petg|abs|tpu)\b/.test(q)?4:0)+(/\b(poids|gramme|grammes|couleur|matiere|marque|vide|vides)\b/.test(q)?1:0),
+      'consult.filaments':(/\b(filament|filaments|bobine|bobines|pla|petg|abs|tpu)\b/.test(q)?7:0)+(/\b(poids|gramme|grammes|couleur|matiere|marque|vide|vides)\b/.test(q)?1:0),
       'consult.stock_needs':(/\b(reimprim|reimprimer|reappro|reapprovision|minimum|seuil)\w*\b/.test(q)?4:0)+(/\b(manque|manquent|remonter|bas|rupture)\b/.test(q)&&/\b(stock|marche|produit|produits)\b/.test(q)?3:0),
       'consult.stocks':(/\b(stock|stocks|quantite|quantites|reste|restent)\b/.test(q)?2:0)+(/\b(combien|total|maison|marche|arts? complices|vero)\b/.test(q)?2:0)+(/\bcombien\b/.test(q)&&!/\b(prix|coute|coutent)\b/.test(q)&&/\b(j ai|reste|maison|marche|total|tout)\b/.test(q)?2:0),
       'consult.catalog':(/\b(catalogue|catalog|categorie|categories|prix|coute|coutent)\b/.test(q)?4:0)+(/\b(produit|produits|article|articles)\b/.test(q)?1:0)
