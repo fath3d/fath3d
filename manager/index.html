@@ -19777,7 +19777,6 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
         const haystack=normalize([item.brand,item.type,item.material,item.color,item.reference].filter(Boolean).join(' '));
         return requested.length&&requested.every(token=>haystack.includes(token)||similarity(token,haystack.split(' ').find(part=>similarity(token,part)>=.75)||'')>=.75);
       });
-      if(!matches.length) matches=resolveItems(filaments,message,['brand','type','material','color','reference']).matches;
     }
     if(!matches.length) return result('consult.filaments','Je ne trouve aucune bobine correspondant à cette demande.');
     const shown=matches.slice(0,12);
