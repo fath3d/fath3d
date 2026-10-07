@@ -20594,7 +20594,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
             if(!proposalId||!root.JarvisWriteBroker6||typeof root.JarvisWriteBroker6.cancelProposal!=='function') throw codedError('CANCEL_UNAVAILABLE','Annulation sécurisée indisponible.');
             root.JarvisWriteBroker6.cancelProposal(proposalId);
             item.proposal=null;
-            session.pendingProposal=null;
+            if(session.pendingProposal && (session.pendingProposal.proposalId===proposalId || session.pendingProposal.id===proposalId)) session.pendingProposal=null;
             setStatus('Proposition annulée. Aucune écriture effectuée.',false,false);
             render();
           }catch(error){setStatus('Annulation impossible.',true,false);}
