@@ -20404,14 +20404,18 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     let mode=null,amount=null,target=null;
     let match=q.match(/^(ajoute|ajouter)\s+(\d+)\b/); if(match){mode='add';amount=Number(match[2]);}
     if(!match){match=q.match(/^(retire|retirer|enleve|enlever)\s+(\d+)\b/);if(match){mode='remove';amount=Number(match[2]);}}
-    if(!match){match=q.match(/^(mets|met|mettre|passe|passer|fixe|fixer)\b[\s\S]*?\b(?:a|à)\s*(\d+)\s*$/);if(match){mode='set';target=Number(match[2]);}}
+    if(!match){match=q.match(/^(mets|met|mettre|passe|passer|fixe|fixer)\b[\s\S]*?\b(?:a|à)\s*(\d+)\s*(?:au?\s+stock[\s\S]*)?$/);if(match){mode='set';target=Number(match[2]);}}
     if(!mode) return null;
     const location=q.includes('maison')?'maison':(q.includes('marche')?'marche':(q.includes('arts complices')?'artComplices':(q.includes('vero')||q.includes('bt vero')?'btvero':null)));
     if(!location) return {kind:'clarification',answer:'Pour quel emplacement veux-tu modifier le stock : Maison, Marché, Arts Complices ou Véro ?'};
     const products=Array.isArray(currentData&&currentData.products)?currentData.products:[];
-    const matches=products.filter(product=>{const name=product&&(product.name||product.nom||product.label||product.title);return name&&q.includes(normalizeIntent(name));});
-    if(matches.length!==1) return {kind:'clarification',answer:matches.length>1?'Quel produit précis veux-tu modifier ?':'Quel produit précis veux-tu modifier ?'};
-    const product=matches[0],name=product.name||product.nom||product.label||product.title;
+    // Réutiliser exactement le résolveur validé de consult.stocks : il projette
+    // les produits et applique les mêmes scores, variantes et seuils d'ambiguïté.
+    const resolved=productMatches(projectProducts(currentData),message);
+    const matches=resolved.matches||[];
+    if(matches.length!==1) return {kind:'clarification',answer:'Quel produit précis veux-tu modifier ?'};
+    const product=products.find(candidate=>candidate&&candidate.id===matches[0].id)||matches[0];
+    const name=product.name||product.nom||product.label||product.title;
     const oldQuantity=Number(product.stocks&&product.stocks[location]);
     if(!Number.isFinite(oldQuantity)) return {kind:'clarification',answer:'La quantité actuelle de ce produit n’est pas renseignée pour cet emplacement.'};
     const newQuantity=mode==='add'?oldQuantity+amount:mode==='remove'?oldQuantity-amount:target;
