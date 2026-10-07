@@ -19388,6 +19388,82 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
 
+<!-- ================= JARVIS WRITE BROKER — ETAPE 6 =================
+     Propositions et simulations d écriture. Aucun commit réel n est possible
+     tant que writesEnabled reste false. Les propositions restent en mémoire.
+============================================================================ -->
+<script id="jarvis-write-broker-step6">
+(function(root){
+  'use strict';
+  const VERSION='6.0.0-step6';
+  const TTL_MS=10*60*1000;
+  const ALLOWED=Object.freeze(['stock.adjust','inventory.commit','print_task.create','print_task.update','print_schedule.create','print_schedule.update','market.create','market.update','cash.pending_ticket.prepare','pending_action.correct','pending_action.cancel']);
+  const proposals=new Map();
+  const pendingTickets=new Map();
+  let executionLock=false;
+
+  function clone(value){return value===undefined?undefined:JSON.parse(JSON.stringify(value));}
+  function stable(value){if(value===undefined)return '__undefined__';if(value===null||typeof value!=='object')return value;if(Array.isArray(value))return value.map(stable);const o={};Object.keys(value).sort().forEach(k=>o[k]=stable(value[k]));return o;}
+  function hash(value){const text=JSON.stringify(stable(value));let h=2166136261;for(let i=0;i<text.length;i++){h^=text.charCodeAt(i);h=Math.imul(h,16777619);}return ('00000000'+(h>>>0).toString(16)).slice(-8)+':'+text.length;}
+  function id(prefix){return prefix+'-'+(root.crypto&&root.crypto.randomUUID?root.crypto.randomUUID():Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));}
+  function api(){const value=root.JarvisSecurity;if(!value)throw new Error('SECURITY_KERNEL_MISSING');return value;}
+  function action(actionId){if(!ALLOWED.includes(actionId))throw new Error('ACTION_NOT_ALLOWED');const a=api().getAction(actionId);if(a.category!==api().categories.WRITE_CONFIRMED)throw new Error('ACTION_NOT_WRITABLE');return a;}
+  function create(actionId,normalizedArgs,currentData,summary,oldValue,nextValue){
+    action(actionId); if(!summary||!String(summary).trim())throw new Error('PROPOSAL_SUMMARY_REQUIRED');
+    const input=normalizedArgs||{};
+    if(actionId==='stock.adjust'){
+      if(typeof input.productId!=='string'||!input.productId.trim()||Array.isArray(input.productId))throw new Error('PRODUCT_AMBIGUOUS');
+      if(!['maison','marche','artComplices','btvero'].includes(input.location))throw new Error('LOCATION_AMBIGUOUS');
+      if(!Number.isInteger(Number(input.newQuantity))||Number(input.newQuantity)<0)throw new Error('NEGATIVE_STOCK');
+      const products=Array.isArray(currentData&&currentData.products)?currentData.products:[];
+      const matches=products.filter(p=>String(p&&p.id)===String(input.productId));
+      if(products.length&&matches.length!==1)throw new Error(matches.length?'PRODUCT_AMBIGUOUS':'PRODUCT_NOT_FOUND');
+      if(input.variant!==undefined&&Array.isArray(input.variant))throw new Error('VARIANT_AMBIGUOUS');
+    }
+    if(actionId==='market.update'&&Object.prototype.hasOwnProperty.call(input,'ca'))throw new Error('FINANCIAL_LOCK_VIOLATION');
+    const now=Date.now(); const params=clone(normalizedArgs||{});
+    const proposal={proposalId:id('proposal'),action:actionId,actionId,parameters:params,oldValue:clone(oldValue),newValue:clone(nextValue),summary:String(summary).trim(),createdAt:now,expiresAt:now+TTL_MS,nonce:id('nonce'),state:'pending',parameterHash:hash(params),beforeHash:hash(currentData),financialBeforeHash:hash(api().captureFinancialSnapshot(currentData)),confirmationRequired:true,executionAllowed:false};
+    proposals.set(proposal.proposalId,proposal); return clone(proposal);
+  }
+  function get(proposalId){const p=proposals.get(proposalId);if(!p)throw new Error('UNKNOWN_PROPOSAL');if(Date.now()>p.expiresAt){p.state='expired';proposals.delete(proposalId);throw new Error('EXPIRED_PROPOSAL');}return p;}
+  function cancel(proposalId){const p=get(proposalId);p.state='cancelled';p.nonce=null;proposals.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,state:'cancelled',realDataChanged:false};}
+  function correct(proposalId,normalizedArgs,currentData,summary,oldValue,nextValue){const p=get(proposalId);p.state='corrected';p.nonce=null;proposals.delete(proposalId);pendingTickets.delete(proposalId);return create(p.actionId,normalizedArgs,currentData,summary,oldValue,nextValue);}
+  function confirm(proposalId,confirmation,currentData){const p=get(proposalId);if(p.state!=='pending')throw new Error('PROPOSAL_NOT_PENDING');if(!confirmation||confirmation.explicit!==true||confirmation.proposalId!==p.proposalId||confirmation.actionId!==p.actionId||confirmation.nonce!==p.nonce)throw new Error('CONFIRMATION_MISMATCH');if(hash(currentData)!==p.beforeHash)throw new Error('STALE_PROPOSAL');if(hash(p.parameters)!==p.parameterHash)throw new Error('PARAMETERS_CHANGED');p.state='confirmed';return clone(p);}
+  function candidate(proposal,currentData){
+    const next=clone(currentData||{}), args=proposal.parameters||{};
+    if(proposal.actionId==='cash.pending_ticket.prepare'){pendingTickets.set(proposal.proposalId,{proposalId:proposal.proposalId,items:clone(args.items||[]),note:String(args.note||'')});return next;}
+    if(proposal.actionId==='stock.adjust'){
+      const product=(next.products||[]).find(p=>String(p.id)===String(args.productId)); if(!product)throw new Error('PRODUCT_NOT_FOUND');
+      product.stocks=product.stocks||{}; product.stocks[args.location]=Number(args.newQuantity); return next;
+    }
+    if(proposal.actionId==='inventory.commit'){
+      (args.adjustments||[]).forEach(item=>{const product=(next.products||[]).find(p=>String(p.id)===String(item.productId));if(!product)throw new Error('PRODUCT_NOT_FOUND');product.stocks=product.stocks||{};product.stocks[item.location]=Number(item.newQuantity);}); return next;
+    }
+    if(proposal.actionId==='market.create'){
+      next.marches=Array.isArray(next.marches)?next.marches:[];next.marches.push({id:id('market'),date:args.date,ville:args.ville,horaires:args.horaires||'',notes:args.notes||''});return next;
+    }
+    if(proposal.actionId==='market.update'){
+      const market=(next.marches||[]).find(m=>String(m.id)===String(args.marketId));if(!market)throw new Error('MARKET_NOT_FOUND');['date','ville','horaires','notes','statut'].forEach(k=>{if(args[k]!==undefined)market[k]=args[k];});return next;
+    }
+    if(proposal.actionId==='print_task.create'){
+      next.planningJobs=Array.isArray(next.planningJobs)?next.planningJobs:[];next.planningJobs.push({id:id('print'),title:args.title,quantity:args.quantity||1,durationMinutes:args.durationMinutes||0,constraints:args.constraints||''});return next;
+    }
+    if(proposal.actionId==='print_task.update'){
+      const task=(next.planningJobs||[]).find(t=>String(t.id)===String(args.taskId));if(!task)throw new Error('TASK_NOT_FOUND');['title','quantity','durationMinutes','constraints'].forEach(k=>{if(args[k]!==undefined)task[k]=args[k];});return next;
+    }
+    if(proposal.actionId==='print_schedule.create'||proposal.actionId==='print_schedule.update'){
+      next.planningJour=next.planningJour&&typeof next.planningJour==='object'?next.planningJour:{};next.planningJour[args.date||args.scheduleId]={items:clone(args.items||[]),notes:args.notes||''};return next;
+    }
+    return next;
+  }
+  function simulate(proposalId,currentData){const p=get(proposalId);const next=candidate(p,currentData);const audit=api().auditCandidate(p.actionId,currentData,next);const financialAfter=hash(api().captureFinancialSnapshot(next));if(financialAfter!==p.financialBeforeHash)throw new Error('FINANCIAL_LOCK_VIOLATION');return {ok:true,proposalId:p.proposalId,state:p.state,candidate:next,audit,financialUnchanged:true};}
+  function execute(proposalId,currentData){const p=get(proposalId);if(p.state!=='confirmed')throw new Error('CONFIRMATION_REQUIRED');const state=api().getState();if(state.writesEnabled!==true)throw new Error('JARVIS_WRITES_DISABLED');if(executionLock)throw new Error('EXECUTION_IN_PROGRESS');executionLock=true;try{simulate(proposalId,currentData);throw new Error('NO_SCOPED_COMMIT_ADAPTER');}finally{executionLock=false;}}
+  function reset(){proposals.clear();pendingTickets.clear();executionLock=false;}
+  const API=Object.freeze({version:VERSION,ttlMs:TTL_MS,allowedActions:ALLOWED,createProposal:create,getProposal:id=>clone(get(id)),correctProposal:correct,cancelProposal:cancel,confirmProposal:confirm,simulateCandidate:simulate,executeConfirmed:execute,reset,getState:()=>({version:VERSION,writesEnabled:false,temporary:true,proposalCount:proposals.size,pendingTicketCount:pendingTickets.size})});
+  Object.defineProperty(root,'JarvisWriteBroker6',{value:API,enumerable:false,configurable:false,writable:false});
+})(typeof window!=='undefined'?window:globalThis);
+</script>
+
 <!-- ===================== JARVIS GATEWAY CLIENT — ETAPE 3 =====================
 Client isolé pour la future passerelle Cloudflare. Aucun secret, aucune écriture,
 aucun accès direct à db et aucun appel automatique ne sont présents dans ce bloc.
@@ -20258,7 +20334,9 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   const INACTIVITY_MS=30*60*1000;
   const ALLOWED_OUTCOMES=Object.freeze(['direct_answer','clarification','future_capability','refusal','action_proposal']);
   const PROPOSABLE_ACTIONS=Object.freeze([
-    'stock.adjust','inventory.commit','market.create','market.update','cash.pending_ticket.prepare'
+    'stock.adjust','inventory.commit','print_task.create','print_task.update',
+    'print_schedule.create','print_schedule.update','market.create','market.update',
+    'cash.pending_ticket.prepare','pending_action.correct','pending_action.cancel'
   ]);
   const READ_ACTIONS_5A=Object.freeze(['consult.catalog','consult.stocks','consult.stock_needs','consult.filaments']);
   const LABELS=Object.freeze({
@@ -20393,6 +20471,11 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         const requestedReads=broker&&typeof broker.getAllowedActions==='function'?broker.getAllowedActions():[...READ_ACTIONS_5A];
         const response=await gateway.send({sessionId:session.id,message,conversation:previous,facts:[],financialSummary:[],requestedActions:[...requestedReads,...PROPOSABLE_ACTIONS]});
         result=classifyResponse(response);
+        if(result.proposal && root.JarvisWriteBroker6){
+          const remote=result.proposal;
+          const local=root.JarvisWriteBroker6.createProposal(remote.actionId,remote.args||remote.parameters||{},root.db||{},result.answer,remote.oldValue,remote.newValue);
+          result.proposal={...remote,...local,args:local.parameters,executionAllowed:false,confirmationRequired:true};
+        }
         if(result.readAction){
           if(!broker) throw codedError('SECURITY_KERNEL_MISSING','Le courtier de consultation sécurisé est indisponible.');
           result=broker.consult(result.readAction,{message,pending:session.pendingConsultation});
@@ -20440,7 +20523,21 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(item.proposal){
       const proposal=document.createElement('div'); proposal.className='j4-proposal';
       const code=document.createElement('code'); code.textContent=item.proposal.actionId;
-      proposal.append('Action proposée : ',code,'. Confirmation et exécution indisponibles à cette étape.'); box.append(proposal);
+      proposal.append('Action proposée : ',code,'. Aucune écriture automatique.');
+      if(item.proposal.proposalId && root.JarvisWriteBroker6){
+        const actions=document.createElement('div'); actions.className='j4-actions';
+        const confirm=document.createElement('button'); confirm.type='button'; confirm.className='j4-send'; confirm.textContent='Confirmer (écriture verrouillée)';
+        confirm.addEventListener('click',()=>{
+          try{
+            root.JarvisWriteBroker6.confirmProposal(item.proposal.proposalId,{explicit:true,proposalId:item.proposal.proposalId,actionId:item.proposal.actionId,nonce:item.proposal.nonce},root.db||{});
+            root.JarvisWriteBroker6.executeConfirmed(item.proposal.proposalId,root.db||{});
+          }catch(error){ setStatus(error&&error.message==='JARVIS_WRITES_DISABLED'?'Confirmation reçue, mais l écriture reste bloquée par writesEnabled=false.':'Confirmation refusée : '+(error&&error.message||'erreur'),true,false); }
+        });
+        const cancel=document.createElement('button'); cancel.type='button'; cancel.className='j4-retry'; cancel.textContent='Annuler';
+        cancel.addEventListener('click',()=>{try{root.JarvisWriteBroker6.cancelProposal(item.proposal.proposalId);setStatus('Proposition annulée. Aucune écriture effectuée.',false,false);}catch(error){setStatus('Annulation impossible.',true,false);}});
+        actions.append(confirm,cancel); proposal.append(actions);
+      }
+      box.append(proposal);
     }
     row.append(box); return row;
   }
