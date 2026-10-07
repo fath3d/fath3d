@@ -1565,23 +1565,30 @@ function render(page) {
 }
 
 // ===================== DASHBOARD =====================
-function renderDashboard(el, actions) {
-  // Helper pour additionner en évitant NaN
+// Source unique du totalCA du tableau de bord. Les lecteurs Jarvis financiers
+// appellent cette fonction au lieu de reconstruire un total concurrent.
+function managerComputeTotalCA(predicate) {
+  const keep = typeof predicate === 'function' ? predicate : (() => true);
   const safeAdd = (s, v) => s + (Number(v) || 0);
-  
-  const caVentesBtq = db.sales.filter(s=>s.depot==='boutA'||s.depot==='boutB'||s.depot==='boutC').reduce((s,v)=>safeAdd(s,v.total),0);
-
-  // FIX DOUBLON : si une vente manuelle a une date où il existe aussi des tickets caisse,
-  // on ignore la vente manuelle (la caisse est prioritaire)
-  const datesCaisseSet = new Set((db.caisseHistory||[]).map(h => h.date));
-  const caVentesMarche = (db.ventesMarche||[]).reduce((s,v)=>{
-    if(datesCaisseSet.has(v.date)) return s; // doublon → ignoré
+  const sales = (db.sales || []).filter(s => keep(s.date, 'sales', s));
+  const caisse = (db.caisseHistory || []).filter(h => keep(h.date, 'caisseHistory', h));
+  const ventesMarche = (db.ventesMarche || []).filter(v => keep(v.date, 'ventesMarche', v));
+  const ventesLigne = (db.ventesLigne || []).filter(v => keep(v.date, 'ventesLigne', v));
+  const caVentesBtq = sales.filter(s=>s.depot==='boutA'||s.depot==='boutB'||s.depot==='boutC').reduce((s,v)=>safeAdd(s,v.total),0);
+  const datesCaisseSet = new Set(caisse.map(h => h.date));
+  const caVentesMarche = ventesMarche.reduce((s,v)=>{
+    if(datesCaisseSet.has(v.date)) return s;
     const t = (Number(v.total)||0) + (Number(v.totalEsp)||0) + (Number(v.totalCb)||0) + (Number(v.totalOther)||0) + (Number(v.totalVrt)||0) + (Number(v.totalChq)||0);
     return s + t;
   },0);
-  const caCaisse = (db.caisseHistory||[]).reduce((s,h)=>safeAdd(s,h.total),0);
-  const caVentesLigne = (db.ventesLigne||[]).reduce((s,v)=>safeAdd(s,v.total),0);
-  const totalCA = caVentesBtq + caVentesMarche + caCaisse + caVentesLigne;
+  const caCaisse = caisse.reduce((s,h)=>safeAdd(s,h.total),0);
+  const caVentesLigne = ventesLigne.reduce((s,v)=>safeAdd(s,v.total),0);
+  return {total:caVentesBtq + caVentesMarche + caCaisse + caVentesLigne,caVentesBtq,caVentesMarche,caCaisse,caVentesLigne};
+}
+
+function renderDashboard(el, actions) {
+  const dashboardCA = managerComputeTotalCA();
+  const {total:totalCA,caVentesBtq,caVentesMarche,caCaisse,caVentesLigne} = dashboardCA;
   // CA 2025 pour référence
   const safeVenteTotal = v => { const t=(Number(v.totalEsp)||0)+(Number(v.totalCb)||0)+(Number(v.totalOther)||0); return t>0?t:(Number(v.total)||0); };
   const ca2025ref = [
@@ -1590,7 +1597,7 @@ function renderDashboard(el, actions) {
   + (db.ventesMarche||[]).filter(v=>(v.date||'').startsWith('2025')).reduce((s,v)=>s+safeVenteTotal(v),0)
   + (db.caisseHistory||[]).filter(v=>(v.date||'').startsWith('2025')).reduce((s,v)=>s+(Number(v.total)||0),0)
   + (db.ventesLigne||[]).filter(v=>(v.date||'').startsWith('2025')).reduce((s,v)=>s+(Number(v.total)||0),0);
-  const totalDepenses = (db.depenses||[]).reduce((s,d)=>safeAdd(s,d.amount),0);
+  const totalDepenses = (db.depenses||[]).reduce((s,d)=>s+(Number(d.amount)||0),0);
   const benefice = totalCA - totalDepenses;
   const totalStock = db.products.reduce((s,p)=>{
     const st = p.stocks||{};
@@ -1623,8 +1630,8 @@ function renderDashboard(el, actions) {
   const maxCA = Math.max(...Object.values(days),1);
 
   const canalData = [
-    {label:'🟠 Btq de Véro',   val:db.sales.filter(s=>s.depot==='boutA').reduce((s,v)=>safeAdd(s,v.total),0), color:'#ff6a00'},
-    {label:'🔴 Arts Complices',    val:db.sales.filter(s=>s.depot==='boutB').reduce((s,v)=>safeAdd(s,v.total),0), color:'#e63030'},
+    {label:'🟠 Btq de Véro',   val:db.sales.filter(s=>s.depot==='boutA').reduce((s,v)=>s+(Number(v.total)||0),0), color:'#ff6a00'},
+    {label:'🔴 Arts Complices',    val:db.sales.filter(s=>s.depot==='boutB').reduce((s,v)=>s+(Number(v.total)||0),0), color:'#e63030'},
     {label:'🏪 Marchés',        val:caVentesMarche+caCaisse,   color:'var(--success)'},
     {label:'🛍️ En ligne',    val:caVentesLigne,             color:'#9b59b6'},
   ];
@@ -19836,6 +19843,329 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
 })(typeof window!=='undefined'?window:globalThis);
 </script>
 
+<!-- ===================== JARVIS CONSULTATIONS — ETAPE 5B =====================
+Extension fermée du courtier 5A pour impressions, marchés et caisse en lecture.
+Aucun total de caisse journalier, aucune commande physique et aucune écriture.
+============================================================================ -->
+<script id="jarvis-consultation-step5b">
+(function(root){
+  'use strict';
+
+  const VERSION='5.2.0-step5b';
+  const NEW_ACTIONS=Object.freeze(['consult.printing','consult.markets','consult.cash']);
+  const MAX_FACTS=12;
+  const base=root.JarvisReadBroker;
+  if(!base) throw new Error('Le courtier Jarvis 5A est requis.');
+
+  function clone(value){ return value===undefined?undefined:JSON.parse(JSON.stringify(value)); }
+  function freeze(value){ if(value&&typeof value==='object'&&!Object.isFrozen(value)){Object.values(value).forEach(freeze);Object.freeze(value);}return value; }
+  function normalize(value){ return base.normalize(value); }
+  function numberOrNull(value){ const number=Number(value);return value!==''&&value!==null&&value!==undefined&&Number.isFinite(number)?number:null; }
+  function codedError(code,message){ const error=new Error(message);error.code=code;return error; }
+  function sourceData(){ if(typeof db==='undefined'||!db||typeof db!=='object')throw codedError('READ_SOURCE_UNAVAILABLE','Les données du Manager ne sont pas disponibles.');return db; }
+  function fact(type,label,value,unit){ const item={type,label:String(label).slice(0,120),value};if(unit)item.unit=unit;return item; }
+  function result(actionId,answer,options={}){ return freeze({actionId,outcome:options.outcome||'direct_answer',answer,facts:(options.facts||[]).slice(0,MAX_FACTS),pending:options.pending||null,local:true,writesEnabled:false}); }
+  function pad(value){ return String(value).padStart(2,'0'); }
+  function localISO(date=new Date()){ return date.getFullYear()+'-'+pad(date.getMonth()+1)+'-'+pad(date.getDate()); }
+  function tomorrowISO(){ const date=new Date();date.setDate(date.getDate()+1);return localISO(date); }
+  function extractISODate(message){
+    const q=normalize(message),direct=String(message||'').match(/\b(20\d{2})[-\/]([01]?\d)[-\/]([0-3]?\d)\b/);
+    if(direct)return direct[1]+'-'+pad(direct[2])+'-'+pad(direct[3]);
+    const french=String(message||'').match(/\b([0-3]?\d)[-\/]([01]?\d)[-\/](20\d{2})\b/);
+    if(french)return french[3]+'-'+pad(french[2])+'-'+pad(french[1]);
+    if(/\bdemain\b/.test(q))return tomorrowISO();
+    if(/\b(aujourd hui|ce jour)\b/.test(q))return localISO();
+    return null;
+  }
+  function minutesLabel(value){
+    const minutes=numberOrNull(value);if(minutes===null)return 'durée non renseignée';
+    const rounded=Math.max(0,Math.round(minutes)),hours=Math.floor(rounded/60),rest=rounded%60;
+    return hours?(hours+' h'+(rest?' '+rest+' min':'')):(rest+' min');
+  }
+  function printerName(config,key){ const found=config.find(item=>normalize(item.key)===normalize(key)||normalize(item.name)===normalize(key));return found?found.name:String(key||'imprimante non renseignée'); }
+  function projectPrinting(data){
+    const printers=(Array.isArray(data.printersConfig)?data.printersConfig:[]).map(item=>({key:String(item.key||item.nom||''),name:String(item.nom||item.name||item.key||''),hidden:item.masque===true}));
+    const daily=[];
+    Object.entries(data.planningJour&&typeof data.planningJour==='object'?data.planningJour:{}).forEach(([date,day])=>{
+      (Array.isArray(day&&day.impressions)?day.impressions:[]).forEach((item,index)=>daily.push({
+        source:'planningJour',id:'jour:'+date+':'+index,date,name:String(item.nom||item.name||'Impression'),part:item.part?String(item.part):null,
+        printer:String(item.printer||''),status:item.done===true?'done':'queue',start:item.heureDebut?String(item.heureDebut):null,end:item.heureFin?String(item.heureFin):null,
+        durationMinutes:numberOrNull(item.dureeMinutes),done:item.done===true,type:item.type?String(item.type):(item.hasTpl?'hf':null),order:numberOrNull(item.ord)
+      }));
+      (Array.isArray(day&&day.taches)?day.taches:[]).forEach((item,index)=>daily.push({
+        source:'planningJour',id:'task:'+date+':'+index,date,name:String(item.nom||item.texte||item.name||'Tâche'),part:null,printer:'',status:item.done===true?'done':'task',
+        start:item.heure?String(item.heure):null,end:null,durationMinutes:null,done:item.done===true,type:'task',order:null
+      }));
+    });
+    const legacy=(Array.isArray(data.planningJobs)?data.planningJobs:[]).map((item,index)=>({
+      source:'planningJobs',id:'legacy:'+(item.id===undefined?index:item.id),date:item.date?String(item.date):null,name:String(item.name||item.nom||'Impression'),part:null,
+      printer:String(item.printer||''),status:String(item.status||'queue'),start:item.start?String(item.start):null,end:item.end?String(item.end):null,
+      durationMinutes:numberOrNull(item.dur)===null?numberOrNull(item.dureeMinutes):numberOrNull(item.dur)*60,done:item.status==='done',type:item.type?String(item.type):null,order:numberOrNull(item.createdAt),startedAt:numberOrNull(item.startedAt)
+    }));
+    const queue=(Array.isArray(data.printQueue)?data.printQueue:[]).map((item,index)=>({
+      source:'printQueue',id:'queue:'+(item.id===undefined?index:item.id),date:null,name:String(item.nom||item.name||'Impression'),part:null,printer:'',status:'queue',start:null,end:null,
+      durationMinutes:numberOrNull(item.dureeMinutes),done:false,type:item.hasTpl?'hf':null,order:numberOrNull(item.createdAt)
+    }));
+    const templates=(Array.isArray(data.hfTemplates)?data.hfTemplates:[]).map((item,index)=>({id:item.id===undefined?index:item.id,name:String(item.name||''),durationMinutes:numberOrNull(item.dur)===null?numberOrNull(item.dureeMinutes):numberOrNull(item.dur)*60,colors:Array.isArray(item.colors)?item.colors.map(color=>typeof color==='string'?color:String(color&&color.name||color&&color.hex||'')).filter(Boolean):[],swaps:Array.isArray(item.swaps)?item.swaps.length:0}));
+    return {printers,jobs:[...daily,...legacy,...queue],templates};
+  }
+  function printingMatches(items,message){
+    const q=normalize(message),generic=new Set('a au aux ce ces combien de des du dans en est et je la le les ma mes mon pour que quel quelle quels quelles sur ta tes ton tu un une votre vos impression impressions imprimante imprimantes planning file files attente duree temps charge travail travaux tache taches aujourd hui demain hueforge hf modele modeles reste restante restant'.split(' '));
+    const wanted=q.split(' ').filter(token=>token.length>1&&!generic.has(token)&&!/^\d+$/.test(token));
+    if(!wanted.length)return items;
+    const filtered=items.filter(item=>{const hay=normalize([item.name,item.part,item.printer,item.type].filter(Boolean).join(' '));return wanted.every(token=>hay.includes(token)||base.similarity(token,hay.split(' ').find(part=>base.similarity(token,part)>=.76)||'')>=.76);});
+    return filtered;
+  }
+  function requestedPrinter(message,printers){ const q=normalize(message);return printers.find(item=>[item.key,item.name].some(value=>value&&q.includes(normalize(value))))||null; }
+  function printingReader(data,message,pending){
+    const q=normalize(message),projection=projectPrinting(data),printer=requestedPrinter(message,projection.printers)||(pending&&pending.printer?projection.printers.find(item=>item.key===pending.printer):null);
+    if(/\b(hueforge|hue forge|hf|modele hf|modeles hf)\b/.test(q)){
+      let templates=printingMatches(projection.templates.map(item=>({...item,printer:'',type:'hf'})),message);
+      if(!templates.length)return result('consult.printing','Aucun modèle HueForge correspondant n’est enregistré.');
+      const shown=templates.slice(0,12),answer=shown.map(item=>item.name+' : '+minutesLabel(item.durationMinutes)+(item.colors.length?', '+item.colors.length+' couleur(s)':'')+(item.swaps?', '+item.swaps+' swap(s)':'')).join(' ; ');
+      return result('consult.printing',answer+'.',{facts:shown.map(item=>fact('printing_task',item.name,minutesLabel(item.durationMinutes)))});
+    }
+    if(/\b(charge|chargee|chargees|occupee|occupees|plus de travail)\b/.test(q)){
+      const open=projection.jobs.filter(item=>!item.done&&item.status!=='done'&&item.printer),byPrinter=new Map();
+      open.forEach(item=>{const key=item.printer,current=byPrinter.get(key)||{count:0,minutes:0};current.count++;current.minutes+=item.durationMinutes||0;byPrinter.set(key,current);});
+      if(!byPrinter.size)return result('consult.printing','Aucune charge d’imprimante n’est renseignée.');
+      const ranked=[...byPrinter.entries()].map(([key,value])=>({key,name:printerName(projection.printers,key),...value})).sort((a,b)=>b.minutes-a.minutes||b.count-a.count||a.name.localeCompare(b.name));
+      const first=ranked[0],ties=ranked.filter(item=>item.minutes===first.minutes&&item.count===first.count);
+      if(ties.length>1)return result('consult.printing','La charge est identique pour '+ties.map(item=>item.name).join(', ')+' : '+first.count+' tâche(s), '+minutesLabel(first.minutes)+'.',{outcome:'clarification',pending:{kind:'printing_printer',actionId:'consult.printing',printers:ties.map(item=>item.key)}});
+      return result('consult.printing',first.name+' est la plus chargée : '+first.count+' tâche(s), '+minutesLabel(first.minutes)+' planifiées.',{facts:[fact('printing_task',first.name+' — charge',first.minutes,'minutes')]});
+    }
+    let jobs=projection.jobs;
+    const date=extractISODate(message)||(pending&&pending.date)||null;
+    if(date)jobs=jobs.filter(item=>item.date===date);
+    if(printer)jobs=jobs.filter(item=>normalize(item.printer)===normalize(printer.key)||normalize(item.printer)===normalize(printer.name));
+    if(/\b(file|attente|a imprimer|reste a imprimer)\b/.test(q))jobs=jobs.filter(item=>!item.done&&item.status!=='done');
+    jobs=printingMatches(jobs,message);
+    if(!jobs.length)return result('consult.printing','Aucune impression correspondante n’est renseignée'+(date?' pour le '+date:'')+'.');
+    const shown=jobs.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||(a.order||0)-(b.order||0)).slice(0,12);
+    const answer=shown.map(item=>{
+      const details=[];if(item.date)details.push(item.date);if(item.printer)details.push(printerName(projection.printers,item.printer));if(item.start)details.push(item.start+(item.end?' → '+item.end:''));details.push(minutesLabel(item.durationMinutes));details.push(item.done?'faite':item.status==='active'?'en cours':'en attente');
+      return item.name+(item.part?' — '+item.part:'')+' : '+details.join(', ');
+    }).join(' ; ')+(jobs.length>12?' ; '+(jobs.length-12)+' autre(s) non affichée(s)':'')+'.';
+    return result('consult.printing',answer,{facts:shown.map(item=>fact('printing_task',item.name,minutesLabel(item.durationMinutes)))});
+  }
+  function projectMarkets(data){
+    return (Array.isArray(data.marches)?data.marches:[]).map(item=>({
+      id:clone(item.id),date:item.date?String(item.date):null,dateEnd:item.dateFin?String(item.dateFin):null,city:String(item.ville||''),placePrice:numberOrNull(item.prixPlace),
+      distance:item.distance===undefined?null:String(item.distance),type:item.type===undefined?null:String(item.type),equipment:item.materiel===undefined?null:String(item.materiel),
+      installation:item.installation===undefined?null:String(item.installation),hours:item.horaires===undefined?null:String(item.horaires),notes:item.notes===undefined?(item.observations===undefined?null:String(item.observations)):String(item.notes),status:item.statut===undefined?null:String(item.statut)
+    }));
+  }
+  function marketReader(data,message,pending){
+    const q=normalize(message),markets=projectMarkets(data),date=extractISODate(message)||(pending&&pending.date)||null;
+    if(/\b(checklist|check list|materiel a prendre|quoi prendre)\b/.test(q)){
+      const checklist=data.checklistMarche&&typeof data.checklistMarche==='object'?data.checklistMarche:{};
+      const keys=Object.keys(checklist).filter(key=>!key.startsWith('_'));
+      if(!keys.length)return result('consult.markets','Aucune checklist de marché n’est renseignée.');
+      const remaining=keys.filter(key=>checklist[key]!==true),done=keys.length-remaining.length;
+      return result('consult.markets',done+' élément(s) coché(s) sur '+keys.length+'.'+(remaining.length?' Il reste : '+remaining.slice(0,12).join(', ')+'.':' La checklist est complète.'),{facts:[fact('market_info','Checklist marché — restant',remaining.length,'éléments')]});
+    }
+    let matches=markets;
+    if(date)matches=matches.filter(item=>item.date===date);
+    const cities=markets.filter(item=>item.city&&q.includes(normalize(item.city)));
+    if(cities.length)matches=cities;
+    if(/\b(prochain|prochaine|a venir|bientot)\b/.test(q))matches=markets.filter(item=>item.status!=='annule'&&item.date&&item.date>=localISO()).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,1);
+    if(!matches.length)return result('consult.markets','Je ne trouve aucun marché correspondant.');
+    if(matches.length>1&&!/\b(prochains|marches a venir|liste)\b/.test(q)){
+      const choices=matches.slice(0,5).map(item=>(item.city||'Ville non renseignée')+(item.date?' — '+item.date:'')).join(', ');
+      return result('consult.markets','J’ai trouvé plusieurs marchés : '+choices+'. Lequel veux-tu ?',{outcome:'clarification',pending:{kind:'market_choice',actionId:'consult.markets',candidates:matches.slice(0,5).map(item=>item.id)}});
+    }
+    const wantsPrice=/\b(prix|cout|coute|tarif).*(place|emplacement)|(place|emplacement).*(prix|cout|coute|tarif)\b/.test(q),shown=matches.slice(0,12);
+    const descriptions=shown.map(item=>{
+      const details=[];if(item.date)details.push(item.date);if(item.hours)details.push(item.hours);if(item.distance)details.push(item.distance);if(item.type)details.push(item.type);if(item.installation)details.push('installation '+item.installation);if(item.equipment)details.push(item.equipment);if(item.status)details.push('statut '+item.status);if(wantsPrice)details.push(item.placePrice===null?'prix de place non renseigné':'place '+item.placePrice.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €');
+      return (item.city||'Ville non renseignée')+' : '+details.join(', ');
+    });
+    return result('consult.markets',descriptions.join(' ; ')+'.',{facts:shown.map(item=>fact('market_info',item.city||'Marché',[item.date,item.hours,item.distance].filter(Boolean).join(' · ')||'non renseigné'))});
+  }
+  function projectCash(data){
+    return (Array.isArray(data.caisseHistory)?data.caisseHistory:[]).map((ticket,index)=>({
+      id:clone(ticket.id===undefined?index:ticket.id),date:ticket.date?String(ticket.date):null,time:ticket.time?String(ticket.time):null,total:numberOrNull(ticket.total),payment:ticket.payment?String(ticket.payment):null,
+      items:(Array.isArray(ticket.items)?ticket.items:[]).map(item=>({name:String(item.productName||item.name||item.nom||'Article'),quantity:numberOrNull(item.qty===undefined?item.quantity:item.qty),lineTotal:numberOrNull(item.total)}))
+    }));
+  }
+  function cashReader(data,message,pending){
+    const q=normalize(message),tickets=projectCash(data),idMatch=String(message||'').match(/\bticket\s*(?:n(?:umero)?|n[°º])?\s*[:#-]?\s*(\d+)\b/i),date=extractISODate(message)||(pending&&pending.date)||null;
+    if(/\b(total|montant|ca|chiffre d affaires|recette|comparaison|moyenne)\b/.test(q)&&!idMatch){
+      return result('consult.cash','Les totaux et analyses financières agrégés sont réservés au bloc 5C.',{outcome:'future_capability'});
+    }
+    if(idMatch){
+      const id=idMatch[1],ticket=tickets.find(item=>String(item.id)===id);
+      if(!ticket)return result('consult.cash','Je ne trouve pas le ticket '+id+'.');
+      const wantsLines=/\b(ligne|lignes|article|articles|produit|produits|quantite|quantites|detail|details)\b/.test(q);
+      const details=[ticket.date||'date non renseignée'];if(ticket.time)details.push(ticket.time);if(ticket.total!==null)details.push('total du ticket '+ticket.total.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €');
+      if(wantsLines)details.push(ticket.items.length?ticket.items.map(item=>item.name+' × '+(item.quantity===null?'quantité non renseignée':item.quantity)).join(', '):'lignes non renseignées');
+      return result('consult.cash','Ticket '+id+' : '+details.join(' · ')+'.',{facts:[fact('cash_summary','Ticket '+id,wantsLines?details.join(' · '):(ticket.date||'date non renseignée'))]});
+    }
+    if(date){
+      const matches=tickets.filter(item=>item.date===date);
+      return result('consult.cash',matches.length+' ticket(s) enregistré(s) le '+date+'. Aucun total monétaire agrégé n’est affiché.',{facts:[fact('cash_summary','Nombre de tickets — '+date,matches.length,'tickets')]});
+    }
+    return result('consult.cash','Indique le numéro du ticket ou la journée à consulter. Je n’afficherai aucun total monétaire agrégé.',{outcome:'clarification',pending:{kind:'cash_target',actionId:'consult.cash'}});
+  }
+  const READERS=Object.freeze({'consult.printing':printingReader,'consult.markets':marketReader,'consult.cash':cashReader});
+  function verifyAction(actionId){
+    if(!NEW_ACTIONS.includes(actionId)||!Object.prototype.hasOwnProperty.call(READERS,actionId))throw codedError('READ_ACTION_FORBIDDEN','Lecteur 5B non autorisé.');
+    const security=root.JarvisSecurity;if(!security||typeof security.getAction!=='function'||typeof security.auditCandidate!=='function')throw codedError('SECURITY_KERNEL_MISSING','Le registre de sécurité est indisponible.');
+    const action=security.getAction(actionId);if(action.category!==security.categories.READ||action.readOnly!==true)throw codedError('READ_ACTION_FORBIDDEN','Cette action n’est pas une consultation autorisée.');return security;
+  }
+  function consult(actionId,input={}){
+    if(base.getAllowedActions().includes(actionId))return base.consult(actionId,input);
+    const security=verifyAction(actionId),data=sourceData(),before=clone(data),response=READERS[actionId](data,String(input.message||''),input.pending||null),audit=security.auditCandidate(actionId,before,clone(sourceData()));
+    if(!audit||audit.ok!==true||audit.changes.length!==0||audit.protectedFinancialDataUnchanged!==true)throw codedError('READ_AUDIT_FAILED','La consultation 5B n’a pas passé le contrôle d’intégrité.');
+    return freeze({...clone(response),audit:{changes:[],protectedFinancialDataUnchanged:true}});
+  }
+  function direct(answer,outcome='direct_answer'){ return freeze({kind:'direct',result:result(null,answer,{outcome})}); }
+  function route(message,pending){
+    const q=normalize(message);
+    if(/\b(demarr|lanc|arrete|stop|pause|reprend|commande|pilote|envoie).*(imprimante|impression|machine)|(imprimante|machine).*(demarr|lanc|arrete|stop|pause|reprend|commande|pilote)\b/.test(q))return direct('Je ne peux pas démarrer, arrêter, mettre en pause ni piloter physiquement une imprimante.','refusal');
+    if(/\b(modifie|modifier|corrige|corriger|supprime|supprimer|valide|valider|cree|creer|ajoute|ajouter).*(ticket|caisse|vente)|(ticket|caisse|vente).*(modifie|modifier|corrige|corriger|supprime|supprimer|valide|valider|cree|creer|ajoute|ajouter)\b/.test(q))return direct('Toute écriture en caisse est interdite. Aucune vente ni aucun ticket n’a été modifié.','refusal');
+    if(/\b(ca|chiffre d affaires|recette|recettes).*(marche|marches)|(marche|marches).*(ca|chiffre d affaires|recette|recettes)\b/.test(q))return direct('La consultation du chiffre d’affaires des marchés est réservée au bloc 5C.','future_capability');
+    if(pending&&pending.kind==='cash_target')return freeze({kind:'read',actionId:'consult.cash',message:String(message),pending:clone(pending)});
+    if(pending&&pending.kind==='market_choice')return freeze({kind:'read',actionId:'consult.markets',message:String(message),pending:clone(pending)});
+    if(pending&&pending.kind==='printing_printer')return freeze({kind:'read',actionId:'consult.printing',message:String(message),pending:clone(pending)});
+    const scores={
+      'consult.printing':(/\b(impression|impressions|imprimante|imprimantes|planning|file d impression|hueforge|hue forge|modele hf|job|jobs)\b/.test(q)?5:0)+(/\b(duree|charge|attente|aujourd hui|demain)\b/.test(q)?1:0),
+      'consult.markets':(/\b(marche|marches|foire|salon)\b/.test(q)?5:0)+(/\b(prochain|ville|date|horaire|distance|materiel|installation|checklist|place|emplacement)\b/.test(q)?1:0),
+      'consult.cash':(/\b(ticket|tickets|caisse)\b/.test(q)?5:0)+(/\b(ligne|lignes|journee|date|quantite|detail)\b/.test(q)?1:0)
+    };
+    const ranked=Object.entries(scores).sort((a,b)=>b[1]-a[1]);
+    if(ranked[0][1]>=5&&ranked[0][1]-ranked[1][1]>=2)return freeze({kind:'read',actionId:ranked[0][0],message:String(message),pending:null});
+    if(ranked[0][1]>=5&&ranked[0][1]===ranked[1][1])return freeze({kind:'clarification',answer:'Parles-tu des impressions, des marchés ou de la caisse ?'});
+    const baseRoute=base.route(message,pending);
+    return baseRoute.kind==='gateway'?freeze({kind:'gateway'}):baseRoute;
+  }
+  function getAllowedActions(){ return [...base.getAllowedActions(),...NEW_ACTIONS]; }
+  function getState(){ return {stage:'5B',version:VERSION,writesEnabled:false,persistentConversation:false,genericReadPath:false,maxFacts:MAX_FACTS,printerPhysicalControl:false,aggregateCashTotals:false,marketRevenue:false,allowedActions:getAllowedActions()}; }
+  const API=freeze({version:VERSION,getState,getAllowedActions,route,consult,normalize,similarity:base.similarity});
+  Object.defineProperty(root,'JarvisReadBroker5B',{value:API,enumerable:false,configurable:false,writable:false});
+})(typeof window!=='undefined'?window:globalThis);
+</script>
+
+<!-- ===================== JARVIS CONSULTATIONS — ETAPE 5C =====================
+Lecteurs financiers fermés, locaux et strictement en lecture seule.
+Le CA global délègue au calcul partagé du tableau de bord.
+============================================================================ -->
+<script id="jarvis-consultation-step5c">
+(function(root){
+  'use strict';
+  const VERSION='5.3.0-step5c';
+  const NEW_ACTIONS=Object.freeze(['consult.recipe_book','consult.urssaf','consult.global_revenue','consult.market_revenue']);
+  const MAX_FINANCIAL_FACTS=8;
+  const base5b=root.JarvisReadBroker5B;
+  if(!base5b) throw new Error('Le courtier Jarvis 5B est requis.');
+  const MONTHS=['janvier','fevrier','mars','avril','mai','juin','juillet','aout','septembre','octobre','novembre','decembre'];
+  const MONTH_ALIASES={janv:0,janvier:0,fevr:1,fevrier:1,feb:1,mars:2,avr:3,avril:3,mai:4,juin:5,juil:6,juillet:6,aout:7,aout:7,sept:8,septembre:8,oct:9,octobre:9,nov:10,novembre:10,dec:11,decembre:11};
+  function clone(value){return value===undefined?undefined:JSON.parse(JSON.stringify(value));}
+  function freeze(value){if(value&&typeof value==='object'&&!Object.isFrozen(value)){Object.values(value).forEach(freeze);Object.freeze(value);}return value;}
+  function normalize(value){return base5b.normalize(value);}
+  function codedError(code,message){const error=new Error(message);error.code=code;return error;}
+  function sourceData(){if(typeof db==='undefined'||!db||typeof db!=='object')throw codedError('READ_SOURCE_UNAVAILABLE','Les données du Manager ne sont pas disponibles.');return db;}
+  function money(value){const number=Number(value);return Number.isFinite(number)?number:0;}
+  function euro(value){return money(value).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';}
+  function fact(label,value,unit){const item={type:'financial_summary',label:String(label).slice(0,120),value};if(unit)item.unit=unit;return item;}
+  function result(actionId,answer,options={}){return freeze({actionId,outcome:options.outcome||'direct_answer',answer,facts:(options.facts||[]).slice(0,MAX_FINANCIAL_FACTS),pending:options.pending||null,local:true,writesEnabled:false});}
+  function localISO(date=new Date()){return date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');}
+  function periodOf(message,pending){
+    const text=String(message||''),q=normalize(text),yearMatch=text.match(/\b(20\d{2})\b/),year=yearMatch?Number(yearMatch[1]):new Date().getFullYear();
+    const iso=[...text.matchAll(/\b(20\d{2})[-\/]([01]?\d)[-\/]([0-3]?\d)\b/g)].map(m=>m[1]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[3]).padStart(2,'0'));
+    if(iso.length>=2)return {kind:'range',start:iso[0],end:iso[1],label:iso[0]+' → '+iso[1]};
+    if(iso.length===1)return {kind:'day',start:iso[0],end:iso[0],label:iso[0]};
+    for(const [alias,index] of Object.entries(MONTH_ALIASES))if(new RegExp('\\b'+alias+'\\b').test(q)){const month=String(index+1).padStart(2,'0');return {kind:'month',year,start:year+'-'+month+'-01',end:new Date(year,index+1,0).toISOString().slice(0,10),label:MONTHS[index]+' '+year};}
+    if(/\b(20\d{2})\b/.test(q))return {kind:'year',year,start:year+'-01-01',end:year+'-12-31',label:String(year)};
+    if(/\b(cette semaine|la semaine|semaine actuelle)\b/.test(q)){const d=new Date(),day=(d.getDay()+6)%7,startDate=new Date(d);startDate.setDate(d.getDate()-day);const endDate=new Date(startDate);endDate.setDate(startDate.getDate()+6);return {kind:'week',start:localISO(startDate),end:localISO(endDate),label:'cette semaine'};}
+    if(pending&&pending.period)return clone(pending.period);
+    return null;
+  }
+  function inPeriod(date,period){return Boolean(date&&period&&String(date)>=period.start&&String(date)<=period.end);}
+  function pendingFor(actionId,message,period){return {kind:'financial',actionId,explicitOpened:true,oneShot:true,subject:actionId,period:period||null,createdAt:Date.now(),expiresAt:Date.now()+30*60*1000,message:String(message||'').slice(0,400)};}
+  function financialRows(data){
+    return [
+      ...(Array.isArray(data.sales)?data.sales.map(v=>({date:v.date,total:money(v.total),source:'sales'})):[]),
+      ...(Array.isArray(data.ventesLigne)?data.ventesLigne.map(v=>({date:v.date,total:money(v.total),source:'ventesLigne'})):[]),
+      ...(Array.isArray(data.recettesManuelles)?data.recettesManuelles.map(v=>({date:v.date,total:money(v.total),source:'recettesManuelles'})):[])
+    ];
+  }
+  function recipeReader(data,message,pending){
+    const period=periodOf(message,pending);if(!period)return result('consult.recipe_book','Pour quelle période veux-tu consulter le Livre de recettes ?',{outcome:'clarification',pending:pendingFor('consult.recipe_book',message,null)});
+    const rows=financialRows(data).filter(row=>inPeriod(row.date,period)),total=rows.reduce((sum,row)=>sum+row.total,0);
+    return result('consult.recipe_book',rows.length?`Pour ${period.label}, le Livre de recettes contient ${rows.length} recette(s), pour un total de ${euro(total)}.`:`Aucune recette n’est enregistrée pour ${period.label}.`,{facts:[fact('Recettes — '+period.label,total,'EUR'),fact('Nombre de recettes — '+period.label,rows.length,'éléments')],pending:null});
+  }
+  function urssafReader(data,message,pending){
+    const period=periodOf(message,pending);if(!period)return result('consult.urssaf','Pour quelle période veux-tu consulter l’URSSAF ?',{outcome:'clarification',pending:pendingFor('consult.urssaf',message,null)});
+    const rows=[...(Array.isArray(data.sales)?data.sales:[]),...(Array.isArray(data.recettesManuelles)?data.recettesManuelles:[])].filter(row=>inPeriod(row.date,period));
+    const ca=rows.reduce((sum,row)=>sum+money(row.total),0),cotisations=Math.round(ca*12.3/100),cfp=Math.round(ca*0.003);
+    const declarations=Array.isArray(data.urssafDeclarations)?data.urssafDeclarations.filter(row=>{const key=String(row.mois||'');return key.includes(period.label.split(' ')[0])||key===period.label;}):[];
+    const declared=declarations.length?` Déclaration enregistrée : ${declarations.length}.`:'';
+    return result('consult.urssaf',`Pour ${period.label}, le CA pris en compte par le module URSSAF est de ${euro(ca)} ; cotisations estimées ${euro(cotisations)} et CFP ${euro(cfp)}.${declared}`,{facts:[fact('CA URSSAF — '+period.label,ca,'EUR'),fact('Cotisations — '+period.label,cotisations,'EUR'),fact('CFP — '+period.label,cfp,'EUR')],pending:null});
+  }
+  function globalRevenueReader(data,message,pending){
+    const period=periodOf(message,pending);if(!period)return result('consult.global_revenue','Pour quelle période veux-tu consulter le CA global ?',{outcome:'clarification',pending:pendingFor('consult.global_revenue',message,null)});
+    if(typeof managerComputeTotalCA!=='function')throw codedError('MANAGER_CALCULATION_UNAVAILABLE','Le calcul totalCA du Manager est indisponible.');
+    const computed=managerComputeTotalCA((date)=>inPeriod(date,period)),total=typeof computed==='number'?computed:computed.total;
+    return result('consult.global_revenue',`Le CA global affiché par le Manager pour ${period.label} est de ${euro(total)}.`,{facts:[fact('CA global — '+period.label,total,'EUR')],pending:null});
+  }
+  function marketRows(data,period){
+    const currentYear=new Date().getFullYear();
+    if(period.year&&period.year<currentYear){const archive=data.marchesArchives&&data.marchesArchives[String(period.year)];return Array.isArray(archive)?archive.filter(v=>inPeriod(v.date,period)).map(v=>({date:v.date,total:money(v.totalEsp)+money(v.totalCb)+money(v.totalOther)>0?money(v.totalEsp)+money(v.totalCb)+money(v.totalOther):money(v.total)})):[];}
+    const markets=(Array.isArray(data.ventesMarche)?data.ventesMarche:[]).filter(v=>inPeriod(v.date,period));
+    const caisse=(Array.isArray(data.caisseHistory)?data.caisseHistory:[]).filter(v=>inPeriod(v.date,period));
+    const dates=new Set(caisse.map(v=>v.date));
+    const marketRows=markets.filter(v=>!dates.has(v.date)).map(v=>({date:v.date,total:(money(v.totalEsp)+money(v.totalCb)+money(v.totalOther)+money(v.totalVrt)+money(v.totalChq))>0?(money(v.totalEsp)+money(v.totalCb)+money(v.totalOther)+money(v.totalVrt)+money(v.totalChq)):money(v.total)}));
+    return [...marketRows,...caisse.map(v=>({date:v.date,total:money(v.total)}))];
+  }
+  function marketRevenueReader(data,message,pending){
+    const period=periodOf(message,pending);if(!period)return result('consult.market_revenue','Pour quelle période ou quel marché veux-tu consulter le CA ?',{outcome:'clarification',pending:pendingFor('consult.market_revenue',message,null)});
+    const requested=normalize(message),marketName=(Array.isArray(data.marches)?data.marches:[]).find(m=>m.ville&&requested.includes(normalize(m.ville)));
+    const rows=marketRows(data,period).filter(row=>!marketName||row.date===marketName.date),total=rows.reduce((sum,row)=>sum+row.total,0);
+    const label=marketName&&marketName.ville?marketName.ville+' — '+period.label:period.label;
+    return result('consult.market_revenue',rows.length?`Le CA des marchés pour ${label} est de ${euro(total)}.`:`Aucun CA de marché enregistré pour ${label}.`,{facts:[fact('CA marchés — '+label,total,'EUR')],pending:null});
+  }
+  function explicitFinancial(q){return /\b(recette|recettes|livre de recettes|urssaf|cotisation|cotisations|ca|chiffre d affaires|combien j ai fait|fait combien)\b/.test(q);}
+  function clearTopic(q){return /\b(impression|imprimante|planning|stock|filament|catalogue|ticket|caisse|march[eé]|marches|hueforge)\b/.test(q)&&!/(ca|chiffre d affaires|recette|urssaf)/.test(q);}
+  function financialAction(q){
+    if(/\b(urssaf|cotisation|cotisations|declaration)\b/.test(q))return 'consult.urssaf';
+    if(/\b(recette|recettes|livre de recettes)\b/.test(q))return 'consult.recipe_book';
+    if(/\b(march[eé]|marches|marché)\b/.test(q)&&/\b(ca|chiffre d affaires|combien|fait)\b/.test(q))return 'consult.market_revenue';
+    if(/\b(ca|chiffre d affaires|combien j ai fait|fait combien)\b/.test(q))return 'consult.global_revenue';
+    return null;
+  }
+  function route(message,pending){
+    const q=normalize(message),active=pending&&pending.kind==='financial'&&pending.explicitOpened&&pending.expiresAt>Date.now()?pending:null;
+    if(/\b(modifie|modifier|corrige|corriger|supprime|supprimer|valide|valider|cree|creer|ajoute|ajouter)\b/.test(q)&&explicitFinancial(q))return {kind:'direct',result:result(null,'Toute écriture financière est interdite. Aucune donnée financière n’a été modifiée.',{outcome:'refusal'}),pending:null};
+    if(active){
+      if(clearTopic(q)){const next=base5b.route(message,null);return next.kind==='gateway'?{kind:'gateway',pending:null}:{...next,pending:null};}
+      const switched=financialAction(q);if(switched)return {kind:'read',actionId:switched,message:String(message),pending:active};
+      if(periodOf(message,active))return {kind:'read',actionId:active.actionId,message:String(message),pending:active};
+    }
+    const action=financialAction(q);
+    if(action&&explicitFinancial(q))return {kind:'read',actionId:action,message:String(message),pending:active};
+    const delegated=base5b.route(message,null);
+    return delegated.kind==='gateway'?{kind:'gateway',pending:null}:delegated;
+  }
+  function verifyAction(actionId){
+    if(!NEW_ACTIONS.includes(actionId))return base5b.getAllowedActions().includes(actionId)?null: (()=>{throw codedError('READ_ACTION_FORBIDDEN','Lecteur financier non autorisé.');})();
+    const security=root.JarvisSecurity;if(!security||typeof security.getAction!=='function'||typeof security.auditCandidate!=='function')throw codedError('SECURITY_KERNEL_MISSING','Le registre de sécurité est indisponible.');
+    const action=security.getAction(actionId);if(action.category!==security.categories.READ||action.readOnly!==true)throw codedError('READ_ACTION_FORBIDDEN','Cette action financière n’est pas autorisée.');return security;
+  }
+  function consult(actionId,input={}){
+    if(!NEW_ACTIONS.includes(actionId))return base5b.consult(actionId,input);
+    const security=verifyAction(actionId),data=sourceData(),before=clone(data),pending=input.pending||null;
+    const reader=actionId==='consult.recipe_book'?recipeReader:actionId==='consult.urssaf'?urssafReader:actionId==='consult.global_revenue'?globalRevenueReader:marketRevenueReader;
+    const response=reader(data,String(input.message||''),pending),audit=security.auditCandidate(actionId,before,clone(sourceData()));
+    if(!audit||audit.ok!==true||audit.changes.length!==0||audit.protectedFinancialDataUnchanged!==true)throw codedError('READ_AUDIT_FAILED','La consultation financière a modifié des données.');
+    return freeze({...clone(response),audit:{changes:[],protectedFinancialDataUnchanged:true}});
+  }
+  function getAllowedActions(){return [...base5b.getAllowedActions(),...NEW_ACTIONS];}
+  function getState(){return {stage:'5C',version:VERSION,writesEnabled:false,persistentConversation:false,genericReadPath:false,financialWrites:false,maxFinancialFacts:MAX_FINANCIAL_FACTS,allowedActions:getAllowedActions()};}
+  const API=freeze({version:VERSION,getState,getAllowedActions,route,consult,normalize,financialActions:[...NEW_ACTIONS]});
+  Object.defineProperty(root,'JarvisFinancialReadBroker5C',{value:API,enumerable:false,configurable:false,writable:false});
+})(typeof window!=='undefined'?window:globalThis);
+</script>
+
 <!-- ===================== JARVIS TEXTE — ETAPE 4 =====================
 Interface conversationnelle temporaire. Aucun stockage persistant, aucune donnée
 métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
@@ -19997,7 +20327,9 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       const action=root.JarvisSecurity.getAction(response.proposal.actionId);
       if(action.category===root.JarvisSecurity.categories.FORBIDDEN) throw codedError('ACTION_FORBIDDEN','Action interdite.');
     }
-    const readAction=typeof meta.readAction==='string'&&READ_ACTIONS_5A.includes(meta.readAction)?meta.readAction:null;
+    const activeBroker=root.JarvisFinancialReadBroker5C||root.JarvisReadBroker5B||root.JarvisReadBroker||null;
+    const allowedReads=activeBroker&&typeof activeBroker.getAllowedActions==='function'?activeBroker.getAllowedActions():READ_ACTIONS_5A;
+    const readAction=typeof meta.readAction==='string'&&allowedReads.includes(meta.readAction)?meta.readAction:null;
     return {outcome,answer:response.answer,proposal:response.proposal?clone(response.proposal):null,topic:meta.topic||null,missingInformation:Array.isArray(meta.missingInformation)?clone(meta.missingInformation):[],readAction};
   }
   function errorMessage(error){
@@ -20011,7 +20343,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     expireIfInactive();
     if(!root.navigator || root.navigator.onLine===false) throw codedError('OFFLINE',ERROR_MESSAGES.OFFLINE);
     const gateway=securityCheck();
-    const broker=root.JarvisReadBroker||null;
+    const broker=root.JarvisFinancialReadBroker5C||root.JarvisReadBroker5B||root.JarvisReadBroker||null;
     if(broker&&(broker.getState().writesEnabled!==false||broker.getState().genericReadPath!==false)) throw codedError('SECURITY_KERNEL_UNSAFE','Le courtier de consultation n est pas verrouillé.');
     const previous=contextMessages();
     busy=true; transientMessage=message; lastFailedMessage=''; setBusy(true); setStatus('Jarvis réfléchit…',false); render();
@@ -20020,10 +20352,13 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       let result;
       if(route.kind==='clarification'){
         result={outcome:'clarification',answer:route.answer,proposal:null,topic:'consultation 5A',missingInformation:['domaine'],readAction:null};
+      }else if(route.kind==='direct'){
+        result=route.result;
       }else if(route.kind==='read'){
         result=broker.consult(route.actionId,{message:route.message,pending:route.pending});
       }else{
-        const response=await gateway.send({sessionId:session.id,message,conversation:previous,facts:[],financialSummary:[],requestedActions:[...READ_ACTIONS_5A,...PROPOSABLE_ACTIONS]});
+        const requestedReads=broker&&typeof broker.getAllowedActions==='function'?broker.getAllowedActions():[...READ_ACTIONS_5A];
+        const response=await gateway.send({sessionId:session.id,message,conversation:previous,facts:[],financialSummary:[],requestedActions:[...requestedReads,...PROPOSABLE_ACTIONS]});
         result=classifyResponse(response);
         if(result.readAction){
           if(!broker) throw codedError('SECURITY_KERNEL_MISSING','Le courtier de consultation sécurisé est indisponible.');
@@ -20092,7 +20427,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function open(){ expireIfInactive(); elements.panel.hidden=false; elements.backdrop.hidden=false; elements.open.hidden=true; render(); elements.input.focus(); }
   function close(){ elements.panel.hidden=true; elements.backdrop.hidden=true; elements.open.hidden=false; elements.open.focus(); }
   function getSession(){ return clone(session); }
-  function getState(){ return {stage:4,consultationStage:'5A',version:VERSION,maxMessages:MAX_MESSAGES,inactivityMs:INACTIVITY_MS,writesEnabled:false,persistentConversation:false,voiceEnabled:false,firebaseDirectAccess:false,genericDbAccess:false,genericReadPath:false,printerPhysicalControl:false}; }
+  function getState(){ return {stage:4,consultationStage:root.JarvisFinancialReadBroker5C?'5C':root.JarvisReadBroker5B?'5B':'5A',version:VERSION,maxMessages:MAX_MESSAGES,inactivityMs:INACTIVITY_MS,writesEnabled:false,persistentConversation:false,voiceEnabled:false,firebaseDirectAccess:false,genericDbAccess:false,genericReadPath:false,printerPhysicalControl:false}; }
 
   elements.open.addEventListener('click',open);
   elements.close.addEventListener('click',close);
