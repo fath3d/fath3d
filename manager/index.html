@@ -20580,7 +20580,17 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
           }catch(error){ setStatus(error&&error.message==='JARVIS_WRITES_DISABLED'?'Confirmation reçue, mais l écriture reste bloquée par writesEnabled=false.':'Confirmation refusée : '+(error&&error.message||'erreur'),true,false); }
         });
         const cancel=document.createElement('button'); cancel.type='button'; cancel.className='j4-retry'; cancel.textContent='Annuler';
-        cancel.addEventListener('click',()=>{try{root.JarvisWriteBroker6.cancelProposal(item.proposal.proposalId);setStatus('Proposition annulée. Aucune écriture effectuée.',false,false);}catch(error){setStatus('Annulation impossible.',true,false);}});
+        cancel.addEventListener('click',()=>{
+          try{
+            const proposalId=item.proposal.proposalId||item.proposal.id;
+            if(!proposalId||!root.JarvisWriteBroker6||typeof root.JarvisWriteBroker6.cancelProposal!=='function') throw codedError('CANCEL_UNAVAILABLE','Annulation sécurisée indisponible.');
+            root.JarvisWriteBroker6.cancelProposal(proposalId);
+            item.proposal=null;
+            session.pendingProposal=null;
+            setStatus('Proposition annulée. Aucune écriture effectuée.',false,false);
+            render();
+          }catch(error){setStatus('Annulation impossible.',true,false);}
+        });
         actions.append(confirm,cancel); proposal.append(actions);
       }
       box.append(proposal);
