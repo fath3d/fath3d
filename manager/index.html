@@ -20117,8 +20117,13 @@ Le CA global délègue au calcul partagé du tableau de bord.
     const marketRows=markets.filter(v=>!dates.has(v.date)).map(v=>({date:v.date,total:(money(v.totalEsp)+money(v.totalCb)+money(v.totalOther)+money(v.totalVrt)+money(v.totalChq))>0?(money(v.totalEsp)+money(v.totalCb)+money(v.totalOther)+money(v.totalVrt)+money(v.totalChq)):money(v.total)}));
     return [...marketRows,...caisse.map(v=>({date:v.date,total:money(v.total)}))];
   }
+  function marketDateLabel(date){
+    const match=String(date||'').match(/^(20\d{2})-(\d{2})-(\d{2})$/);
+    if(!match)return String(date||'');
+    const month=Number(match[2])-1;
+    return Number.isInteger(month)&&MONTHS[month]?Number(match[3])+' '+MONTHS[month]+' '+match[1]:String(date);
+  }
   function marketRevenueReader(data,message,pending){
-    const period=periodOf(message,pending);if(!period)return result('consult.market_revenue','Pour quelle période ou quel marché veux-tu consulter le CA ?',{outcome:'clarification',pending:pendingFor('consult.market_revenue',message,null)});
     const requested=normalize(message);
     // La rubrique Marchés est la source de référence lorsqu une fiche/historique
     // porte déjà un CA validé pour le marché demandé. Les tickets ne servent de
@@ -20127,6 +20132,13 @@ Le CA global délègue au calcul partagé du tableau de bord.
       ...(Array.isArray(data.marches)?data.marches:[]),
       ...Object.values(data.marchesArchives||{}).flatMap(value=>Array.isArray(value)?value:[])
     ];
+    const namedWithCA=marketRecords.filter(m=>{
+      const name=m&& (m.ville||m.marche||m.market);
+      return name&&requested.includes(normalize(name))&&Object.prototype.hasOwnProperty.call(m,'ca')&&Number.isFinite(Number(m.ca));
+    });
+    const inferredPeriod=!periodOf(message,pending)&&namedWithCA.length===1&&namedWithCA[0].date?{kind:'day',start:String(namedWithCA[0].date),end:String(namedWithCA[0].date),label:marketDateLabel(namedWithCA[0].date)}:null;
+    const period=periodOf(message,pending)||inferredPeriod;
+    if(!period)return result('consult.market_revenue','Pour quelle période ou quel marché veux-tu consulter le CA ?',{outcome:'clarification',pending:pendingFor('consult.market_revenue',message,null)});
     const requestedMarket=marketRecords.find(m=>{
       const name=m&& (m.ville||m.marche||m.market);
       const date=m&& (m.date||m.dateMarche);
