@@ -20136,7 +20136,12 @@ Le CA global délègue au calcul partagé du tableau de bord.
       const name=m&& (m.ville||m.marche||m.market);
       return name&&requested.includes(normalize(name))&&Object.prototype.hasOwnProperty.call(m,'ca')&&Number.isFinite(Number(m.ca));
     });
-    const inferredPeriod=!periodOf(message,pending)&&namedWithCA.length===1&&namedWithCA[0].date?{kind:'day',start:String(namedWithCA[0].date),end:String(namedWithCA[0].date),label:marketDateLabel(namedWithCA[0].date)}:null;
+    // Current and historical collections may repeat the same validated market
+    // record. Deduplicate identical date/CA pairs; conflicting values remain
+    // ambiguous and therefore still require clarification.
+    const uniqueNamedWithCA=[...new Map(namedWithCA.map(m=>[`${String(m.date||m.dateMarche||'')}|${Number(m.ca)}`,m])).values()];
+    const inferredDate=uniqueNamedWithCA.length===1?(uniqueNamedWithCA[0].date||uniqueNamedWithCA[0].dateMarche):null;
+    const inferredPeriod=!periodOf(message,pending)&&inferredDate?{kind:'day',start:String(inferredDate),end:String(inferredDate),label:marketDateLabel(inferredDate)}:null;
     const period=periodOf(message,pending)||inferredPeriod;
     if(!period)return result('consult.market_revenue','Pour quelle période ou quel marché veux-tu consulter le CA ?',{outcome:'clarification',pending:pendingFor('consult.market_revenue',message,null)});
     const requestedMarket=marketRecords.find(m=>{
