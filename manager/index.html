@@ -20398,6 +20398,26 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   }
   function codedError(code,message){ const error=new Error(message); error.code=code; return error; }
   function normalizeText(value){ return String(value||'').trim().slice(0,4000); }
+  function normalizeIntent(value){ return normalizeText(value).toLocaleLowerCase('fr-FR').normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+  function localStockWriteRoute(message,currentData){
+    const q=normalizeIntent(message);
+    let mode=null,amount=null,target=null;
+    let match=q.match(/^(ajoute|ajouter)\s+(\d+)\b/); if(match){mode='add';amount=Number(match[2]);}
+    if(!match){match=q.match(/^(retire|retirer|enleve|enlever)\s+(\d+)\b/);if(match){mode='remove';amount=Number(match[2]);}}
+    if(!match){match=q.match(/^(mets|met|mettre|passe|passer|fixe|fixer)\b[\s\S]*?\b(?:a|à)\s*(\d+)\s*$/);if(match){mode='set';target=Number(match[2]);}}
+    if(!mode) return null;
+    const location=q.includes('maison')?'maison':(q.includes('marche')?'marche':(q.includes('arts complices')?'artComplices':(q.includes('vero')||q.includes('bt vero')?'btvero':null)));
+    if(!location) return {kind:'clarification',answer:'Pour quel emplacement veux-tu modifier le stock : Maison, Marché, Arts Complices ou Véro ?'};
+    const products=Array.isArray(currentData&&currentData.products)?currentData.products:[];
+    const matches=products.filter(product=>{const name=product&&(product.name||product.nom||product.label||product.title);return name&&q.includes(normalizeIntent(name));});
+    if(matches.length!==1) return {kind:'clarification',answer:matches.length>1?'Quel produit précis veux-tu modifier ?':'Quel produit précis veux-tu modifier ?'};
+    const product=matches[0],name=product.name||product.nom||product.label||product.title;
+    const oldQuantity=Number(product.stocks&&product.stocks[location]);
+    if(!Number.isFinite(oldQuantity)) return {kind:'clarification',answer:'La quantité actuelle de ce produit n’est pas renseignée pour cet emplacement.'};
+    const newQuantity=mode==='add'?oldQuantity+amount:mode==='remove'?oldQuantity-amount:target;
+    if(newQuantity<0) return {kind:'direct',result:{outcome:'refusal',answer:'Cette modification produirait un stock négatif. Aucune proposition n’a été créée.',proposal:null,topic:'stock',missingInformation:[],readAction:null}};
+    return {kind:'write_proposal',actionId:'stock.adjust',args:{productId:product.id,location,newQuantity},oldValue:oldQuantity,newValue:newQuantity,answer:`Proposition préparée : ${name}, ${location}, ${oldQuantity} → ${newQuantity}. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
+  }
   function appendMessage(role,content,outcome='direct_answer',proposal=null){
     const item={id:secureId(),role,content:normalizeText(content),outcome,proposal:proposal?clone(proposal):null,createdAt:Date.now()};
     session.messages.push(item);
@@ -20459,9 +20479,16 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const previous=contextMessages();
     busy=true; transientMessage=message; lastFailedMessage=''; setBusy(true); setStatus('Jarvis réfléchit…',false); render();
     try{
-      const route=broker?broker.route(message,session.pendingConsultation):{kind:'gateway'};
+      const currentData=(typeof db!=='undefined'&&db)?db:(root.db||{});
+      const localWrite=localStockWriteRoute(message,currentData);
+      const route=localWrite|| (broker?broker.route(message,session.pendingConsultation):{kind:'gateway'});
       let result;
-      if(route.kind==='clarification'){
+      if(route.kind==='write_proposal'){
+        const writeBroker=root.JarvisWriteBroker6;
+        if(!writeBroker) throw codedError('SECURITY_KERNEL_MISSING','Le courtier d’écriture sécurisé est indisponible.');
+        const local=writeBroker.createProposal(route.actionId,route.args,currentData,route.answer,route.oldValue,route.newValue);
+        result={outcome:'action_proposal',answer:route.answer,proposal:{...local,args:local.parameters,executionAllowed:false,confirmationRequired:true},topic:'stock',missingInformation:[],readAction:null};
+      }else if(route.kind==='clarification'){
         result={outcome:'clarification',answer:route.answer,proposal:null,topic:'consultation 5A',missingInformation:['domaine'],readAction:null};
       }else if(route.kind==='direct'){
         result=route.result;
@@ -20570,7 +20597,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   root.setInterval(()=>{ if(!elements.panel.hidden) expireIfInactive(); },60000);
   render();
 
-  const API=Object.freeze({version:VERSION,getState,getSession,open,close,reset,sendText,classifyResponse,expireIfInactive});
+  const API=Object.freeze({version:VERSION,getState,getSession,open,close,reset,sendText,classifyResponse,expireIfInactive,localStockWriteRoute});
   Object.defineProperty(root,'JarvisConversation',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
