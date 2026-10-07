@@ -19755,6 +19755,14 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     if(categoryMatches.length) return {matches:categoryMatches,ambiguous:false,category:true};
     return resolveItems(products,message,['name','category','variant']);
   }
+  // Résolution canonique partagée par les consultations et les propositions
+  // d’écriture : le prétraitement retire les termes d’intention/emplacement
+  // avant d’appliquer productMatches, comme le chemin consult.stocks.
+  function resolveProductMatch(data,message){
+    const products=projectProducts(data);
+    const prepared=tokens(String(message||'')).join(' ')||String(message||'');
+    return productMatches(products,prepared);
+  }
   function availableLocations(products){
     const keys=[];
     products.forEach(product=>Object.keys(product.stocks||{}).forEach(key=>{if(!keys.includes(key))keys.push(key);}));
@@ -19803,7 +19811,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     let matches;
     if(pending&&pending.productId!==undefined) matches=products.filter(product=>product.id===pending.productId);
     else if(pending&&Array.isArray(pending.candidates)) matches=products.filter(product=>pending.candidates.includes(product.id));
-    else matches=productMatches(products,tokens(message).join(' ')||message).matches;
+    else matches=resolveProductMatch(data,message).matches;
     if(!matches.length) return result('consult.stocks','Je ne trouve pas ce produit dans le catalogue.');
     if(matches.length>1){
       const response=ambiguityAnswer(matches,'produits'); response.pending.actionId='consult.stocks';
@@ -19915,7 +19923,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
   }
   function getState(){ return {stage:'5A',version:VERSION,writesEnabled:false,persistentConversation:false,genericReadPath:false,maxFacts:MAX_FACTS,allowedActions:[...ALLOWED_ACTIONS]}; }
   function resolveProduct(data,message){
-    const found=productMatches(projectProducts(data),String(message||''));
+    const found=resolveProductMatch(data,message);
     return freeze({matches:clone(found.matches||[]),ambiguous:found.ambiguous===true});
   }
   const API=freeze({version:VERSION,getState,getAllowedActions:()=>[...ALLOWED_ACTIONS],route,consult,normalize,similarity,resolveProduct});
