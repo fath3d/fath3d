@@ -19914,7 +19914,11 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     return freeze({kind:'gateway'});
   }
   function getState(){ return {stage:'5A',version:VERSION,writesEnabled:false,persistentConversation:false,genericReadPath:false,maxFacts:MAX_FACTS,allowedActions:[...ALLOWED_ACTIONS]}; }
-  const API=freeze({version:VERSION,getState,getAllowedActions:()=>[...ALLOWED_ACTIONS],route,consult,normalize,similarity});
+  function resolveProduct(data,message){
+    const found=productMatches(projectProducts(data),String(message||''));
+    return freeze({matches:clone(found.matches||[]),ambiguous:found.ambiguous===true});
+  }
+  const API=freeze({version:VERSION,getState,getAllowedActions:()=>[...ALLOWED_ACTIONS],route,consult,normalize,similarity,resolveProduct});
   Object.defineProperty(root,'JarvisReadBroker',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
@@ -20116,7 +20120,7 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
   }
   function getAllowedActions(){ return [...base.getAllowedActions(),...NEW_ACTIONS]; }
   function getState(){ return {stage:'5B',version:VERSION,writesEnabled:false,persistentConversation:false,genericReadPath:false,maxFacts:MAX_FACTS,printerPhysicalControl:false,aggregateCashTotals:false,marketRevenue:false,allowedActions:getAllowedActions()}; }
-  const API=freeze({version:VERSION,getState,getAllowedActions,route,consult,normalize,similarity:base.similarity});
+  const API=freeze({version:VERSION,getState,getAllowedActions,route,consult,normalize,similarity:base.similarity,resolveProduct:base.resolveProduct});
   Object.defineProperty(root,'JarvisReadBroker5B',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
@@ -20270,7 +20274,7 @@ Le CA global délègue au calcul partagé du tableau de bord.
   }
   function getAllowedActions(){return [...base5b.getAllowedActions(),...NEW_ACTIONS];}
   function getState(){return {stage:'5C',version:VERSION,writesEnabled:false,persistentConversation:false,genericReadPath:false,financialWrites:false,maxFinancialFacts:MAX_FINANCIAL_FACTS,allowedActions:getAllowedActions()};}
-  const API=freeze({version:VERSION,getState,getAllowedActions,route,consult,normalize,financialActions:[...NEW_ACTIONS]});
+  const API=freeze({version:VERSION,getState,getAllowedActions,route,consult,normalize,financialActions:[...NEW_ACTIONS],resolveProduct:base5b.resolveProduct});
   Object.defineProperty(root,'JarvisFinancialReadBroker5C',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
@@ -20409,9 +20413,11 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const location=q.includes('maison')?'maison':(q.includes('marche')?'marche':(q.includes('arts complices')?'artComplices':(q.includes('vero')||q.includes('bt vero')?'btvero':null)));
     if(!location) return {kind:'clarification',answer:'Pour quel emplacement veux-tu modifier le stock : Maison, Marché, Arts Complices ou Véro ?'};
     const products=Array.isArray(currentData&&currentData.products)?currentData.products:[];
-    // Réutiliser exactement le résolveur validé de consult.stocks : il projette
-    // les produits et applique les mêmes scores, variantes et seuils d'ambiguïté.
-    const resolved=productMatches(projectProducts(currentData),message);
+    // Le résolveur est privé dans le courtier de consultation : on passe par
+    // son API publique pour conserver exactement les mêmes scores/variantes.
+    const resolver=root.JarvisFinancialReadBroker5C||root.JarvisReadBroker5B||root.JarvisReadBroker;
+    if(!resolver||typeof resolver.resolveProduct!=='function') throw codedError('PRODUCT_RESOLVER_UNAVAILABLE','Le résolveur produit sécurisé est indisponible.');
+    const resolved=resolver.resolveProduct(currentData,message);
     const matches=resolved.matches||[];
     if(matches.length!==1) return {kind:'clarification',answer:'Quel produit précis veux-tu modifier ?'};
     const product=products.find(candidate=>candidate&&candidate.id===matches[0].id)||matches[0];
