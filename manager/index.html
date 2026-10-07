@@ -20492,6 +20492,14 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(busy) throw codedError('REQUEST_IN_PROGRESS','Une demande est déjà en cours.');
     expireIfInactive();
     if(!root.navigator || root.navigator.onLine===false) throw codedError('OFFLINE',ERROR_MESSAGES.OFFLINE);
+    if(/^(?:oui|confirme|confirmer|vas[- ]?y|valide|valider)$/i.test(message) && !session.pendingProposal){
+      const answer='Il n y a aucune action en attente à confirmer.';
+      appendMessage('user',message,'direct_answer',null);
+      appendMessage('assistant',answer,'direct_answer',null);
+      setStatus('',false);
+      render();
+      return {outcome:'direct_answer',answer,proposal:null,topic:null,missingInformation:[],readAction:null};
+    }
     const gateway=securityCheck();
     const broker=root.JarvisFinancialReadBroker5C||root.JarvisReadBroker5B||root.JarvisReadBroker||null;
     if(broker&&(broker.getState().writesEnabled!==false||broker.getState().genericReadPath!==false)) throw codedError('SECURITY_KERNEL_UNSAFE','Le courtier de consultation n est pas verrouillé.');
