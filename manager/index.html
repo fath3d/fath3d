@@ -20513,7 +20513,18 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       if(route.kind==='write_proposal'){
         const writeBroker=root.JarvisWriteBroker6;
         if(!writeBroker) throw codedError('SECURITY_KERNEL_MISSING','Le courtier d’écriture sécurisé est indisponible.');
-        const local=writeBroker.createProposal(route.actionId,route.args,currentData,route.answer,route.oldValue,route.newValue);
+        const previousProposal=session.pendingProposal;
+        let local;
+        if(previousProposal && previousProposal.proposalId && previousProposal.actionId===route.actionId && typeof writeBroker.correctProposal==='function'){
+          const previousId=previousProposal.proposalId;
+          local=writeBroker.correctProposal(previousId,route.args,currentData,route.answer,route.oldValue,route.newValue);
+          session.messages.forEach(item=>{
+            if(item.proposal && (item.proposal.proposalId===previousId || item.proposal.id===previousId)) item.proposal=null;
+          });
+          session.pendingProposal=null;
+        }else{
+          local=writeBroker.createProposal(route.actionId,route.args,currentData,route.answer,route.oldValue,route.newValue);
+        }
         result={outcome:'action_proposal',answer:route.answer,proposal:{...local,args:local.parameters,executionAllowed:false,confirmationRequired:true},topic:'stock',missingInformation:[],readAction:null};
       }else if(route.kind==='clarification'){
         result={outcome:'clarification',answer:route.answer,proposal:null,topic:'consultation 5A',missingInformation:['domaine'],readAction:null};
