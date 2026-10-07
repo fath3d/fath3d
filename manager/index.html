@@ -19412,7 +19412,8 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     action(actionId); if(!summary||!String(summary).trim())throw new Error('PROPOSAL_SUMMARY_REQUIRED');
     const input=normalizedArgs||{};
     if(actionId==='stock.adjust'){
-      if(typeof input.productId!=='string'||!input.productId.trim()||Array.isArray(input.productId))throw new Error('PRODUCT_AMBIGUOUS');
+      const productIdType=typeof input.productId;
+      if((productIdType!=='string'&&productIdType!=='number')||String(input.productId).trim()===''||Array.isArray(input.productId))throw new Error('PRODUCT_AMBIGUOUS');
       if(!['maison','marche','artComplices','btvero'].includes(input.location))throw new Error('LOCATION_AMBIGUOUS');
       if(!Number.isInteger(Number(input.newQuantity))||Number(input.newQuantity)<0)throw new Error('NEGATIVE_STOCK');
       const products=Array.isArray(currentData&&currentData.products)?currentData.products:[];
