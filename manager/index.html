@@ -20119,9 +20119,25 @@ Le CA global délègue au calcul partagé du tableau de bord.
   }
   function marketRevenueReader(data,message,pending){
     const period=periodOf(message,pending);if(!period)return result('consult.market_revenue','Pour quelle période ou quel marché veux-tu consulter le CA ?',{outcome:'clarification',pending:pendingFor('consult.market_revenue',message,null)});
-    const requested=normalize(message),marketName=(Array.isArray(data.marches)?data.marches:[]).find(m=>m.ville&&requested.includes(normalize(m.ville)));
-    const rows=marketRows(data,period).filter(row=>!marketName||row.date===marketName.date),total=rows.reduce((sum,row)=>sum+row.total,0);
-    const label=marketName&&marketName.ville?marketName.ville+' — '+period.label:period.label;
+    const requested=normalize(message);
+    // La rubrique Marchés est la source de référence lorsqu une fiche/historique
+    // porte déjà un CA validé pour le marché demandé. Les tickets ne servent de
+    // repli que lorsqu aucune valeur CA marché explicite n existe.
+    const marketRecords=[
+      ...(Array.isArray(data.marches)?data.marches:[]),
+      ...Object.values(data.marchesArchives||{}).flatMap(value=>Array.isArray(value)?value:[])
+    ];
+    const requestedMarket=marketRecords.find(m=>{
+      const name=m&& (m.ville||m.marche||m.market);
+      const date=m&& (m.date||m.dateMarche);
+      return name&&requested.includes(normalize(name))&&inPeriod(date,period);
+    });
+    if(requestedMarket&&Object.prototype.hasOwnProperty.call(requestedMarket,'ca')&&Number.isFinite(Number(requestedMarket.ca))){
+      const label=(requestedMarket.ville||requestedMarket.marche||requestedMarket.market)+' — '+period.label;
+      return result('consult.market_revenue',`Le CA des marchés pour ${label} est de ${euro(requestedMarket.ca)}.`,{facts:[fact('CA marchés — '+label,money(requestedMarket.ca),'EUR')],pending:null});
+    }
+    const rows=marketRows(data,period).filter(row=>!requestedMarket||row.date===requestedMarket.date),total=rows.reduce((sum,row)=>sum+row.total,0);
+    const label=requestedMarket&& (requestedMarket.ville||requestedMarket.marche||requestedMarket.market)?(requestedMarket.ville||requestedMarket.marche||requestedMarket.market)+' — '+period.label:period.label;
     return result('consult.market_revenue',rows.length?`Le CA des marchés pour ${label} est de ${euro(total)}.`:`Aucun CA de marché enregistré pour ${label}.`,{facts:[fact('CA marchés — '+label,total,'EUR')],pending:null});
   }
   function explicitFinancial(q){return /\b(recette|recettes|livre de recettes|urssaf|cotisation|cotisations|ca|chiffre d affaires|combien j ai fait|fait combien)\b/.test(q);}
