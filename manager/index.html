@@ -19963,6 +19963,8 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     if(direct)return direct[1]+'-'+pad(direct[2])+'-'+pad(direct[3]);
     const french=String(message||'').match(/\b([0-3]?\d)[-\/]([01]?\d)[-\/](20\d{2})\b/);
     if(french)return french[3]+'-'+pad(french[2])+'-'+pad(french[1]);
+    const named=String(message||'').toLocaleLowerCase('fr-FR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').match(/\b([0-3]?\d)\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\s+(20\d{2})\b/);
+    if(named){const months={janvier:1,fevrier:2,mars:3,avril:4,mai:5,juin:6,juillet:7,aout:8,septembre:9,octobre:10,novembre:11,decembre:12};return named[3]+'-'+pad(months[named[2]])+'-'+pad(named[1]);}
     if(/\bdemain\b/.test(q))return tomorrowISO();
     if(/\b(aujourd hui|ce jour)\b/.test(q))return localISO();
     return null;
@@ -20066,10 +20068,8 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
       const remaining=keys.filter(key=>checklist[key]!==true),done=keys.length-remaining.length;
       return result('consult.markets',done+' élément(s) coché(s) sur '+keys.length+'.'+(remaining.length?' Il reste : '+remaining.slice(0,12).join(', ')+'.':' La checklist est complète.'),{facts:[fact('market_info','Checklist marché — restant',remaining.length,'éléments')]});
     }
-    let matches=markets;
-    if(date)matches=matches.filter(item=>item.date===date);
     const cities=markets.filter(item=>item.city&&q.includes(normalize(item.city)));
-    if(cities.length)matches=cities;
+    let matches=resolveMarketMatch(data,{ville:cities.length?cities[0].city:null,date});
     if(/\b(prochain|prochaine|a venir|bientot)\b/.test(q))matches=markets.filter(item=>item.status!=='annule'&&item.date&&item.date>=localISO()).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,1);
     if(!matches.length)return result('consult.markets','Je ne trouve aucun marché correspondant.');
     if(matches.length>1&&!/\b(prochains|marches a venir|liste)\b/.test(q)){
