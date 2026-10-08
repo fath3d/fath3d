@@ -19424,7 +19424,9 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     if(actionId==='market.update'&&Object.prototype.hasOwnProperty.call(input,'ca'))throw new Error('FINANCIAL_LOCK_VIOLATION');
     const now=Date.now(); const params=clone(normalizedArgs||{});
     const proposal={proposalId:id('proposal'),action:actionId,actionId,parameters:params,oldValue:clone(oldValue),newValue:clone(nextValue),summary:String(summary).trim(),createdAt:now,expiresAt:now+TTL_MS,nonce:id('nonce'),state:'pending',parameterHash:hash(params),beforeHash:hash(currentData),financialBeforeHash:hash(api().captureFinancialSnapshot(currentData)),confirmationRequired:true,executionAllowed:false};
-    proposals.set(proposal.proposalId,proposal); return clone(proposal);
+    proposals.set(proposal.proposalId,proposal);
+    if(actionId==='cash.pending_ticket.prepare') pendingTickets.set(proposal.proposalId,{proposalId:proposal.proposalId,items:clone(input.items||[]),note:String(input.note||'')});
+    return clone(proposal);
   }
   function get(proposalId){const p=proposals.get(proposalId);if(!p)throw new Error('UNKNOWN_PROPOSAL');if(Date.now()>p.expiresAt){p.state='expired';proposals.delete(proposalId);throw new Error('EXPIRED_PROPOSAL');}return p;}
   function cancel(proposalId){const p=get(proposalId);p.state='cancelled';p.nonce=null;proposals.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,state:'cancelled',realDataChanged:false};}
@@ -20545,6 +20547,41 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const scheduleDate=matchingDates[0];
     return {kind:'write_proposal',actionId:'print_schedule.update',args:{scheduleId:scheduleDate,date:scheduleDate,items:clone(days[scheduleDate]&&days[scheduleDate].impressions||[]),notes:''},oldValue:{date:scheduleDate},newValue:{date:scheduleDate},answer:`Proposition de modification du planning d’impression du ${scheduleDate}. Aucune imprimante ne sera pilotée. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
   }
+  function localCashWriteRoute(message,currentData){
+    const q=normalizeIntent(message);
+    if(/\b(valide|valider|enregistre|enregistrer|confirme|confirmer|encaisse|encaisser)\b[\s\S]*\b(ticket|vente)\b|\b(ticket|vente)\b[\s\S]*\b(valide|valider|enregistre|enregistrer|confirme|confirmer|encaisse|encaisser)\b/.test(q))
+      return {kind:'direct',result:{outcome:'refusal',answer:'La validation d’une vente est interdite à cette étape. Aucun ticket ni aucune donnée financière n’a été modifié.',proposal:null,topic:'cash',missingInformation:[],readAction:null}};
+    const preparing=/\b(pr[eé]pare|preparer|prépare|préparer|mets|mettre)\b[\s\S]*\b(ticket|vente)\b/.test(q);
+    const correcting=/\b(corrige|corriger|modifie|modifier|change|changer)\b[\s\S]*\b(ticket|quantit[eé]|quantite)\b/.test(q);
+    const cancelling=/\b(annule|annuler|supprime|supprimer)\b[\s\S]*\b(ticket|brouillon)\b/.test(q);
+    if(!preparing&&!correcting&&!cancelling)return null;
+    const broker=root.JarvisWriteBroker6;
+    if(!broker)return {kind:'clarification',answer:'Le brouillon de ticket temporaire est indisponible.'};
+    if(cancelling&&session.pendingProposal&&session.pendingProposal.actionId==='cash.pending_ticket.prepare'){
+      try{broker.cancelProposal(session.pendingProposal.proposalId);session.pendingProposal=null;return {kind:'direct',result:{outcome:'direct_answer',answer:'Ticket provisoire annulé. Aucune vente ni écriture effectuée.',proposal:null,topic:'cash',missingInformation:[],readAction:null}};}catch(error){return {kind:'direct',result:{outcome:'refusal',answer:'Le ticket provisoire ne peut pas être annulé.',proposal:null,topic:'cash',missingInformation:[],readAction:null}};}
+    }
+    if(correcting&&session.pendingProposal&&session.pendingProposal.actionId==='cash.pending_ticket.prepare'){
+      const items=clone(session.pendingProposal.args&&session.pendingProposal.args.items||[]);
+      const qty=Number((q.match(/\b(?:a|à)\s*(\d+)\b$/)||q.match(/\bquantite\s+(\d+)\b/)||[])[1]||0);
+      if(!qty||!items.length)return {kind:'clarification',answer:'Quelle quantité veux-tu pour le ticket provisoire ?'};
+      items[0].quantity=qty;items[0].total=items[0].unitPrice===null?null:qty*Number(items[0].unitPrice||0);
+      return {kind:'write_proposal',actionId:'cash.pending_ticket.prepare',args:{items,note:session.pendingProposal.args&&session.pendingProposal.args.note||''},oldValue:session.pendingProposal.args&&session.pendingProposal.args.items||[],newValue:items,answer:'Proposition corrigée pour le ticket provisoire. Aucune vente ni écriture n’est exécutée. Confirme explicitement si tu veux poursuivre.'};
+    }
+    if(!preparing)return null;
+    const after=q.match(/\b(?:avec|de)\s+(.+)$/); const spec=after&&after[1]||'';
+    if(!spec)return {kind:'clarification',answer:'Quels produits et quelles quantités veux-tu mettre sur le ticket ?'};
+    const chunks=spec.split(/\s+et\s+/).map(s=>s.trim()).filter(Boolean),resolver=root.JarvisFinancialReadBroker5C||root.JarvisReadBroker5B||root.JarvisReadBroker;
+    if(!resolver||typeof resolver.resolveProduct!=='function')throw codedError('PRODUCT_RESOLVER_UNAVAILABLE','Le résolveur produit sécurisé est indisponible.');
+    const items=[];
+    for(const chunk of chunks){
+      const match=chunk.match(/^(\d+)\s+(.+)$/); if(!match)return {kind:'clarification',answer:'Précise la quantité de chaque produit.'};
+      let resolved;try{resolved=resolver.resolveProduct(currentData,match[2]);}catch(error){if(error&&(error.code==='PRODUCT_AMBIGUOUS'||error.message==='PRODUCT_AMBIGUOUS'))return {kind:'clarification',answer:'J’ai trouvé plusieurs produits correspondants. Lequel veux-tu mettre sur le ticket ?'};if(error&&(error.code==='PRODUCT_NOT_FOUND'||error.message==='PRODUCT_NOT_FOUND'))return {kind:'clarification',answer:'Je ne trouve pas ce produit dans le catalogue. Lequel veux-tu mettre sur le ticket ?'};throw error;}
+      const matches=resolved.matches||[];if(matches.length!==1)return {kind:'clarification',answer:matches.length?'J’ai trouvé plusieurs produits correspondants. Lequel veux-tu mettre sur le ticket ?':'Je ne trouve pas ce produit dans le catalogue. Lequel veux-tu mettre sur le ticket ?'};
+      const product=(currentData.products||[]).find(p=>String(p.id)===String(matches[0].id))||matches[0],unit=Number(product.price??product.prix??product.prixVente??product.unitPrice);const unitPrice=Number.isFinite(unit)?unit:null,quantity=Number(match[1]);
+      items.push({productId:product.id,name:product.name||product.nom||product.title||match[2],quantity,unitPrice,total:unitPrice===null?null:unitPrice*quantity});
+    }
+    return {kind:'write_proposal',actionId:'cash.pending_ticket.prepare',args:{items,note:''},oldValue:null,newValue:{items},answer:`Brouillon de ticket préparé avec ${items.map(item=>item.quantity+' × '+item.name).join(' et ')}. Aucune vente ni écriture n’est exécutée. Confirme explicitement si tu veux poursuivre.`};
+  }
   function appendMessage(role,content,outcome='direct_answer',proposal=null){
     const item={id:secureId(),role,content:normalizeText(content),outcome,proposal:proposal?clone(proposal):null,createdAt:Date.now()};
     session.messages.push(item);
@@ -20632,7 +20669,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         }
         return local;
       };
-      const localWrite=localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData);
+      const localWrite=localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData);
       const route=localWrite|| (broker?broker.route(message,session.pendingConsultation):{kind:'gateway'});
       let result;
       if(route.kind==='write_proposal'){
