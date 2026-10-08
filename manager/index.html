@@ -20447,6 +20447,40 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(newQuantity<0) return {kind:'direct',result:{outcome:'refusal',answer:'Cette modification produirait un stock négatif. Aucune proposition n’a été créée.',proposal:null,topic:'stock',missingInformation:[],readAction:null}};
     return {kind:'write_proposal',actionId:'stock.adjust',args:{productId:product.id,location,newQuantity},oldValue:oldQuantity,newValue:newQuantity,answer:`Proposition préparée : ${name}, ${location}, ${oldQuantity} → ${newQuantity}. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
   }
+  function localMarketWriteRoute(message,currentData){
+    const q=normalizeIntent(message);
+    const creating=/\b(?:ajoute|ajouter|cree|cr[eé]e|nouveau|enregistre|prepare|pr[eé]pare)\b[\s\S]*\bmarche\b/.test(q)&&!(/\b(?:modifie|modifier|change|changer|corrige|corriger)\b/.test(q));
+    const updating=/\b(?:modifie|modifier|change|changer|corrige|corriger|ajoute|ajouter|mets|met|fixe|fixer)\b[\s\S]*\bmarche\b/.test(q)&&!creating;
+    if(!creating&&!updating) return null;
+    const month={janvier:1,fevrier:2,'février':2,mars:3,avril:4,mai:5,juin:6,juillet:7,aout:8,'août':8,septembre:9,octobre:10,novembre:11,decembre:12,'décembre':12};
+    const dateMatch=q.match(/\b(\d{1,2})\s+([a-zà-ÿ]+)\s+(20\d{2})\b/);
+    const date=dateMatch&&month[dateMatch[2]]?`${dateMatch[3]}-${String(month[dateMatch[2]]).padStart(2,'0')}-${String(dateMatch[1]).padStart(2,'0')}`:null;
+    const explicitCreate=q.match(/\b(?:a|à)\s+(.+?)\s+le\s+(\d{1,2})\s+([a-zà-ÿ]+)\s+(20\d{2})\b/);
+    const explicitUpdate=q.match(/\b(?:de|du)\s+(.+?)\s+(?:du|le)\s+\d{1,2}\s+[a-zà-ÿ]+\s+20\d{2}\b/);
+    const explicitVille=explicitCreate?explicitCreate[1].trim():(explicitUpdate?explicitUpdate[1].trim():null);
+    const explicitDate=explicitCreate&&month[explicitCreate[3]]?`${explicitCreate[4]}-${String(month[explicitCreate[3]]).padStart(2,'0')}-${String(explicitCreate[2]).padStart(2,'0')}`:null;
+    const cityMatch=q.match(/\b(?:a|à)\s+(.+?)(?=\s+(?:le|du|de)\s+\d|$)/);
+    const cityFallback=q.match(/\b(?:a|à)\s+([a-zà-ÿ][a-zà-ÿ' -]*?)(?:\s+le\b|\s+du\b|\s+de\b|$)/);
+    const ville=explicitVille||(cityMatch&&cityMatch[1].trim())||(cityFallback&&cityFallback[1].trim())||null;
+    const resolvedDate=explicitDate||date;
+    const hoursMatch=q.match(/\b(?:de|entre)\s+(\d{1,2})h?\s*(?::|h)?\s*(\d{0,2})\s*(?:a|à|et)\s*(\d{1,2})h?\s*(?::|h)?\s*(\d{0,2})/);
+    const horaires=hoursMatch?`${hoursMatch[1]}h${hoursMatch[2]||'00'}–${hoursMatch[3]}h${hoursMatch[4]||'00'}`:null;
+    if(creating){
+      if(!ville||!resolvedDate) return {kind:'clarification',answer:'Pour créer ce marché, précise la ville et la date.'};
+      const tables=(q.match(/\b(\d+)\s+tables?\b/)||[])[1]||null;
+      const grilles=(q.match(/\b(\d+)\s+grilles?\b/)||[])[1]||null;
+      const barnum=(q.match(/\bbarnum\s+(oui|non)\b/)||[])[1]||null;
+      const note=(q.match(/\bnote\s+(.+)$/)||[])[1]||'';
+      const notes=[tables?`${tables} table(s)`:null,barnum?`barnum ${barnum}`:null,grilles?`${grilles} grille(s)`:null,note?`note ${note}`:null].filter(Boolean).join(', ');
+      return {kind:'write_proposal',actionId:'market.create',args:{ville,date:resolvedDate,horaires:horaires||'',notes},oldValue:null,newValue:{ville,date:resolvedDate,horaires:horaires||'',notes},answer:`Proposition de nouveau marché : ${ville}, ${resolvedDate}${horaires?' · '+horaires:''}${notes?' · '+notes:''}. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
+    }
+    if(/\bca\b|chiffre d affaires|recette/.test(q)) return {kind:'direct',result:{outcome:'refusal',answer:'La modification du CA marché est interdite. Aucune proposition n’a été créée.',proposal:null,topic:'market',missingInformation:[],readAction:null}};
+    const markets=Array.isArray(currentData&&currentData.marches)?currentData.marches:[];
+    const candidates=markets.filter(item=>item&&(!ville||normalizeIntent(item.ville||item.city||'').includes(ville))&&(!date||String(item.date||'')===date));
+    if(candidates.length!==1) return {kind:'clarification',answer:candidates.length?'J’ai trouvé plusieurs marchés correspondants. Lequel veux-tu modifier ?':'Je ne trouve pas ce marché. Quelle fiche veux-tu modifier ?'};
+    const market=candidates[0];
+    return {kind:'write_proposal',actionId:'market.update',args:{marketId:market.id,date:date||market.date,ville:ville||market.ville,horaires:horaires||market.horaires||'',notes:market.notes||''},oldValue:{ville:market.ville,date:market.date,horaires:market.horaires||'',notes:market.notes||''},newValue:{ville:ville||market.ville,date:date||market.date,horaires:horaires||market.horaires||'',notes:market.notes||''},answer:`Proposition de modification du marché ${ville||market.ville} le ${date||market.date}. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
+  }
   function appendMessage(role,content,outcome='direct_answer',proposal=null){
     const item={id:secureId(),role,content:normalizeText(content),outcome,proposal:proposal?clone(proposal):null,createdAt:Date.now()};
     session.messages.push(item);
@@ -20534,7 +20568,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         }
         return local;
       };
-      const localWrite=localStockWriteRoute(message,currentData);
+      const localWrite=localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData);
       const route=localWrite|| (broker?broker.route(message,session.pendingConsultation):{kind:'gateway'});
       let result;
       if(route.kind==='write_proposal'){
