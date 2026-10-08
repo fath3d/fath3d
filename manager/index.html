@@ -21035,6 +21035,10 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   let lastResponse=null;
   let lastSendError='';
   let responseHook=null;
+  let speechGeneration=0;
+  let speechUtterance=null;
+  let speechVoice=null;
+  let speechVoicesReady=false;
 
   function clearRecovery(){
     if(recoveryTimer!==null){ root.clearTimeout(recoveryTimer); recoveryTimer=null; }
@@ -21133,8 +21137,63 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     return true;
   }
 
+  function availableVoices(){
+    try{
+      return root.speechSynthesis&&typeof root.speechSynthesis.getVoices==='function'
+        ? root.speechSynthesis.getVoices()||[] : [];
+    }catch(error){ return []; }
+  }
+
+  function chooseSpeechVoice(){
+    const voices=availableVoices();
+    const french=voices.filter(voice=>/^fr(?:[-_]|$)/i.test(String(voice&&voice.lang||'')));
+    const female=french.find(voice=>String(voice&&voice.gender||'').toLowerCase()==='female');
+    speechVoice=female||french[0]||voices[0]||null;
+    speechVoicesReady=voices.length>0;
+    return speechVoice;
+  }
+
   function cancelSpeech(){
+    speechGeneration+=1;
+    speechUtterance=null;
     try{ if(root.speechSynthesis && typeof root.speechSynthesis.cancel==='function') root.speechSynthesis.cancel(); }catch(error){}
+  }
+
+  function finishSpeech(generation){
+    if(generation!==speechGeneration) return false;
+    speechUtterance=null;
+    if(desiredOn && state===STATES.SPEAKING){
+      transition(STATES.WAITING_WAKE_WORD,{detail:'Parole terminée · attente du mot « Jarvis »'});
+    }
+    return true;
+  }
+
+  function speakResponse(text){
+    const phrase=String(text||'').trim();
+    if(!phrase || !root.speechSynthesis || typeof root.speechSynthesis.speak!=='function' || typeof root.SpeechSynthesisUtterance!=='function') return false;
+    cancelSpeech();
+    const currentGeneration=speechGeneration;
+    let utterance;
+    try{ utterance=new root.SpeechSynthesisUtterance(phrase); }catch(error){ return false; }
+    const voice=chooseSpeechVoice();
+    if(voice) utterance.voice=voice;
+    utterance.lang=(voice&&voice.lang)||'fr-FR';
+    utterance.onend=()=>finishSpeech(currentGeneration);
+    utterance.onerror=()=>finishSpeech(currentGeneration);
+    speechUtterance=utterance;
+    try{
+      if(state!==STATES.SPEAKING) transition(STATES.SPEAKING,{detail:'Jarvis parle'});
+      root.speechSynthesis.speak(utterance);
+      return true;
+    }catch(error){
+      finishSpeech(currentGeneration);
+      return false;
+    }
+  }
+
+  function speakResponseHook(payload){
+    const answer=payload&&payload.result&&payload.result.answer;
+    return speakResponse(answer);
   }
 
   function detectedEngine(){
@@ -21628,6 +21687,16 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     return !!responseHook;
   }
 
+  function getSpeechState(){
+    return Object.freeze({
+      available:!!(root.speechSynthesis&&typeof root.speechSynthesis.speak==='function'&&typeof root.SpeechSynthesisUtterance==='function'),
+      voicesReady:speechVoicesReady,
+      voice:speechVoice&&{name:speechVoice.name||'',lang:speechVoice.lang||'',gender:speechVoice.gender||''}||null,
+      speaking:state===STATES.SPEAKING,
+      generation:speechGeneration
+    });
+  }
+
   async function handleVisibility(){
     if(!desiredOn) return;
     if(document.visibilityState==='hidden'){
@@ -21659,6 +21728,11 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   root.addEventListener('pagehide',()=>forceOff('fermeture de page'));
   root.addEventListener('beforeunload',()=>forceOff('rechargement'));
 
+  if(root.speechSynthesis && typeof root.speechSynthesis.addEventListener==='function'){
+    root.speechSynthesis.addEventListener('voiceschanged',()=>{ chooseSpeechVoice(); render(); });
+  }
+  chooseSpeechVoice();
+  responseHook=speakResponseHook;
   forceOff('chargement');
   refreshPermissionDiagnostic().catch(()=>{});
 
@@ -21684,6 +21758,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     createDetectedAdapter,
     configureForTests,
     getDiagnostics,
+    getSpeechState,
+    speak:speakResponse,
     consumeCapturedCommand,
     setResponseHook,
     refreshPermissionDiagnostic
