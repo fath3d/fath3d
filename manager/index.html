@@ -19769,6 +19769,19 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
   function resolveProductMatch(data,message){
     const products=projectProducts(data);
     const prepared=tokens(String(message||'')).join(' ')||String(message||'');
+    // Quand une catégorie est explicitement mentionnée avec un nom,
+    // restreindre d'abord la projection à cette catégorie puis appliquer
+    // le même scoring produit. Cela évite que « ZORO en HueForge » soit
+    // traité comme une consultation générique de tous les Hueforge.
+    const normalizedPrepared=normalize(prepared);
+    const categories=[...new Set(products.map(product=>normalize(product.category)).filter(Boolean))];
+    const category=categories.find(value=>value&&normalizedPrepared.includes(value));
+    if(category){
+      const scoped=products.filter(product=>normalize(product.category)===category);
+      const scopedQuery=normalizedPrepared.replace(new RegExp('\\b'+category.replace(/\\s+/g,'\\s+')+'\\b','g'),' ').replace(/\\s+/g,' ').trim()||prepared;
+      const scopedMatch=resolveItems(scoped,scopedQuery,['name','variant']);
+      if(scopedMatch.matches.length) return scopedMatch;
+    }
     return productMatches(products,prepared);
   }
   function availableLocations(products){
