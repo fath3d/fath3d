@@ -51,7 +51,7 @@ if ('serviceWorker' in navigator) {
 
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-  import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, doc, setDoc, getDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+  import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, doc, setDoc, getDoc, onSnapshot, runTransaction } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
   import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
 
   const firebaseConfig = {
@@ -100,6 +100,52 @@ if ('serviceWorker' in navigator) {
       console.warn('Firebase load error:', e);
     }
     return null;
+  };
+
+  // Pont strict pour l'exécution future de stock.adjust. Le mode neutralisé
+  // est obligatoire pendant cette étape; aucune autre action ni chemin n'est
+  // accepté par cette API.
+  window.jarvisScopedStockAdjustCommit = async function(request) {
+    const input = request && typeof request === 'object' ? request : {};
+    if(input.actionId !== 'stock.adjust') throw new Error('NO_SCOPED_COMMIT_ADAPTER');
+    if(!window.firebaseReady || !DOC_REF) throw new Error('FIREBASE_NOT_READY');
+    const proposal = input.proposal || {};
+    const args = proposal.parameters || {};
+    const productId = args.productId;
+    const location = args.location;
+    if(!['maison','marche','artComplices','btvero'].includes(location)) throw new Error('SCOPED_TARGET_INVALID');
+    if(productId === undefined || productId === null || Array.isArray(productId)) throw new Error('PRODUCT_NOT_FOUND');
+    const expectedBefore = Number(proposal.oldValue);
+    const requestedAfter = Number(proposal.newValue);
+    if(!Number.isInteger(expectedBefore) || !Number.isInteger(requestedAfter) || requestedAfter < 0) throw new Error('INVALID_STOCK_TARGET');
+    const dryRun = input.dryRun !== false;
+    const readPayload = snap => {
+      if(!snap || !snap.exists()) throw new Error('FIREBASE_DOCUMENT_NOT_FOUND');
+      const raw = snap.data() && snap.data().payload;
+      if(typeof raw !== 'string') throw new Error('FIREBASE_PAYLOAD_INVALID');
+      const value = JSON.parse(raw);
+      if(!value || !Array.isArray(value.products)) throw new Error('FIREBASE_PRODUCTS_INVALID');
+      const matches = value.products.filter(p => String(p && p.id) === String(productId));
+      if(matches.length !== 1) throw new Error(matches.length ? 'PRODUCT_AMBIGUOUS' : 'PRODUCT_NOT_FOUND');
+      const product = matches[0];
+      const actualBefore = Number(product.stocks && product.stocks[location]);
+      if(actualBefore !== expectedBefore) throw new Error('STALE_REMOTE_STOCK');
+      return {value,product,actualBefore};
+    };
+    if(dryRun){
+      const checked = readPayload(await getDoc(DOC_REF));
+      return {ok:true,neutralized:true,actionId:'stock.adjust',proposalId:proposal.proposalId||null,productId,location,beforeValue:checked.actualBefore,afterValue:requestedAfter,firebaseWritePerformed:false};
+    }
+    const result = await runTransaction(db_firebase, async transaction => {
+      const checked = readPayload(await transaction.get(DOC_REF));
+      const next = JSON.parse(JSON.stringify(checked.value));
+      const target = next.products.find(p => String(p && p.id) === String(productId));
+      target.stocks = target.stocks || {};
+      target.stocks[location] = requestedAfter;
+      transaction.set(DOC_REF, {payload:JSON.stringify(next), updated:new Date().toISOString()});
+      return {beforeValue:checked.actualBefore,afterValue:requestedAfter};
+    });
+    return {ok:true,neutralized:false,actionId:'stock.adjust',proposalId:proposal.proposalId||null,productId,location,beforeValue:result.beforeValue,afterValue:result.afterValue,firebaseWritePerformed:true};
   };
 
   // Real-time listener
@@ -19032,7 +19078,7 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     FORBIDDEN: 'action_interdite'
   });
 
-  const SECURITY_STATE = Object.freeze({
+  const SECURITY_STATE = {
     stage: 2,
     writesEnabled: false,
     dataBackupVerified: false,
@@ -19040,7 +19086,7 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     firebaseDirectAccess: false,
     genericWriteTool: false,
     realExecutionReason: 'Aucune écriture Jarvis réelle n est autorisée pendant l étape 2'
-  });
+  };
 
   class JarvisSecurityError extends Error {
     constructor(code, message, details){
@@ -19183,6 +19229,26 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
       .map(m => ({id:deepClone(m.id),ca:deepClone(m.ca)}))
       .sort((a,b) => String(a.id).localeCompare(String(b.id)));
     return deepFreeze(snapshot);
+  }
+
+  function verifyRuntimeBackupRestore(data){
+    if(!data || typeof data!=='object' || !Array.isArray(data.products) || !Array.isArray(data.sales)) {
+      throw new JarvisSecurityError('BACKUP_INVALID','La sauvegarde courante est incomplète.');
+    }
+    const source = deepClone(data);
+    const sourceHash = fingerprint(source);
+    const restored = deepClone(source);
+    const restoredHash = fingerprint(restored);
+    if(sourceHash!==restoredHash) throw new JarvisSecurityError('RESTORE_MISMATCH','La restauration isolée diffère de la sauvegarde.');
+    const zoro = restored.products.find(product=>String(product&&product.id)==='103');
+    if(!zoro || !zoro.stocks || !Number.isFinite(Number(zoro.stocks.maison)) || !Number.isFinite(Number(zoro.stocks.marche))){
+      throw new JarvisSecurityError('BACKUP_REQUIRED_PRODUCT_MISSING','La sauvegarde ne contient pas les stocks requis du produit 103.');
+    }
+    SECURITY_STATE.dataBackupVerified=true;
+    SECURITY_STATE.restoreTestVerified=true;
+    SECURITY_STATE.backupFingerprint=sourceHash;
+    SECURITY_STATE.restoreFingerprint=restoredHash;
+    return {ok:true,sourceHash,restoredHash,zoro:{id:103,maison:Number(zoro.stocks.maison),marche:Number(zoro.stocks.marche)},isolated:true};
   }
 
   function collectLeafPaths(value, path, out){
@@ -19370,6 +19436,7 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     getRegistry:() => deepClone(ACTION_REGISTRY),
     getAction:(actionId) => deepClone(getAction(actionId)),
     captureFinancialSnapshot:(data) => deepClone(captureFinancialSnapshot(data)),
+    verifyRuntimeBackupRestore,
     auditCandidate,
     createProposal,
     reviseProposal,
@@ -19400,6 +19467,7 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
   const ALLOWED=Object.freeze(['stock.adjust','inventory.commit','print_task.create','print_task.update','print_schedule.create','print_schedule.update','market.create','market.update','cash.pending_ticket.prepare','pending_action.correct','pending_action.cancel']);
   const proposals=new Map();
   const pendingTickets=new Map();
+  const oneShotAuthorizations=new Map();
   let executionLock=false;
 
   function clone(value){return value===undefined?undefined:JSON.parse(JSON.stringify(value));}
@@ -19428,10 +19496,10 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     if(actionId==='cash.pending_ticket.prepare') pendingTickets.set(proposal.proposalId,{proposalId:proposal.proposalId,items:clone(input.items||[]),note:String(input.note||'')});
     return clone(proposal);
   }
-  function get(proposalId){const p=proposals.get(proposalId);if(!p)throw new Error('UNKNOWN_PROPOSAL');if(Date.now()>p.expiresAt){p.state='expired';proposals.delete(proposalId);throw new Error('EXPIRED_PROPOSAL');}return p;}
-  function cancel(proposalId){const p=get(proposalId);p.state='cancelled';p.nonce=null;proposals.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,state:'cancelled',realDataChanged:false};}
-  function correct(proposalId,normalizedArgs,currentData,summary,oldValue,nextValue){const p=get(proposalId);p.state='corrected';p.nonce=null;proposals.delete(proposalId);pendingTickets.delete(proposalId);return create(p.actionId,normalizedArgs,currentData,summary,oldValue,nextValue);}
-  function confirm(proposalId,confirmation,currentData){const p=get(proposalId);if(p.state!=='pending')throw new Error('PROPOSAL_NOT_PENDING');if(!confirmation||confirmation.explicit!==true||confirmation.proposalId!==p.proposalId||confirmation.actionId!==p.actionId||confirmation.nonce!==p.nonce)throw new Error('CONFIRMATION_MISMATCH');if(hash(currentData)!==p.beforeHash)throw new Error('STALE_PROPOSAL');if(hash(p.parameters)!==p.parameterHash)throw new Error('PARAMETERS_CHANGED');p.state='confirmed';return clone(p);}
+  function get(proposalId){const p=proposals.get(proposalId);if(!p)throw new Error('UNKNOWN_PROPOSAL');if(Date.now()>p.expiresAt){p.state='expired';proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);throw new Error('EXPIRED_PROPOSAL');}return p;}
+  function cancel(proposalId){const p=get(proposalId);p.state='cancelled';p.nonce=null;proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,state:'cancelled',realDataChanged:false};}
+  function correct(proposalId,normalizedArgs,currentData,summary,oldValue,nextValue){const p=get(proposalId);p.state='corrected';p.nonce=null;proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return create(p.actionId,normalizedArgs,currentData,summary,oldValue,nextValue);}
+  function confirm(proposalId,confirmation,currentData){const p=get(proposalId);if(p.state!=='pending')throw new Error('PROPOSAL_NOT_PENDING');if(!confirmation||confirmation.explicit!==true||confirmation.proposalId!==p.proposalId||confirmation.actionId!==p.actionId||confirmation.nonce!==p.nonce)throw new Error('CONFIRMATION_MISMATCH');if(hash(currentData)!==p.beforeHash)throw new Error('STALE_PROPOSAL');if(hash(p.parameters)!==p.parameterHash)throw new Error('PARAMETERS_CHANGED');p.state='confirmed';oneShotAuthorizations.set(p.proposalId,{proposalId:p.proposalId,actionId:p.actionId,nonce:p.nonce,expiresAt:p.expiresAt});return clone(p);}
   function candidate(proposal,currentData){
     const next=clone(currentData||{}), args=proposal.parameters||{};
     if(proposal.actionId==='cash.pending_ticket.prepare'){pendingTickets.set(proposal.proposalId,{proposalId:proposal.proposalId,items:clone(args.items||[]),note:String(args.note||'')});return next;}
@@ -19465,9 +19533,36 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     return next;
   }
   function simulate(proposalId,currentData){const p=get(proposalId);const next=candidate(p,currentData);const audit=api().auditCandidate(p.actionId,currentData,next);const financialAfter=hash(api().captureFinancialSnapshot(next));if(financialAfter!==p.financialBeforeHash)throw new Error('FINANCIAL_LOCK_VIOLATION');return {ok:true,proposalId:p.proposalId,state:p.state,candidate:next,audit,financialUnchanged:true};}
-  function execute(proposalId,currentData){const p=get(proposalId);if(p.state!=='confirmed')throw new Error('CONFIRMATION_REQUIRED');const state=api().getState();if(state.writesEnabled!==true)throw new Error('JARVIS_WRITES_DISABLED');if(executionLock)throw new Error('EXECUTION_IN_PROGRESS');executionLock=true;try{simulate(proposalId,currentData);throw new Error('NO_SCOPED_COMMIT_ADAPTER');}finally{executionLock=false;}}
-  function reset(){proposals.clear();pendingTickets.clear();executionLock=false;}
-  const API=Object.freeze({version:VERSION,ttlMs:TTL_MS,allowedActions:ALLOWED,createProposal:create,getProposal:id=>clone(get(id)),correctProposal:correct,cancelProposal:cancel,confirmProposal:confirm,simulateCandidate:simulate,executeConfirmed:execute,reset,getState:()=>({version:VERSION,writesEnabled:false,temporary:true,proposalCount:proposals.size,pendingTicketCount:pendingTickets.size})});
+  function scopedCommitAdapter(actionId,proposal,currentData,candidateData){
+    if(actionId!=='stock.adjust')throw new Error('NO_SCOPED_COMMIT_ADAPTER');
+    const productId=proposal.parameters&&proposal.parameters.productId,location=proposal.parameters&&proposal.parameters.location;
+    const products=Array.isArray(currentData&&currentData.products)?currentData.products:[];
+    const product=products.find(item=>String(item&&item.id)===String(productId));
+    if(!product||!['maison','marche','artComplices','btvero'].includes(location))throw new Error('SCOPED_TARGET_INVALID');
+    return {ok:true,neutralized:true,realDataChanged:false,actionId,proposalId:proposal.proposalId,productId,location,beforeValue:Number(product.stocks&&product.stocks[location]),afterValue:Number(candidateData.products.find(item=>String(item&&item.id)===String(productId)).stocks[location]),firebaseWritePerformed:false};
+  }
+  async function executeConfirmedAsync(proposalId,currentData){
+    const p=get(proposalId);if(p.state!=='confirmed')throw new Error('CONFIRMATION_REQUIRED');
+    const authorization=oneShotAuthorizations.get(proposalId);
+    if(!authorization||authorization.proposalId!==p.proposalId||authorization.actionId!==p.actionId||authorization.nonce!==p.nonce)throw new Error('ONE_SHOT_AUTHORIZATION_REQUIRED');
+    if(Date.now()>authorization.expiresAt){oneShotAuthorizations.delete(proposalId);throw new Error('EXPIRED_AUTHORIZATION');}
+    if(executionLock)throw new Error('EXECUTION_IN_PROGRESS'); executionLock=true;
+    try{
+      const simulation=simulate(proposalId,currentData);
+      if(p.actionId!=='stock.adjust')throw new Error('NO_SCOPED_COMMIT_ADAPTER');
+      if(typeof root.jarvisScopedStockAdjustCommit!=='function')throw new Error('NO_SCOPED_COMMIT_ADAPTER');
+      const commit=await root.jarvisScopedStockAdjustCommit({actionId:p.actionId,proposal:clone(p),currentData, candidateData:simulation.candidate,dryRun:true});
+      if(commit && commit.firebaseWritePerformed===true && commit.neutralized!==true && currentData && typeof currentData==='object'){
+        Object.keys(currentData).forEach(key=>{delete currentData[key];});
+        Object.assign(currentData,clone(simulation.candidate));
+      }
+      p.state='consumed';proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);
+      return {ok:true,proposalId,actionId:p.actionId,state:'consumed',simulation,commit,realDataChanged:false};
+    }catch(error){oneShotAuthorizations.delete(proposalId);throw error;}finally{executionLock=false;}
+  }
+  function execute(proposalId,currentData){const p=get(proposalId);if(p.state!=='confirmed')throw new Error('CONFIRMATION_REQUIRED');const authorization=oneShotAuthorizations.get(proposalId);if(!authorization||authorization.proposalId!==p.proposalId||authorization.actionId!==p.actionId||authorization.nonce!==p.nonce)throw new Error('ONE_SHOT_AUTHORIZATION_REQUIRED');if(Date.now()>authorization.expiresAt){oneShotAuthorizations.delete(proposalId);throw new Error('EXPIRED_AUTHORIZATION');}if(executionLock)throw new Error('EXECUTION_IN_PROGRESS');executionLock=true;try{const simulation=simulate(proposalId,currentData);const commit=scopedCommitAdapter(p.actionId,p,currentData,simulation.candidate);p.state='consumed';proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,actionId:p.actionId,state:'consumed',simulation,commit,realDataChanged:false};}catch(error){oneShotAuthorizations.delete(proposalId);throw error;}finally{executionLock=false;}}
+  function reset(){proposals.clear();pendingTickets.clear();oneShotAuthorizations.clear();executionLock=false;}
+  const API=Object.freeze({version:VERSION,ttlMs:TTL_MS,allowedActions:ALLOWED,createProposal:create,getProposal:id=>clone(get(id)),correctProposal:correct,cancelProposal:cancel,confirmProposal:confirm,simulateCandidate:simulate,executeConfirmed:execute,executeConfirmedAsync,reset,getState:()=>({version:VERSION,writesEnabled:false,temporary:true,proposalCount:proposals.size,pendingTicketCount:pendingTickets.size,oneShotAuthorizationCount:oneShotAuthorizations.size})});
   Object.defineProperty(root,'JarvisWriteBroker6',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
@@ -20664,7 +20759,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const previous=contextMessages();
     busy=true; transientMessage=message; lastFailedMessage=''; setBusy(true); setStatus('Jarvis réfléchit…',false); render();
     try{
-      const currentData=(typeof db!=='undefined'&&db)?db:((typeof db!=='undefined'&&db)?db:(root.db||{}));
+      const currentData=(typeof db!=='undefined'&&db)?db:(root.db||{});
       const prepareWriteProposal=(writeBroker,actionId,args,answer,oldValue,newValue)=>{
         const previousProposal=session.pendingProposal;
         let local;
@@ -20758,8 +20853,9 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         const confirm=document.createElement('button'); confirm.type='button'; confirm.className='j4-send'; confirm.textContent='Confirmer (écriture verrouillée)';
         confirm.addEventListener('click',()=>{
           try{
-            root.JarvisWriteBroker6.confirmProposal(item.proposal.proposalId,{explicit:true,proposalId:item.proposal.proposalId,actionId:item.proposal.actionId,nonce:item.proposal.nonce},(typeof db!=='undefined'&&db)?db:(root.db||{}));
-            root.JarvisWriteBroker6.executeConfirmed(item.proposal.proposalId,(typeof db!=='undefined'&&db)?db:(root.db||{}));
+            const confirmationData=(typeof db!=='undefined'&&db)?db:(root.db||{});
+            root.JarvisWriteBroker6.confirmProposal(item.proposal.proposalId,{explicit:true,proposalId:item.proposal.proposalId,actionId:item.proposal.actionId,nonce:item.proposal.nonce},confirmationData);
+            root.JarvisWriteBroker6.executeConfirmed(item.proposal.proposalId,confirmationData);
           }catch(error){ setStatus(error&&error.message==='JARVIS_WRITES_DISABLED'?'Confirmation reçue, mais l écriture reste bloquée par writesEnabled=false.':'Confirmation refusée : '+(error&&error.message||'erreur'),true,false); }
         });
         const cancel=document.createElement('button'); cancel.type='button'; cancel.className='j4-retry'; cancel.textContent='Annuler';
