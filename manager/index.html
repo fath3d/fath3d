@@ -19985,22 +19985,22 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     const daily=[];
     Object.entries(data.planningJour&&typeof data.planningJour==='object'?data.planningJour:{}).forEach(([date,day])=>{
       (Array.isArray(day&&day.impressions)?day.impressions:[]).forEach((item,index)=>daily.push({
-        source:'planningJour',id:'jour:'+date+':'+index,date,name:String(item.nom||item.name||'Impression'),part:item.part?String(item.part):null,
+        source:'planningJour',index,date,id:'jour:'+date+':'+index,date,name:String(item.nom||item.name||item.title||'Impression'),part:item.part?String(item.part):null,
         printer:String(item.printer||''),status:item.done===true?'done':'queue',start:item.heureDebut?String(item.heureDebut):null,end:item.heureFin?String(item.heureFin):null,
         durationMinutes:numberOrNull(item.dureeMinutes),done:item.done===true,type:item.type?String(item.type):(item.hasTpl?'hf':null),order:numberOrNull(item.ord)
       }));
       (Array.isArray(day&&day.taches)?day.taches:[]).forEach((item,index)=>daily.push({
-        source:'planningJour',id:'task:'+date+':'+index,date,name:String(item.nom||item.texte||item.name||'Tâche'),part:null,printer:'',status:item.done===true?'done':'task',
+        source:'planningJour',index,date,id:'task:'+date+':'+index,date,name:String(item.nom||item.texte||item.name||item.title||'Tâche'),part:null,printer:'',status:item.done===true?'done':'task',
         start:item.heure?String(item.heure):null,end:null,durationMinutes:null,done:item.done===true,type:'task',order:null
       }));
     });
     const legacy=(Array.isArray(data.planningJobs)?data.planningJobs:[]).map((item,index)=>({
-      source:'planningJobs',id:'legacy:'+(item.id===undefined?index:item.id),date:item.date?String(item.date):null,name:String(item.name||item.nom||'Impression'),part:null,
+      source:'planningJobs',index,id:'legacy:'+(item.id===undefined?index:item.id),date:item.date?String(item.date):null,name:String(item.name||item.nom||item.title||'Impression'),part:null,
       printer:String(item.printer||''),status:String(item.status||'queue'),start:item.start?String(item.start):null,end:item.end?String(item.end):null,
       durationMinutes:numberOrNull(item.dur)===null?numberOrNull(item.dureeMinutes):numberOrNull(item.dur)*60,done:item.status==='done',type:item.type?String(item.type):null,order:numberOrNull(item.createdAt),startedAt:numberOrNull(item.startedAt)
     }));
     const queue=(Array.isArray(data.printQueue)?data.printQueue:[]).map((item,index)=>({
-      source:'printQueue',id:'queue:'+(item.id===undefined?index:item.id),date:null,name:String(item.nom||item.name||'Impression'),part:null,printer:'',status:'queue',start:null,end:null,
+      source:'printQueue',index,id:'queue:'+(item.id===undefined?index:item.id),date:null,name:String(item.nom||item.name||item.title||'Impression'),part:null,printer:'',status:'queue',start:null,end:null,
       durationMinutes:numberOrNull(item.dureeMinutes),done:false,type:item.hasTpl?'hf':null,order:numberOrNull(item.createdAt)
     }));
     const templates=(Array.isArray(data.hfTemplates)?data.hfTemplates:[]).map((item,index)=>({id:item.id===undefined?index:item.id,name:String(item.name||''),durationMinutes:numberOrNull(item.dur)===null?numberOrNull(item.dureeMinutes):numberOrNull(item.dur)*60,colors:Array.isArray(item.colors)?item.colors.map(color=>typeof color==='string'?color:String(color&&color.name||color&&color.hex||'')).filter(Boolean):[],swaps:Array.isArray(item.swaps)?item.swaps.length:0}));
@@ -20146,8 +20146,9 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     return baseRoute.kind==='gateway'?freeze({kind:'gateway'}):baseRoute;
   }
   function getAllowedActions(){ return [...base.getAllowedActions(),...NEW_ACTIONS]; }
+  function resolvePrintingTasks(data,message){ return printingMatches(projectPrinting(data).jobs,String(message||'')); }
   function getState(){ return {stage:'5B',version:VERSION,writesEnabled:false,persistentConversation:false,genericReadPath:false,maxFacts:MAX_FACTS,printerPhysicalControl:false,aggregateCashTotals:false,marketRevenue:false,allowedActions:getAllowedActions()}; }
-  const API=freeze({version:VERSION,getState,getAllowedActions,route,consult,normalize,similarity:base.similarity,resolveProduct:base.resolveProduct,resolveMarket:(data,criteria)=>resolveMarketMatch(data,criteria)});
+  const API=freeze({version:VERSION,getState,getAllowedActions,route,consult,normalize,similarity:base.similarity,resolveProduct:base.resolveProduct,resolveMarket:(data,criteria)=>resolveMarketMatch(data,criteria),projectPrinting,resolvePrintingTasks});
   Object.defineProperty(root,'JarvisReadBroker5B',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
@@ -20520,16 +20521,18 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       if(!date)return {kind:'clarification',answer:'Pour créer ce planning, précise la date.'};
       return {kind:'write_proposal',actionId:'print_schedule.create',args:{date,items:[],notes:''},oldValue:null,newValue:{date,items:[],notes:''},answer:`Proposition de planning d’impression pour le ${date}. Aucune imprimante ne sera pilotée. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
     }
-    const tasks=[];
-    (Array.isArray(currentData&&currentData.planningJobs)?currentData.planningJobs:[]).forEach((item,index)=>tasks.push({item,taskId:item.id===undefined?`legacy:${index}`:item.id,title:item.title||item.name||item.nom||''}));
-    Object.entries(currentData&&currentData.planningJour&&typeof currentData.planningJour==='object'?currentData.planningJour:{}).forEach(([day,entry])=>{
-      (Array.isArray(entry&&entry.impressions)?entry.impressions:[]).forEach((item,index)=>tasks.push({item,taskId:`jour:${day}:${index}`,title:item.nom||item.name||item.title||''}));
-      (Array.isArray(entry&&entry.taches)?entry.taches:[]).forEach((item,index)=>tasks.push({item,taskId:`task:${day}:${index}`,title:item.nom||item.name||item.texte||item.title||''}));
-    });
-    (Array.isArray(currentData&&currentData.printQueue)?currentData.printQueue:[]).forEach((item,index)=>tasks.push({item,taskId:item.id===undefined?`queue:${index}`:item.id,title:item.nom||item.name||item.title||''}));
+    const sharedProjection=root.JarvisReadBroker5B&&typeof root.JarvisReadBroker5B.projectPrinting==='function'?root.JarvisReadBroker5B.projectPrinting(currentData):null;
+    const tasks=(sharedProjection?sharedProjection.jobs:[]).map(ref=>{
+      let item=null;
+      if(ref.source==='planningJobs') item=(currentData.planningJobs||[])[ref.index];
+      else if(ref.source==='printQueue') item=(currentData.printQueue||[])[ref.index];
+      else { const day=(currentData.planningJour||{})[ref.date]||{}; const list=ref.id.startsWith('jour:')?day.impressions:day.taches; item=(list||[])[ref.index]; }
+      return {item,taskId:ref.id,title:ref.name};
+    }).filter(ref=>ref.item);
     if(updateTask){
-      const wanted=(q.match(/\btache\b[\s\S]*?\b(?:impression|imprimante)\b\s+(.+?)(?:,|\s+quantit[ée]\b|$)/)||[])[1]||'';
-      const candidates=tasks.filter(ref=>{const hay=normalizeIntent(ref.title);return !wanted||hay.includes(wanted)||wanted.split(' ').filter(Boolean).every(t=>hay.includes(t));});
+      const wanted=(q.match(/\btache\b[\s\S]*?\b(?:impression|imprimante)\b\s+(.+?)(?:\s+quantite\b|$)/)||[])[1]||'';
+      const commonMatches=root.JarvisReadBroker5B&&typeof root.JarvisReadBroker5B.resolvePrintingTasks==='function'?root.JarvisReadBroker5B.resolvePrintingTasks(currentData,wanted):null;
+      const candidates=tasks.filter(ref=>!commonMatches||commonMatches.some(match=>match.id===ref.taskId));
       if(!candidates.length)return {kind:'clarification',answer:'Je ne trouve pas cette tâche d’impression.'};
       if(candidates.length>1)return {kind:'clarification',answer:'J’ai trouvé plusieurs tâches d’impression correspondantes. Laquelle veux-tu modifier ?'};
       const ref=candidates[0],task=ref.item,quantity=Number((q.match(/\bquantit[ée]\s+(\d+)/)||[])[1]||task.quantity||1);
