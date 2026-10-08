@@ -20940,11 +20940,11 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   Object.defineProperty(root,'JarvisConversation',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
-<script id="jarvis-voice7-step7b">
+<script id="jarvis-voice7-step7c">
 (function(root){
   'use strict';
 
-  const VERSION='7B.0.0';
+  const VERSION='7C.0.0';
   const OWNER='jarvis-voice7';
   const DEFAULT_COMMAND_WINDOW_MS=10000;
   const DEFAULT_RESTART_BASE_MS=250;
@@ -21028,6 +21028,13 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   let lastCommandAt=0;
   let lastStopReason='chargement';
   let permissionState='unknown';
+  let recognitionCycle=0;
+  let processedFinalResults=new Set();
+  let processingPromise=null;
+  let voiceSendCount=0;
+  let lastResponse=null;
+  let lastSendError='';
+  let responseHook=null;
 
   function clearRecovery(){
     if(recoveryTimer!==null){ root.clearTimeout(recoveryTimer); recoveryTimer=null; }
@@ -21194,16 +21201,66 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     return '';
   }
 
-  function captureCommand(command){
+  function extractFinalTranscript(event){
+    if(typeof event==='string') return Object.freeze({final:true,transcript:event.trim(),resultIndex:0});
+    const results=event&&event.results;
+    if(!results||!results.length) return Object.freeze({final:false,transcript:'',resultIndex:-1});
+    const start=Math.max(0,Number(event.resultIndex)||0);
+    for(let i=results.length-1;i>=start;i--){
+      const result=results[i];
+      if(result&&result.isFinal===false) continue;
+      const alternative=result&&result[0];
+      const transcript=alternative&&alternative.transcript;
+      if(transcript) return Object.freeze({final:true,transcript:String(transcript).trim(),resultIndex:i});
+    }
+    return Object.freeze({final:false,transcript:'',resultIndex:start});
+  }
+
+  async function sendCommandToConversation(command){
     const value=String(command||'').trim();
-    if(!value) return false;
+    if(!value) return Object.freeze({handled:false,reason:'empty',state});
+    if(processingPromise||state===STATES.PROCESSING) return Object.freeze({handled:false,reason:'processing',state});
+    const conversation=root.JarvisConversation;
+    if(!conversation||typeof conversation.sendText!=='function'){
+      lastSendError='Le handler texte Jarvis est indisponible.';
+      lastError=lastSendError;
+      transition(STATES.ERROR,{keepError:true,detail:lastSendError});
+      throw new Error('JARVIS_CONVERSATION_HANDLER_MISSING');
+    }
     clearCommandWindow();
     lastCommand=value;
     lastCommandAt=Date.now();
     restartAttempts=0;
-    transition(STATES.PROCESSING,{detail:'Commande vocale capturée pour la future étape 7C · aucun envoi'});
-    transition(STATES.WAITING_WAKE_WORD,{detail:'Commande prête pour 7C · aucun appel à sendText()'});
-    return true;
+    lastSendError='';
+    const expectedGeneration=generation;
+    transition(STATES.PROCESSING,{detail:'Commande vocale transmise au même handler que la saisie texte'});
+    voiceSendCount+=1;
+    const task=(async()=>{
+      try{
+        const result=await conversation.sendText(value);
+        lastResponse=result||null;
+        if(typeof responseHook==='function'){
+          try{ await responseHook(Object.freeze({command:value,result:lastResponse})); }catch(error){}
+        }
+        if(desiredOn&&generation===expectedGeneration&&state===STATES.PROCESSING){
+          transition(STATES.WAITING_WAKE_WORD,{detail:'Commande traitée par Jarvis · retour à l’attente du wake word'});
+          if(!recognitionStarted) scheduleRestart('processing-complete');
+        }
+        return Object.freeze({handled:true,command:value,result:lastResponse,state});
+      }catch(error){
+        lastSendError=String(error&&error.message||'Erreur sendText');
+        lastError='La commande vocale n’a pas pu être traitée : '+lastSendError;
+        if(desiredOn&&generation===expectedGeneration&&state===STATES.PROCESSING){
+          clearRecovery();
+          transition(STATES.ERROR,{keepError:true,detail:lastError+' Aucun nouvel envoi automatique.'});
+        }else render();
+        throw error;
+      }finally{
+        if(processingPromise===task) processingPromise=null;
+      }
+    })();
+    processingPromise=task;
+    return task;
   }
 
   function openCommandWindow(){
@@ -21220,24 +21277,34 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     },commandWindowMs);
   }
 
-  function handleTranscript(value){
+  async function handleTranscript(value){
     const transcript=extractTranscript(value);
     if(!transcript) return Object.freeze({handled:false,reason:'empty',state});
     lastTranscript=transcript;
     restartAttempts=0;
     if(state===STATES.LISTENING_COMMAND){
-      captureCommand(transcript);
-      return Object.freeze({handled:true,wakeWord:false,command:transcript,state});
+      const sent=await sendCommandToConversation(transcript);
+      return Object.freeze({...sent,wakeWord:false});
     }
     if(state!==STATES.WAITING_WAKE_WORD) return Object.freeze({handled:false,reason:'state',state});
     const parsed=parseWakeWord(transcript);
     if(!parsed.detected) return Object.freeze({handled:false,wakeWord:false,command:'',state});
     if(parsed.command){
-      captureCommand(parsed.command);
-      return Object.freeze({handled:true,wakeWord:true,command:parsed.command,state});
+      const sent=await sendCommandToConversation(parsed.command);
+      return Object.freeze({...sent,wakeWord:true});
     }
     openCommandWindow();
     return Object.freeze({handled:true,wakeWord:true,command:'',state});
+  }
+
+  async function handleRecognitionResult(event,cycle){
+    if(Number(cycle)!==recognitionCycle) return Object.freeze({handled:false,reason:'stale-recognition',state});
+    const extracted=extractFinalTranscript(event);
+    if(!extracted.final||!extracted.transcript) return Object.freeze({handled:false,reason:'interim',state});
+    const signature=String(cycle)+'|'+String(extracted.resultIndex)+'|'+normalizeTranscript(extracted.transcript);
+    if(processedFinalResults.has(signature)) return Object.freeze({handled:false,reason:'duplicate-final',state});
+    processedFinalResults.add(signature);
+    return handleTranscript(extracted.transcript);
   }
 
   function compatibleRecognitionState(){
@@ -21328,11 +21395,23 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(!instance||typeof instance.start!=='function'){ handleRecognitionError('audio-capture'); return false; }
     recognitionInstance=instance;
     recognitionConnected=true;
+    recognitionCycle+=1;
+    const activeCycle=recognitionCycle;
+    processedFinalResults=new Set();
     instance.lang='fr-FR';
     instance.interimResults=false;
     instance.continuous=false;
     instance.maxAlternatives=1;
-    instance.onresult=event=>{ if(desiredOn&&expectedGeneration===generation&&recognitionInstance===instance) handleTranscript(event); };
+    instance.onresult=event=>{
+      if(desiredOn&&expectedGeneration===generation&&recognitionInstance===instance){
+        handleRecognitionResult(event,activeCycle).catch(error=>{
+          if(desiredOn&&state===STATES.PROCESSING){
+            lastError=String(error&&error.message||'Erreur de traitement vocal');
+            transition(STATES.ERROR,{test:true,keepError:true,detail:lastError});
+          }
+        });
+      }
+    };
     instance.onerror=event=>{ if(expectedGeneration===generation) handleRecognitionError(event,instance); };
     instance.onend=()=>{ if(expectedGeneration===generation) handleRecognitionEnd('end',instance); };
     try{
@@ -21513,6 +21592,10 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       lastCommand,
       lastCommandAt,
       lastStopReason,
+      processing:!!processingPromise,
+      voiceSendCount,
+      lastResponseOutcome:lastResponse&&lastResponse.outcome||null,
+      lastSendError,
       transitionCount,
       lastError
     });
@@ -21537,6 +21620,12 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     lastCommand='';
     lastCommandAt=0;
     return command;
+  }
+
+  function setResponseHook(handler){
+    if(handler!==null&&typeof handler!=='function') throw new Error('JARVIS_VOICE7_INVALID_RESPONSE_HOOK');
+    responseHook=handler;
+    return !!responseHook;
   }
 
   async function handleVisibility(){
@@ -21586,6 +21675,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     parseWakeWord,
     handleTranscript,
     simulateTranscript:handleTranscript,
+    handleRecognitionResult,
+    simulateRecognitionResult:handleRecognitionResult,
     simulateRecognitionEnd:handleRecognitionEnd,
     simulateRecognitionError:handleRecognitionError,
     setRecognitionAdapter,
@@ -21594,6 +21685,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     configureForTests,
     getDiagnostics,
     consumeCapturedCommand,
+    setResponseHook,
     refreshPermissionDiagnostic
   });
   Object.defineProperty(root,'JarvisVoice7',{value:API,enumerable:false,configurable:false,writable:false});
