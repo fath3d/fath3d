@@ -20507,24 +20507,30 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     busy=true; transientMessage=message; lastFailedMessage=''; setBusy(true); setStatus('Jarvis réfléchit…',false); render();
     try{
       const currentData=(typeof db!=='undefined'&&db)?db:(root.db||{});
+      const prepareWriteProposal=(writeBroker,actionId,args,answer,oldValue,newValue)=>{
+        const previousProposal=session.pendingProposal;
+        let local;
+        if(previousProposal && previousProposal.proposalId && previousProposal.actionId===actionId && typeof writeBroker.correctProposal==='function'){
+          const previousId=previousProposal.proposalId;
+          local=writeBroker.correctProposal(previousId,args,currentData,answer,oldValue,newValue);
+          try{writeBroker.getProposal(previousId); throw codedError('CORRECTION_NOT_APPLIED','La proposition précédente reste exécutable.');}
+          catch(error){if(error&&error.message!=='UNKNOWN_PROPOSAL') throw error;}
+          session.messages.forEach(item=>{
+            if(item.proposal && (item.proposal.proposalId===previousId || item.proposal.id===previousId)) item.proposal=null;
+          });
+          session.pendingProposal=null;
+        }else{
+          local=writeBroker.createProposal(actionId,args,currentData,answer,oldValue,newValue);
+        }
+        return local;
+      };
       const localWrite=localStockWriteRoute(message,currentData);
       const route=localWrite|| (broker?broker.route(message,session.pendingConsultation):{kind:'gateway'});
       let result;
       if(route.kind==='write_proposal'){
         const writeBroker=root.JarvisWriteBroker6;
         if(!writeBroker) throw codedError('SECURITY_KERNEL_MISSING','Le courtier d’écriture sécurisé est indisponible.');
-        const previousProposal=session.pendingProposal;
-        let local;
-        if(previousProposal && previousProposal.proposalId && previousProposal.actionId===route.actionId && typeof writeBroker.correctProposal==='function'){
-          const previousId=previousProposal.proposalId;
-          local=writeBroker.correctProposal(previousId,route.args,currentData,route.answer,route.oldValue,route.newValue);
-          session.messages.forEach(item=>{
-            if(item.proposal && (item.proposal.proposalId===previousId || item.proposal.id===previousId)) item.proposal=null;
-          });
-          session.pendingProposal=null;
-        }else{
-          local=writeBroker.createProposal(route.actionId,route.args,currentData,route.answer,route.oldValue,route.newValue);
-        }
+        const local=prepareWriteProposal(writeBroker,route.actionId,route.args,route.answer,route.oldValue,route.newValue);
         result={outcome:'action_proposal',answer:route.answer,proposal:{...local,args:local.parameters,executionAllowed:false,confirmationRequired:true},topic:'stock',missingInformation:[],readAction:null};
       }else if(route.kind==='clarification'){
         result={outcome:'clarification',answer:route.answer,proposal:null,topic:'consultation 5A',missingInformation:['domaine'],readAction:null};
@@ -20538,7 +20544,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         result=classifyResponse(response);
         if(result.proposal && root.JarvisWriteBroker6){
           const remote=result.proposal;
-          const local=root.JarvisWriteBroker6.createProposal(remote.actionId,remote.args||remote.parameters||{},root.db||{},result.answer,remote.oldValue,remote.newValue);
+          const local=prepareWriteProposal(root.JarvisWriteBroker6,remote.actionId,remote.args||remote.parameters||{},result.answer,remote.oldValue,remote.newValue);
           result.proposal={...remote,...local,args:local.parameters,executionAllowed:false,confirmationRequired:true};
         }
         if(result.readAction){
