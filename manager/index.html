@@ -20940,12 +20940,15 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   Object.defineProperty(root,'JarvisConversation',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
-<script id="jarvis-voice7-step7a">
+<script id="jarvis-voice7-step7b">
 (function(root){
   'use strict';
 
-  const VERSION='7A.0.0';
+  const VERSION='7B.0.0';
   const OWNER='jarvis-voice7';
+  const DEFAULT_COMMAND_WINDOW_MS=10000;
+  const DEFAULT_RESTART_BASE_MS=250;
+  const DEFAULT_MAX_RESTARTS=3;
   const STATES=Object.freeze({
     OFF:'OFF',
     STARTING:'STARTING',
@@ -21005,14 +21008,34 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   let desiredOn=false;
   let generation=0;
   let recoveryTimer=null;
+  let commandTimer=null;
   let wakeLockSentinel=null;
   let wakeLockStatus='released';
   let lastError='';
   let detailOverride='';
   let transitionCount=0;
+  let recognitionAdapter=null;
+  let recognitionInstance=null;
+  let recognitionConnected=false;
+  let recognitionStarted=false;
+  let restartAttempts=0;
+  let restartBaseMs=DEFAULT_RESTART_BASE_MS;
+  let maxRestarts=DEFAULT_MAX_RESTARTS;
+  let commandWindowMs=DEFAULT_COMMAND_WINDOW_MS;
+  let commandDeadline=0;
+  let lastTranscript='';
+  let lastCommand='';
+  let lastCommandAt=0;
+  let lastStopReason='chargement';
+  let permissionState='unknown';
 
   function clearRecovery(){
     if(recoveryTimer!==null){ root.clearTimeout(recoveryTimer); recoveryTimer=null; }
+  }
+
+  function clearCommandWindow(){
+    if(commandTimer!==null){ root.clearTimeout(commandTimer); commandTimer=null; }
+    commandDeadline=0;
   }
 
   function render(){
@@ -21031,7 +21054,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(elements.detail){
       if(detailOverride) elements.detail.textContent=detailOverride;
       else if(state===STATES.OFF) elements.detail.textContent='Micro et wake word arrêtés · Wake Lock libéré';
-      else elements.detail.textContent='Socle actif · reconnaissance vocale non démarrée (étape 7A) · Wake Lock : '+wakeLockStatus;
+      else if(!recognitionAdapter) elements.detail.textContent='JARVIS ON · moteur détecté mais non activé avant 7G · Wake Lock : '+wakeLockStatus;
+      else elements.detail.textContent='JARVIS ON · reconnaissance '+(recognitionStarted?'active':'en attente')+' · Wake Lock : '+wakeLockStatus;
     }
     if(elements.error){ elements.error.textContent=lastError; elements.error.hidden=!lastError; }
   }
@@ -21106,6 +21130,248 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     try{ if(root.speechSynthesis && typeof root.speechSynthesis.cancel==='function') root.speechSynthesis.cancel(); }catch(error){}
   }
 
+  function detectedEngine(){
+    if(typeof root.SpeechRecognition==='function') return Object.freeze({available:true,type:'SpeechRecognition',Constructor:root.SpeechRecognition});
+    if(typeof root.webkitSpeechRecognition==='function') return Object.freeze({available:true,type:'webkitSpeechRecognition',Constructor:root.webkitSpeechRecognition});
+    return Object.freeze({available:false,type:null,Constructor:null});
+  }
+
+  function createDetectedAdapter(){
+    const detected=detectedEngine();
+    if(!detected.available) return null;
+    return Object.freeze({
+      name:detected.type,
+      real:true,
+      create(){ return new detected.Constructor(); }
+    });
+  }
+
+  async function refreshPermissionDiagnostic(){
+    try{
+      if(root.navigator&&root.navigator.permissions&&typeof root.navigator.permissions.query==='function'){
+        const status=await root.navigator.permissions.query({name:'microphone'});
+        permissionState=status&&status.state||'unknown';
+        if(status&&typeof status.addEventListener==='function') status.addEventListener('change',()=>{ permissionState=status.state||'unknown'; });
+      }
+    }catch(error){ permissionState='unknown'; }
+    return permissionState;
+  }
+
+  function legacyMicrophoneBusy(){
+    return !!(root._vocalListening||root._ivListening||(root._ivBurst&&root._ivBurst.active));
+  }
+
+  function normalizeTranscript(value){
+    return String(value||'')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .toLocaleLowerCase('fr-FR')
+      .replace(/[\u2019'`´]/g,' ')
+      .replace(/[^a-z0-9]+/g,' ')
+      .trim().replace(/\s+/g,' ');
+  }
+
+  function parseWakeWord(value){
+    const original=String(value||'').trim();
+    const normalized=normalizeTranscript(original);
+    const detected=normalized.split(' ').includes('jarvis');
+    if(!detected) return Object.freeze({detected:false,transcript:original,normalized,command:''});
+    const match=/\bjarvis\b/i.exec(original);
+    const command=match?original.slice(match.index+match[0].length).replace(/^[\s,;:!?¿¡.…\-–—]+/,'').trim():'';
+    return Object.freeze({detected:true,transcript:original,normalized,command});
+  }
+
+  function extractTranscript(event){
+    if(typeof event==='string') return event.trim();
+    const results=event&&event.results;
+    if(!results||!results.length) return '';
+    const start=Math.max(0,Number(event.resultIndex)||0);
+    for(let i=results.length-1;i>=start;i--){
+      const result=results[i];
+      const alternative=result&&result[0];
+      const transcript=alternative&&alternative.transcript;
+      if(transcript) return String(transcript).trim();
+    }
+    return '';
+  }
+
+  function captureCommand(command){
+    const value=String(command||'').trim();
+    if(!value) return false;
+    clearCommandWindow();
+    lastCommand=value;
+    lastCommandAt=Date.now();
+    restartAttempts=0;
+    transition(STATES.PROCESSING,{detail:'Commande vocale capturée pour la future étape 7C · aucun envoi'});
+    transition(STATES.WAITING_WAKE_WORD,{detail:'Commande prête pour 7C · aucun appel à sendText()'});
+    return true;
+  }
+
+  function openCommandWindow(){
+    clearCommandWindow();
+    commandDeadline=Date.now()+commandWindowMs;
+    transition(STATES.LISTENING_COMMAND,{detail:'Wake word détecté · commande attendue pendant 10 secondes'});
+    const expectedGeneration=generation;
+    commandTimer=root.setTimeout(()=>{
+      commandTimer=null;
+      commandDeadline=0;
+      if(desiredOn&&generation===expectedGeneration&&state===STATES.LISTENING_COMMAND){
+        transition(STATES.WAITING_WAKE_WORD,{detail:'Aucune commande reçue · retour à l’attente de « Jarvis »'});
+      }
+    },commandWindowMs);
+  }
+
+  function handleTranscript(value){
+    const transcript=extractTranscript(value);
+    if(!transcript) return Object.freeze({handled:false,reason:'empty',state});
+    lastTranscript=transcript;
+    restartAttempts=0;
+    if(state===STATES.LISTENING_COMMAND){
+      captureCommand(transcript);
+      return Object.freeze({handled:true,wakeWord:false,command:transcript,state});
+    }
+    if(state!==STATES.WAITING_WAKE_WORD) return Object.freeze({handled:false,reason:'state',state});
+    const parsed=parseWakeWord(transcript);
+    if(!parsed.detected) return Object.freeze({handled:false,wakeWord:false,command:'',state});
+    if(parsed.command){
+      captureCommand(parsed.command);
+      return Object.freeze({handled:true,wakeWord:true,command:parsed.command,state});
+    }
+    openCommandWindow();
+    return Object.freeze({handled:true,wakeWord:true,command:'',state});
+  }
+
+  function compatibleRecognitionState(){
+    return state===STATES.WAITING_WAKE_WORD||state===STATES.LISTENING_COMMAND;
+  }
+
+  function stopRecognition(reason){
+    lastStopReason=String(reason||'arrêt');
+    const instance=recognitionInstance;
+    recognitionStarted=false;
+    recognitionConnected=false;
+    recognitionInstance=null;
+    if(instance){
+      try{
+        if(typeof instance.abort==='function') instance.abort();
+        else if(typeof instance.stop==='function') instance.stop();
+      }catch(error){}
+    }
+    render();
+  }
+
+  function scheduleRestart(reason){
+    lastStopReason=String(reason||'end');
+    if(!desiredOn||!compatibleRecognitionState()||state===STATES.SPEAKING||state===STATES.ERROR) return false;
+    if(!recognitionAdapter) return false;
+    if(recoveryTimer!==null||recognitionStarted) return false;
+    if(restartAttempts>=maxRestarts){
+      lastError='Reconnaissance arrêtée après '+maxRestarts+' tentatives contrôlées.';
+      transition(STATES.ERROR,{keepError:true,detail:'Redémarrages limités atteints · utilisez OFF puis ON'});
+      return false;
+    }
+    restartAttempts+=1;
+    const delay=restartBaseMs*Math.pow(2,restartAttempts-1);
+    const expectedGeneration=generation;
+    recoveryTimer=root.setTimeout(()=>{
+      recoveryTimer=null;
+      if(desiredOn&&generation===expectedGeneration&&compatibleRecognitionState()) startRecognition(expectedGeneration);
+    },delay);
+    render();
+    return true;
+  }
+
+  function handleRecognitionEnd(reason,source){
+    if(source&&recognitionInstance&&source!==recognitionInstance) return false;
+    recognitionStarted=false;
+    recognitionConnected=false;
+    recognitionInstance=null;
+    render();
+    return scheduleRestart(reason||'end');
+  }
+
+  function handleRecognitionError(event,source){
+    if(source&&recognitionInstance&&source!==recognitionInstance) return getState();
+    const code=String(event&&event.error||event||'unknown').toLowerCase();
+    lastStopReason='error:'+code;
+    recognitionStarted=false;
+    const messages={
+      'no-speech':'Aucune parole détectée.',
+      'aborted':'Reconnaissance interrompue.',
+      'audio-capture':'Aucun microphone exploitable.',
+      'not-allowed':'Permission microphone refusée.',
+      'network':'Erreur réseau de reconnaissance vocale.'
+    };
+    lastError=messages[code]||'Erreur de reconnaissance vocale : '+code;
+    if(code==='no-speech'||code==='aborted'){
+      if(code==='aborted'&&!desiredOn){ lastError=''; render(); return getState(); }
+      render();
+      return getState();
+    }
+    clearRecovery();
+    clearCommandWindow();
+    transition(STATES.ERROR,{keepError:true,detail:lastError+' Aucun redémarrage automatique.'});
+    return getState();
+  }
+
+  function startRecognition(expectedGeneration){
+    if(!desiredOn||expectedGeneration!==generation||!compatibleRecognitionState()) return false;
+    if(recognitionStarted||recognitionInstance) return false;
+    if(!recognitionAdapter||typeof recognitionAdapter.create!=='function') return false;
+    if(root.JarvisMicrophoneArbiter7.getState().owner!==OWNER||legacyMicrophoneBusy()){
+      lastError='Micro déjà réservé par un autre module vocal.';
+      transition(STATES.ERROR,{keepError:true});
+      return false;
+    }
+    let instance;
+    try{ instance=recognitionAdapter.create(); }
+    catch(error){ handleRecognitionError('audio-capture'); return false; }
+    if(!instance||typeof instance.start!=='function'){ handleRecognitionError('audio-capture'); return false; }
+    recognitionInstance=instance;
+    recognitionConnected=true;
+    instance.lang='fr-FR';
+    instance.interimResults=false;
+    instance.continuous=false;
+    instance.maxAlternatives=1;
+    instance.onresult=event=>{ if(desiredOn&&expectedGeneration===generation&&recognitionInstance===instance) handleTranscript(event); };
+    instance.onerror=event=>{ if(expectedGeneration===generation) handleRecognitionError(event,instance); };
+    instance.onend=()=>{ if(expectedGeneration===generation) handleRecognitionEnd('end',instance); };
+    try{
+      instance.start();
+      recognitionStarted=true;
+      lastStopReason='running';
+      render();
+      return true;
+    }catch(error){
+      recognitionStarted=false;
+      recognitionConnected=false;
+      recognitionInstance=null;
+      handleRecognitionError('unknown');
+      return false;
+    }
+  }
+
+  function setRecognitionAdapter(adapter){
+    if(desiredOn||state!==STATES.OFF) throw new Error('JARVIS_VOICE7_ADAPTER_CHANGE_REQUIRES_OFF');
+    if(adapter!==null&&(!adapter||typeof adapter.create!=='function')) throw new Error('JARVIS_VOICE7_INVALID_ADAPTER');
+    recognitionAdapter=adapter;
+    lastStopReason=adapter?'adapter:'+String(adapter.name||'injecté'):'adapter:none';
+    render();
+    return !!recognitionAdapter;
+  }
+
+  function useDetectedRecognitionAdapter(){
+    return setRecognitionAdapter(createDetectedAdapter());
+  }
+
+  function configureForTests(options){
+    if(desiredOn||state!==STATES.OFF) throw new Error('JARVIS_VOICE7_CONFIG_REQUIRES_OFF');
+    const opts=options||{};
+    if(Number.isFinite(opts.commandWindowMs)) commandWindowMs=Math.max(1,Number(opts.commandWindowMs));
+    if(Number.isFinite(opts.restartBaseMs)) restartBaseMs=Math.max(0,Number(opts.restartBaseMs));
+    if(Number.isFinite(opts.maxRestarts)) maxRestarts=Math.max(0,Math.floor(Number(opts.maxRestarts)));
+    return getState();
+  }
+
   function runPrechecks(){
     const conversation=root.JarvisConversation;
     const security=root.JarvisSecurity;
@@ -21123,7 +21389,10 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       legacyInventoryIntact:typeof root.ivMicStart==='function',
       serviceWorkerSupported:!!(root.navigator&&root.navigator.serviceWorker),
       serviceWorkerControlled:!!(root.navigator&&root.navigator.serviceWorker&&root.navigator.serviceWorker.controller),
-      recognitionConnected:false,
+      recognitionEngineDetected:detectedEngine().available,
+      recognitionEngineType:detectedEngine().type,
+      recognitionAdapterConfigured:!!recognitionAdapter,
+      recognitionConnected,
       firebaseWritePathAdded:false
     };
     checks.criticalPassed=checks.managerIndex&&checks.conversationHandler&&checks.securityLocked&&checks.writeBrokerLocked&&checks.legacyAssistantIntact&&checks.legacyInventoryIntact;
@@ -21140,9 +21409,16 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     }
     desiredOn=true;
     generation+=1;
+    restartAttempts=0;
     const expectedGeneration=generation;
     clearRecovery();
     transition(STATES.STARTING);
+    if(legacyMicrophoneBusy()){
+      desiredOn=false;
+      lastError='Un ancien module vocal utilise déjà le micro.';
+      transition(STATES.ERROR,{keepError:true});
+      return getState();
+    }
     if(!root.JarvisMicrophoneArbiter7.acquire(OWNER)){
       desiredOn=false;
       lastError='Micro déjà réservé par un autre module vocal.';
@@ -21151,7 +21427,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     }
     await acquireWakeLock(expectedGeneration);
     if(!desiredOn || expectedGeneration!==generation) return getState();
-    transition(STATES.WAITING_WAKE_WORD,{detail:'JARVIS ON · reconnaissance vocale non démarrée (étape 7A) · Wake Lock : '+wakeLockStatus});
+    transition(STATES.WAITING_WAKE_WORD,{detail:recognitionAdapter?'JARVIS ON · attente du mot « Jarvis » · Wake Lock : '+wakeLockStatus:'JARVIS ON · adaptateur réel préparé pour 7G, non activé · Wake Lock : '+wakeLockStatus});
+    startRecognition(expectedGeneration);
     return getState();
   }
 
@@ -21159,6 +21436,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     desiredOn=false;
     generation+=1;
     clearRecovery();
+    clearCommandWindow();
+    stopRecognition(reason||'manual');
     cancelSpeech();
     root.JarvisMicrophoneArbiter7.release(OWNER);
     transition(STATES.OFF,{detail:reason&&reason!=='manual'?'Arrêt : '+String(reason)+' · micro et wake word arrêtés · Wake Lock libéré':''});
@@ -21170,6 +21449,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     desiredOn=false;
     generation+=1;
     clearRecovery();
+    clearCommandWindow();
+    stopRecognition(reason||'force-off');
     cancelSpeech();
     root.JarvisMicrophoneArbiter7.release(OWNER);
     const sentinel=wakeLockSentinel;
@@ -21186,13 +21467,14 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function simulateState(next){
     if(next===STATES.OFF) return turnOff('simulation');
     if(!desiredOn) desiredOn=true;
-    return transition(next,{test:true,detail:'État simulé pour validation 7A · aucune reconnaissance vocale active'});
+    if(next===STATES.SPEAKING) stopRecognition('speaking');
+    return transition(next,{test:true,detail:'État simulé pour validation 7B'});
   }
 
   function simulateError(message,recoverDelay){
     if(!desiredOn) desiredOn=true;
     clearRecovery();
-    lastError=String(message||'Erreur simulée 7A');
+    lastError=String(message||'Erreur simulée 7B');
     transition(STATES.ERROR,{test:true,keepError:true});
     const expectedGeneration=generation;
     const delay=Math.max(0,Number(recoverDelay)||0);
@@ -21214,12 +21496,47 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       wakeLockStatus,
       wakeLockHeld:!!wakeLockSentinel,
       microphoneOwner:root.JarvisMicrophoneArbiter7.getState().owner,
-      recognitionConnected:false,
-      recognitionStarted:false,
+      recognitionConnected,
+      recognitionStarted,
+      recognitionAdapterConfigured:!!recognitionAdapter,
+      recognitionAdapterName:recognitionAdapter&&recognitionAdapter.name||null,
+      recognitionEngineDetected:detectedEngine().available,
+      recognitionEngineType:detectedEngine().type,
+      permissionState,
       restartScheduled:recoveryTimer!==null,
+      restartAttempts,
+      maxRestarts,
+      commandWindowOpen:commandTimer!==null,
+      commandWindowMs,
+      commandDeadline,
+      lastTranscript,
+      lastCommand,
+      lastCommandAt,
+      lastStopReason,
       transitionCount,
       lastError
     });
+  }
+
+  function getDiagnostics(){
+    const current=getState();
+    return Object.freeze({
+      version:VERSION,
+      engineDetected:current.recognitionEngineDetected,
+      engineType:current.recognitionEngineType,
+      permissionState:current.permissionState,
+      state:current.state,
+      recognitionActive:current.recognitionStarted,
+      lastStopReason:current.lastStopReason,
+      lastError:current.lastError
+    });
+  }
+
+  function consumeCapturedCommand(){
+    const command=lastCommand;
+    lastCommand='';
+    lastCommandAt=0;
+    return command;
   }
 
   async function handleVisibility(){
@@ -21248,11 +21565,13 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   document.addEventListener('click',event=>{
     const target=event&&event.target;
     if(target&&typeof target.closest==='function'&&target.closest('#signout-btn')) forceOff('déconnexion');
+    else if(target&&typeof target.closest==='function'&&target.closest('[onclick*="vocalStart"], [onclick*="ivMicStart"]')&&desiredOn) forceOff('ancien module vocal');
   },true);
   root.addEventListener('pagehide',()=>forceOff('fermeture de page'));
   root.addEventListener('beforeunload',()=>forceOff('rechargement'));
 
   forceOff('chargement');
+  refreshPermissionDiagnostic().catch(()=>{});
 
   const API=Object.freeze({
     version:VERSION,
@@ -21262,7 +21581,20 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     turnOn,
     turnOff,
     simulateState,
-    simulateError
+    simulateError,
+    normalizeTranscript,
+    parseWakeWord,
+    handleTranscript,
+    simulateTranscript:handleTranscript,
+    simulateRecognitionEnd:handleRecognitionEnd,
+    simulateRecognitionError:handleRecognitionError,
+    setRecognitionAdapter,
+    useDetectedRecognitionAdapter,
+    createDetectedAdapter,
+    configureForTests,
+    getDiagnostics,
+    consumeCapturedCommand,
+    refreshPermissionDiagnostic
   });
   Object.defineProperty(root,'JarvisVoice7',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
