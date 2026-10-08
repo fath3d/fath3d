@@ -20768,14 +20768,81 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(!root.navigator || root.navigator.onLine===false) return ERROR_MESSAGES.OFFLINE;
     return ERROR_MESSAGES[error&&error.code] || 'Jarvis n a pas pu répondre. Aucune action n a été exécutée.';
   }
+  function clearPendingProposalIf(id){
+    if(session.pendingProposal && (session.pendingProposal.proposalId===id || session.pendingProposal.id===id)) session.pendingProposal=null;
+  }
+  function localVoiceConfirmation(message,currentData){
+    const q=normalizeIntent(message);
+    const pending=session.pendingProposal;
+    const broker=root.JarvisWriteBroker6;
+    if(!pending || !pending.proposalId || !broker) return null;
+    const isYes=/^(?:oui|confirme|confirmer|vas[- ]?y|valide|valider)$/i.test(q);
+    const isCancel=/^(?:non|annule|annuler|annule ça|annule ca|non merci)$/i.test(q);
+    if(isCancel){
+      try{
+        broker.cancelProposal(pending.proposalId);
+        clearPendingProposalIf(pending.proposalId);
+        return {kind:'direct',result:{outcome:'direct_answer',answer:'Proposition annulée. Aucune action ni écriture exécutée.',proposal:null,topic:null,missingInformation:[],readAction:null}};
+      }catch(error){
+        clearPendingProposalIf(pending.proposalId);
+        return {kind:'direct',result:{outcome:'refusal',answer:'La proposition n’est plus active. Aucune action exécutée.',proposal:null,topic:null,missingInformation:[],readAction:null}};
+      }
+    }
+    if(isYes){
+      try{
+        const current=broker.getProposal(pending.proposalId);
+        if(current.actionId!==pending.actionId) throw new Error('CONFIRMATION_MISMATCH');
+        broker.confirmProposal(current.proposalId,{explicit:true,proposalId:current.proposalId,actionId:current.actionId,nonce:current.nonce},currentData);
+        // Validation vocale 7F: simulation Step 6 uniquement, jamais de commit réel.
+        broker.simulateCandidate(current.proposalId,currentData);
+        broker.cancelProposal(current.proposalId); // consomme le one-shot sans mutation métier
+        clearPendingProposalIf(current.proposalId);
+        return {kind:'direct',result:{outcome:'direct_answer',answer:'Confirmation vocale reçue. La proposition a été validée en simulation sécurisée ; aucune écriture n’a été exécutée.',proposal:null,topic:null,missingInformation:[],readAction:null}};
+      }catch(error){
+        if(error&&['UNKNOWN_PROPOSAL','EXPIRED_PROPOSAL','PROPOSAL_NOT_PENDING','CONFIRMATION_MISMATCH','STALE_PROPOSAL'].includes(error.message)) clearPendingProposalIf(pending.proposalId);
+        return {kind:'direct',result:{outcome:'refusal',answer:'Cette proposition n’est plus valide ou a expiré. Aucune action exécutée.',proposal:null,topic:null,missingInformation:[],readAction:null}};
+      }
+    }
+    return null;
+  }
+  function localVoiceCorrection(message,currentData){
+    const pending=session.pendingProposal;
+    const broker=root.JarvisWriteBroker6;
+    if(!pending||!pending.proposalId||!broker) return null;
+    const q=normalizeIntent(message);
+    if(!/^(?:non\s*,?\s*)?(?:corrige|corriger|mets|met|ajoute|retire|enleve|enlève)\b/.test(q)) return null;
+    const number=(q.match(/\b(\d+)\b/)||[])[1];
+    if(!number) return null;
+    if(pending.actionId==='stock.adjust'){
+      const args=clone(pending.args||pending.parameters||{}); args.newQuantity=Number(number);
+      return {kind:'write_proposal',actionId:'stock.adjust',args,oldValue:pending.newValue??pending.oldValue,newValue:Number(number),answer:`Proposition corrigée : quantité cible ${number}. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
+    }
+    if(pending.actionId==='cash.pending_ticket.prepare'){
+      const args=clone(pending.args||pending.parameters||{}),items=clone(args.items||[]);
+      if(!items.length) return null;
+      items[0].quantity=Number(number);
+      if(items[0].unitPrice!==null&&items[0].unitPrice!==undefined) items[0].total=Number(number)*Number(items[0].unitPrice||0);
+      args.items=items;
+      return {kind:'write_proposal',actionId:'cash.pending_ticket.prepare',args,oldValue:pending.newValue??pending.oldValue,newValue:items,answer:`Proposition corrigée pour le ticket provisoire. Aucune vente ni écriture n’est exécutée. Confirme explicitement si tu veux poursuivre.`};
+    }
+    return null;
+  }
   async function sendText(value){
-    const message=normalizeText(value);
+    let message=normalizeText(value);
     if(!message) throw codedError('REQUEST_INVALID','Écris un message avant l envoi.');
     if(busy) throw codedError('REQUEST_IN_PROGRESS','Une demande est déjà en cours.');
     expireIfInactive();
     if(!root.navigator || root.navigator.onLine===false) throw codedError('OFFLINE',ERROR_MESSAGES.OFFLINE);
     if(/^(?:oui|confirme|confirmer|vas[- ]?y|valide|valider)$/i.test(message) && !session.pendingProposal){
       const answer='Il n y a aucune action en attente à confirmer.';
+      appendMessage('user',message,'direct_answer',null);
+      appendMessage('assistant',answer,'direct_answer',null);
+      setStatus('',false);
+      render();
+      return {outcome:'direct_answer',answer,proposal:null,topic:null,missingInformation:[],readAction:null};
+    }
+    if(/^(?:non|annule|annuler|annule ça|annule ca|non merci)$/i.test(message) && !session.pendingProposal){
+      const answer='Il n’y a aucune proposition en attente à annuler.';
       appendMessage('user',message,'direct_answer',null);
       appendMessage('assistant',answer,'direct_answer',null);
       setStatus('',false);
@@ -20806,7 +20873,9 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         }
         return local;
       };
-      const localWrite=localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData);
+      const voiceAction=localVoiceConfirmation(message,currentData);
+      const voiceCorrection=voiceAction||localVoiceCorrection(message,currentData);
+      const localWrite=voiceCorrection||localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData);
       const route=localWrite|| (broker?broker.route(message,session.pendingConsultation):{kind:'gateway'});
       let result;
       if(route.kind==='write_proposal'){
