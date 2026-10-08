@@ -20494,6 +20494,43 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const market=candidates[0];
     return {kind:'write_proposal',actionId:'market.update',args:{marketId:market.id,date:date||market.date,ville:ville||market.ville,horaires:horaires||market.horaires||'',notes:market.notes||''},oldValue:{ville:market.ville,date:market.date,horaires:market.horaires||'',notes:market.notes||''},newValue:{ville:ville||market.ville,date:date||market.date,horaires:horaires||market.horaires||'',notes:market.notes||''},answer:`Proposition de modification du marché ${ville||market.ville} le ${date||market.date}. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
   }
+  function localPrintingWriteRoute(message,currentData){
+    const q=normalizeIntent(message);
+    if(/\b(lance|demarre|arrete|stoppe|pause|reprend|pilote|commande|envoie).*(imprimante|impression|machine)|(imprimante|impression|machine).*(lance|demarre|arrete|stoppe|pause|reprend|pilote|commande|envoie)\b/.test(q))
+      return {kind:'direct',result:{outcome:'refusal',answer:'Je ne peux pas démarrer, arrêter, mettre en pause ni piloter physiquement une imprimante.',proposal:null,topic:'printing',missingInformation:[],readAction:null}};
+    const createTask=/\b(?:cree|cr[eé]e|ajoute|nouvelle)\b[\s\S]*\btache\b[\s\S]*\b(?:impression|imprimante)\b/.test(q);
+    const updateTask=/\b(?:modifie|modifier|change|changer)\b[\s\S]*\btache\b[\s\S]*\b(?:impression|imprimante)\b/.test(q);
+    const createSchedule=/\b(?:cree|cr[eé]e|ajoute|nouveau|prepare|pr[eé]pare)\b[\s\S]*\bplanning\b[\s\S]*\b(?:impression|imprimante)\b/.test(q);
+    const updateSchedule=/\b(?:modifie|modifier|change|changer)\b[\s\S]*\bplanning\b[\s\S]*\b(?:impression|imprimante)\b/.test(q);
+    if(!createTask&&!updateTask&&!createSchedule&&!updateSchedule)return null;
+    const month={janvier:1,fevrier:2,mars:3,avril:4,mai:5,juin:6,juillet:7,aout:8,septembre:9,octobre:10,novembre:11,decembre:12};
+    const dm=q.match(/\b(\d{1,2})\s+([a-zà-ÿ]+)\s+(20\d{2})\b/); const date=dm&&month[dm[2]]?`${dm[3]}-${String(month[dm[2]]).padStart(2,'0')}-${String(dm[1]).padStart(2,'0')}`:(q.match(/\b(20\d{2}-\d{2}-\d{2})\b/)||[])[1]||null;
+    if(createTask){
+      const title=(q.match(/\bpour\s+(.+?)(?:,|\s+quantit[ée]\b)/)||[])[1]||'';
+      const quantity=Number((q.match(/\bquantit[ée]\s+(\d+)/)||[])[1]||1);
+      if(!title.trim())return {kind:'clarification',answer:'Quel produit veux-tu imprimer ?'};
+      return {kind:'write_proposal',actionId:'print_task.create',args:{title:title.trim(),quantity},oldValue:null,newValue:{title:title.trim(),quantity},answer:`Proposition de tâche d’impression : ${title.trim()}, quantité ${quantity}. Aucune imprimante ne sera pilotée. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
+    }
+    if(createSchedule){
+      if(!date)return {kind:'clarification',answer:'Pour créer ce planning, précise la date.'};
+      return {kind:'write_proposal',actionId:'print_schedule.create',args:{date,items:[],notes:''},oldValue:null,newValue:{date,items:[],notes:''},answer:`Proposition de planning d’impression pour le ${date}. Aucune imprimante ne sera pilotée. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
+    }
+    const tasks=Array.isArray(currentData&&currentData.planningJobs)?currentData.planningJobs:[];
+    if(updateTask){
+      const wanted=(q.match(/\btache\b[\s\S]*?\b(?:impression|imprimante)\b\s+(.+?)(?:,|\s+quantit[ée]\b|$)/)||[])[1]||'';
+      const candidates=tasks.filter(item=>{const hay=normalizeIntent([item.title,item.name,item.nom].filter(Boolean).join(' '));return !wanted||hay.includes(wanted)||wanted.split(' ').filter(Boolean).every(t=>hay.includes(t));});
+      if(!candidates.length)return {kind:'clarification',answer:'Je ne trouve pas cette tâche d’impression.'};
+      if(candidates.length>1)return {kind:'clarification',answer:'J’ai trouvé plusieurs tâches d’impression correspondantes. Laquelle veux-tu modifier ?'};
+      const task=candidates[0],quantity=Number((q.match(/\bquantit[ée]\s+(\d+)/)||[])[1]||task.quantity||1);
+      return {kind:'write_proposal',actionId:'print_task.update',args:{taskId:task.id,title:task.title||task.name||task.nom||'',quantity},oldValue:{title:task.title||task.name||task.nom||'',quantity:task.quantity||1},newValue:{title:task.title||task.name||task.nom||'',quantity},answer:`Proposition de modification de la tâche d’impression ${task.title||task.name||task.nom||task.id}. Aucune imprimante ne sera pilotée. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
+    }
+    const days=currentData&&currentData.planningJour&&typeof currentData.planningJour==='object'?currentData.planningJour:{};
+    const matchingDates=Object.keys(days).filter(key=>!date||key===date);
+    if(!matchingDates.length)return {kind:'clarification',answer:'Je ne trouve pas ce planning d’impression.'};
+    if(matchingDates.length>1)return {kind:'clarification',answer:'J’ai trouvé plusieurs plannings correspondants. Lequel veux-tu modifier ?'};
+    const scheduleDate=matchingDates[0];
+    return {kind:'write_proposal',actionId:'print_schedule.update',args:{scheduleId:scheduleDate,date:scheduleDate,items:clone(days[scheduleDate]&&days[scheduleDate].impressions||[]),notes:''},oldValue:{date:scheduleDate},newValue:{date:scheduleDate},answer:`Proposition de modification du planning d’impression du ${scheduleDate}. Aucune imprimante ne sera pilotée. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
+  }
   function appendMessage(role,content,outcome='direct_answer',proposal=null){
     const item={id:secureId(),role,content:normalizeText(content),outcome,proposal:proposal?clone(proposal):null,createdAt:Date.now()};
     session.messages.push(item);
@@ -20581,14 +20618,14 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         }
         return local;
       };
-      const localWrite=localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData);
+      const localWrite=localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData);
       const route=localWrite|| (broker?broker.route(message,session.pendingConsultation):{kind:'gateway'});
       let result;
       if(route.kind==='write_proposal'){
         const writeBroker=root.JarvisWriteBroker6;
         if(!writeBroker) throw codedError('SECURITY_KERNEL_MISSING','Le courtier d’écriture sécurisé est indisponible.');
         const local=prepareWriteProposal(writeBroker,route.actionId,route.args,route.answer,route.oldValue,route.newValue);
-        result={outcome:'action_proposal',answer:route.answer,proposal:{...local,args:local.parameters,executionAllowed:false,confirmationRequired:true},topic:'stock',missingInformation:[],readAction:null};
+        result={outcome:'action_proposal',answer:route.answer,proposal:{...local,args:local.parameters,executionAllowed:false,confirmationRequired:true},topic:route.actionId.startsWith('print_')?'printing':route.actionId.startsWith('market.')?'market':'stock',missingInformation:[],readAction:null};
       }else if(route.kind==='clarification'){
         result={outcome:'clarification',answer:route.answer,proposal:null,topic:'consultation 5A',missingInformation:['domaine'],readAction:null};
       }else if(route.kind==='direct'){
