@@ -20664,7 +20664,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const previous=contextMessages();
     busy=true; transientMessage=message; lastFailedMessage=''; setBusy(true); setStatus('Jarvis réfléchit…',false); render();
     try{
-      const currentData=(typeof db!=='undefined'&&db)?db:(root.db||{});
+      const currentData=(typeof db!=='undefined'&&db)?db:((typeof db!=='undefined'&&db)?db:(root.db||{}));
       const prepareWriteProposal=(writeBroker,actionId,args,answer,oldValue,newValue)=>{
         const previousProposal=session.pendingProposal;
         let local;
@@ -20758,8 +20758,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         const confirm=document.createElement('button'); confirm.type='button'; confirm.className='j4-send'; confirm.textContent='Confirmer (écriture verrouillée)';
         confirm.addEventListener('click',()=>{
           try{
-            root.JarvisWriteBroker6.confirmProposal(item.proposal.proposalId,{explicit:true,proposalId:item.proposal.proposalId,actionId:item.proposal.actionId,nonce:item.proposal.nonce},root.db||{});
-            root.JarvisWriteBroker6.executeConfirmed(item.proposal.proposalId,root.db||{});
+            root.JarvisWriteBroker6.confirmProposal(item.proposal.proposalId,{explicit:true,proposalId:item.proposal.proposalId,actionId:item.proposal.actionId,nonce:item.proposal.nonce},(typeof db!=='undefined'&&db)?db:(root.db||{}));
+            root.JarvisWriteBroker6.executeConfirmed(item.proposal.proposalId,(typeof db!=='undefined'&&db)?db:(root.db||{}));
           }catch(error){ setStatus(error&&error.message==='JARVIS_WRITES_DISABLED'?'Confirmation reçue, mais l écriture reste bloquée par writesEnabled=false.':'Confirmation refusée : '+(error&&error.message||'erreur'),true,false); }
         });
         const cancel=document.createElement('button'); cancel.type='button'; cancel.className='j4-retry'; cancel.textContent='Annuler';
