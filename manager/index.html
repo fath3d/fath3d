@@ -20426,7 +20426,17 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     // son API publique pour conserver exactement les mêmes scores/variantes.
     const resolver=root.JarvisFinancialReadBroker5C||root.JarvisReadBroker5B||root.JarvisReadBroker;
     if(!resolver||typeof resolver.resolveProduct!=='function') throw codedError('PRODUCT_RESOLVER_UNAVAILABLE','Le résolveur produit sécurisé est indisponible.');
-    const resolved=resolver.resolveProduct(currentData,message);
+    let resolved;
+    try{
+      resolved=resolver.resolveProduct(currentData,message);
+    }catch(error){
+      // Une ambiguïté métier ne doit jamais tomber dans le catch générique UI.
+      // On ne convertit que les erreurs de résolution connues; les erreurs
+      // d'infrastructure/sécurité continuent leur propagation normale.
+      if(error&&(['PRODUCT_AMBIGUOUS','PRODUCT_NOT_FOUND'].includes(error.code)||['PRODUCT_AMBIGUOUS','PRODUCT_NOT_FOUND'].includes(error.message)))
+        return {kind:'clarification',answer:error.code==='PRODUCT_NOT_FOUND'||error.message==='PRODUCT_NOT_FOUND'?'Je ne trouve pas ce produit dans le catalogue. Quel produit précis veux-tu modifier ?':'J’ai trouvé plusieurs produits correspondant à ta demande. Quel produit précis veux-tu modifier ?'};
+      throw error;
+    }
     const matches=resolved.matches||[];
     if(matches.length!==1) return {kind:'clarification',answer:'Quel produit précis veux-tu modifier ?'};
     const product=products.find(candidate=>candidate&&candidate.id===matches[0].id)||matches[0];
