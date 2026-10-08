@@ -19907,9 +19907,12 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
   function result(actionId,answer,options={}){
     return freeze({actionId,outcome:options.outcome||'direct_answer',answer,facts:(options.facts||[]).slice(0,MAX_FACTS),pending:options.pending||null,local:true,writesEnabled:false});
   }
-  function catalogReader(data,message){
+  function catalogReader(data,message,pending){
     const products=projectProducts(data);
-    const found=productMatches(products,message);
+    const pendingMatches=pending&&Array.isArray(pending.candidates)
+      ? products.filter(product=>pending.candidates.some(id=>String(id)===String(product.id)))
+      : [];
+    const found=pendingMatches.length?{matches:pendingMatches,ambiguous:pendingMatches.length>1}:productMatches(products,message);
     if(!found.matches.length) return result('consult.catalog','Je ne trouve aucun produit correspondant dans le catalogue.');
     if(found.category){
       const names=found.matches.slice(0,12).map(item=>item.name).join(', ');
@@ -20021,6 +20024,30 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     if(!audit||audit.ok!==true||audit.changes.length!==0||audit.protectedFinancialDataUnchanged!==true) throw codedError('READ_AUDIT_FAILED','La consultation n’a pas passé le contrôle d’intégrité.');
     return freeze({...clone(response),audit:{changes:[],protectedFinancialDataUnchanged:true}});
   }
+  function pendingEntityChoice(message,pending){
+    if(!pending||pending.kind!=='entity'||!Array.isArray(pending.candidates)||!pending.candidates.length) return null;
+    const q=normalize(message);
+    const data=sourceData();
+    const products=projectProducts(data).filter(product=>pending.candidates.some(id=>String(id)===String(product.id)));
+    if(!products.length) return null;
+    const numberMatch=q.match(/\b(?:le\s+)?(?:numero|n)\s*(?:°|º)?\s*(\d+)\b/);
+    const ordinalWords={premier:0,premiere:0,'première':0,deuxieme:1,'deuxième':1,second:1,seconde:1,troisieme:2,'troisième':2,quatrieme:3,'quatrième':3,cinquieme:4,'cinquième':4};
+    let index=-1;
+    if(numberMatch){
+      const number=Number(numberMatch[1]);
+      const byId=products.findIndex(product=>String(product.id)===String(number));
+      index=byId>=0?byId:number-1;
+    }else{
+      const word=Object.keys(ordinalWords).find(value=>q.includes(value));
+      if(word!==undefined) index=ordinalWords[word];
+    }
+    if(index>=0&&index<products.length) return products[index];
+    if(/\b(hueforge|hue forge)\b/.test(q)){
+      const matches=products.filter(product=>normalize(product.category).includes('hueforge'));
+      if(matches.length===1) return matches[0];
+    }
+    return null;
+  }
   function route(message,pending){
     const q=normalize(message);
     if(pending&&pending.kind==='stock_location'){
@@ -20028,7 +20055,10 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
       if(location) return freeze({kind:'read',actionId:'consult.stocks',message:q,pending:{...clone(pending),location}});
       if(/^(non|plutot|je voulais dire)\b/.test(q)) return freeze({kind:'read',actionId:'consult.stocks',message:q,pending:clone(pending)});
     }
-    if(pending&&pending.kind==='entity'&&pending.actionId&&q) return freeze({kind:'read',actionId:pending.actionId,message:q,pending:null});
+    if(pending&&pending.kind==='entity'&&pending.actionId&&q){
+      const choice=pendingEntityChoice(q,pending);
+      return freeze({kind:'read',actionId:pending.actionId,message:q,pending:choice?{...clone(pending),candidates:[choice.id]}:clone(pending)});
+    }
     if(/\b(prix|coute|categorie|catalogue)\b/.test(q)&&/\b(stock|quantite|reste)\b/.test(q)) return freeze({kind:'clarification',answer:'Tu veux d’abord les informations du catalogue ou la quantité en stock ?'});
     const scores={
       'consult.filaments':(/\b(filament|filaments|bobine|bobines|pla|petg|abs|tpu)\b/.test(q)?7:0)+(/\b(poids|gramme|grammes|couleur|matiere|marque|vide|vides)\b/.test(q)?1:0),
@@ -21137,6 +21167,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   let lastTranscript='';
   let lastCommand='';
   let lastCommandAt=0;
+  let lastVoiceNormalization={raw:'',normalized:'',corrections:[]};
   let lastStopReason='chargement';
   let permissionState='unknown';
   let recognitionCycle=0;
@@ -21355,6 +21386,45 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       .trim().replace(/\s+/g,' ');
   }
 
+  // SpeechRecognition peut déformer certains noms métier. Cette couche reste
+  // déterministe et contextuelle : elle ne réécrit jamais une phrase générale
+  // et ne remplace une désignation produit que si le catalogue fournit un
+  // candidat unique correspondant.
+  function normalizeVoiceBusinessTerms(value){
+    const raw=String(value||'').trim();
+    let corrected=raw;
+    const q=normalizeTranscript(raw);
+    const corrections=[];
+    const productContext=/\b(stock|stocks|produit|produits|catalogue|article|articles|quantite|quantites|combien|maison|pikachu|numero|premier|premiere|deuxieme|second|troisieme|ajoute|ajouter|modifie|modifier|reste|restant)\b/.test(q);
+    let products=[];
+    try{ products=typeof db!=='undefined'&&db&&Array.isArray(db.products)?db.products:[]; }catch(error){ products=[]; }
+    const normalizeName=name=>normalizeTranscript(name);
+    const petiteCandidates=products.filter(product=>{
+      const name=normalizeName(product&&product.name);
+      return name.includes('petite goute no')||name.includes('petite goutte no');
+    });
+    const petiteName=petiteCandidates.length===1?String(petiteCandidates[0].name||'').trim():'';
+    const replace=(pattern,replacement,label)=>{
+      const next=corrected.replace(pattern,replacement);
+      if(next!==corrected){ corrected=next; corrections.push(label); }
+    };
+    if(productContext){
+      if(petiteName && /\bpetites?\s+gouttes?(?:\s+hainaut)?\b/i.test(corrected))
+        replace(/\bpetites?\s+gouttes?(?:\s+hainaut)?\b/i,petiteName,'petites gouttes → '+petiteName);
+      if(petiteName && /\bpetite\s+gou?te\s+no\b/i.test(corrected))
+        replace(/\bpetite\s+gou?te\s+no\b/i,petiteName,'goutte no → '+petiteName);
+      if(petiteName && /\bhainaut\b/i.test(corrected) && !/\bpetite\s+gou?te\s+no\b/i.test(corrected))
+        replace(/\bhainaut\b/i,petiteName,'Hainaut → '+petiteName);
+      if(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|youforg|yuforge)\b/i.test(corrected))
+        replace(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|youforg|yuforge)\b/i,'HueForge','variante → HueForge');
+      if(/\byouporn\b/i.test(corrected))
+        replace(/\byouporn\b/i,'HueForge','variante métier → HueForge');
+    }
+    const normalized=corrected.trim();
+    lastVoiceNormalization={raw,normalized,corrections:corrections.slice()};
+    return normalized;
+  }
+
   function parseWakeWord(value){
     const original=String(value||'').trim();
     const normalized=normalizeTranscript(original);
@@ -21395,7 +21465,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   }
 
   async function sendCommandToConversation(command){
-    const value=String(command||'').trim();
+    const value=normalizeVoiceBusinessTerms(command);
     if(!value) return Object.freeze({handled:false,reason:'empty',state});
     if(processingPromise||state===STATES.PROCESSING) return Object.freeze({handled:false,reason:'processing',state});
     const conversation=root.JarvisConversation;
@@ -21778,6 +21848,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       commandDeadline,
       lastTranscript,
       lastCommand,
+      lastVoiceNormalization:Object.freeze({...lastVoiceNormalization,corrections:[...lastVoiceNormalization.corrections]}),
       lastCommandAt,
       lastStopReason,
       processing:!!processingPromise,
@@ -21878,6 +21949,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     simulateState,
     simulateError,
     normalizeTranscript,
+    normalizeVoiceBusinessTerms,
     parseWakeWord,
     handleTranscript,
     simulateTranscript:handleTranscript,
