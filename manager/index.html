@@ -20091,7 +20091,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
       'consult.filaments':(/\b(filament|filaments|bobine|bobines|pla|petg|abs|tpu)\b/.test(q)?7:0)+(/\b(poids|gramme|grammes|couleur|matiere|marque|vide|vides)\b/.test(q)?1:0),
       'consult.stock_needs':(/\b(reimprim|reimprimer|reappro|reapprovision|minimum|seuil)\w*\b/.test(q)?4:0)+(/\b(manque|manquent|remonter|bas|rupture)\b/.test(q)&&/\b(stock|marche|produit|produits)\b/.test(q)?3:0),
       'consult.stocks':(/\b(stock|stocks|quantite|quantites|reste|restent)\b/.test(q)?2:0)+(/\b(combien|total|maison|marche|arts? complices|vero)\b/.test(q)?2:0)+(/\bcombien\b/.test(q)&&!/\b(prix|coute|coutent)\b/.test(q)&&/\b(j ai|reste|maison|marche|total|tout)\b/.test(q)?2:0),
-      'consult.catalog':(/\b(catalogue|catalog|categorie|categories|prix|coute|coutent|montre|montres|affiche|afficher|voir|cherche|recherche|trouve)\b/.test(q)?4:0)+(/\b(produit|produits|article|articles)\b/.test(q)?1:0)
+      'consult.catalog':(/\b(catalogue|catalog|categorie|categories|prix|coute|coutent|montre|montres|affiche|afficher|voir|cherche|recherche|trouve|hueforge|hue forge|youforge|yuforge|youporn|forge|you four|you force|youforg|youfor|u[- ]?for|u forge|u four|u4)\b/.test(q)?4:0)+(/\b(produit|produits|article|articles)\b/.test(q)?1:0)
     };
     const ranked=Object.entries(scores).sort((a,b)=>b[1]-a[1]);
     if(ranked[0][1]>=4&&ranked[0][1]-ranked[1][1]>=1) return freeze({kind:'read',actionId:ranked[0][0],message:String(message),pending:null});
@@ -20178,7 +20178,7 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     return {printers,jobs:[...daily,...legacy,...queue],templates};
   }
   function printingMatches(items,message){
-    const q=normalize(message),generic=new Set('a au aux ce ces combien de des du dans en est et je la le les ma mes mon pour que quel quelle quels quelles sur ta tes ton tu un une votre vos montre montre moi affiche afficher voir cherche recherche trouve impression impressions imprimante imprimantes planning file files attente duree temps charge travail travaux tache taches aujourd hui demain hueforge hue forge youforge yuforge youporn forge you four you force youforg youfor u4 hf modele modeles reste restante restant'.split(' '));
+    const q=normalize(message),generic=new Set('a au aux ce ces combien de des du dans en est et je la le les ma mes mon pour que quel quelle quels quelles sur ta tes ton tu un une votre vos montre montre moi affiche afficher voir cherche recherche trouve impression impressions imprimante imprimantes planning file files attente duree temps charge travail travaux tache taches aujourd hui demain hueforge hue forge youforge yuforge youporn forge you four you force youforg youfor u for u four u4 hf modele modeles reste restante restant'.split(' '));
     const wanted=q.split(' ').filter(token=>token.length>1&&!generic.has(token)&&!/^\d+$/.test(token));
     if(!wanted.length)return items;
     const filtered=items.filter(item=>{const hay=normalize([item.name,item.part,item.printer,item.type].filter(Boolean).join(' '));return wanted.every(token=>hay.includes(token)||base.similarity(token,hay.split(' ').find(part=>base.similarity(token,part)>=.76)||'')>=.76);});
@@ -20187,7 +20187,7 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
   function requestedPrinter(message,printers){ const q=normalize(message);return printers.find(item=>[item.key,item.name].some(value=>value&&q.includes(normalize(value))))||null; }
   function printingReader(data,message,pending){
     const q=normalize(message),projection=projectPrinting(data),printer=requestedPrinter(message,projection.printers)||(pending&&pending.printer?projection.printers.find(item=>item.key===pending.printer):null);
-    if(/\b(hueforge|hue forge|youforge|yuforge|youporn|forge|you four|you force|youforg|youfor|u4|hf|modele hf|modeles hf)\b/.test(q)){
+    if(/\b(hueforge|hue forge|youforge|yuforge|youporn|forge|you four|you force|youforg|youfor|u[- ]?for|u forge|u four|u4|hf|modele hf|modeles hf)\b/.test(q)){
       let templates=printingMatches(projection.templates.map(item=>({...item,printer:'',type:'hf'})),message);
       if(!templates.length)return result('consult.printing','Aucun modèle HueForge correspondant n’est enregistré.');
       const shown=templates.slice(0,12),answer=shown.map(item=>item.name+' : '+minutesLabel(item.durationMinutes)+(item.colors.length?', '+item.colors.length+' couleur(s)':'')+(item.swaps?', '+item.swaps+' swap(s)':'')).join(' ; ');
@@ -20307,7 +20307,7 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     if(pending&&pending.kind==='printing_printer')return freeze({kind:'read',actionId:'consult.printing',message:String(message),pending:clone(pending)});
     const scores={
       'consult.stocks':(/\b(stock|stocks|inventaire|quantite|quantites|combien)\b/.test(q)?7:0),
-      'consult.printing':(/\b(impression|impressions|imprimante|imprimantes|planning|file d impression|hueforge|hue forge|youforge|yuforge|youporn|forge|you four|you force|youforg|youfor|u4|modele hf|job|jobs)\b/.test(q)?5:0)+(/\b(duree|charge|attente|aujourd hui|demain)\b/.test(q)?1:0),
+      'consult.printing':(/\b(impression|impressions|imprimante|imprimantes|planning|file d impression|modele|modeles|template|templates|job|jobs)\b/.test(q)?5:0)+(/\b(duree|charge|attente|aujourd hui|demain)\b/.test(q)?1:0),
       'consult.markets':(/\b(marche|marches|foire|salon)\b/.test(q)?5:0)+(/\b(prochain|ville|date|horaire|distance|materiel|installation|checklist|place|emplacement)\b/.test(q)?1:0),
       'consult.cash':(/\b(ticket|tickets|caisse)\b/.test(q)?5:0)+(/\b(ligne|lignes|journee|date|quantite|detail)\b/.test(q)?1:0)
     };
@@ -20655,7 +20655,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     let domain=null;
     if(/\b(?:stock|inventaire|produit|article|maison)\b/.test(q)) domain='stock';
     else if(/\b(?:marche|march[eé]s|ville|barnum|grilles?)\b/.test(q)) domain='market';
-    else if(/\b(?:impression|imprimante|planning|tache|hueforge|hue forge|youforge|yuforge|youporn|forge|you four|you force|youforg|youfor|u4)\b/.test(q)) domain='printing';
+    else if(/\b(?:impression|imprimante|planning|tache|hueforge|hue forge|youforge|yuforge|youporn|forge|you four|you force|youforg|youfor|u[- ]?for|u forge|u four|u4)\b/.test(q)) domain='printing';
     else if(/\b(?:ticket|vente|caisse|encaisse)\b/.test(q)) domain='cash';
     else if(/\b(?:filament|bobine)\b/.test(q)) domain='filaments';
     else if(/\b(?:recette|livre de recettes)\b/.test(q)) domain='recipe';
@@ -21423,7 +21423,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     let corrected=raw;
     const q=normalizeTranscript(raw);
     const corrections=[];
-    const productContext=/\b(stock|stocks|produit|produits|catalogue|article|articles|quantite|quantites|combien|maison|pikachu|numero|premier|premiere|deuxieme|second|troisieme|ajoute|ajouter|modifie|modifier|reste|restant|montre|montres|affiche|afficher|voir|cherche|recherche|trouve|stitch)\b/.test(q);
+    const productContext=/\b(stock|stocks|produit|produits|catalogue|article|articles|quantite|quantites|combien|maison|pikachu|goku|numero|premier|premiere|deuxieme|second|troisieme|ajoute|ajouter|modifie|modifier|reste|restant|montre|montres|affiche|afficher|voir|cherche|recherche|trouve|stitch)\b/.test(q);
     let products=[];
     try{ products=typeof db!=='undefined'&&db&&Array.isArray(db.products)?db.products:[]; }catch(error){ products=[]; }
     const normalizeName=name=>normalizeTranscript(name);
@@ -21445,8 +21445,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         replace(/\bpetite\s+gou?te\s+no\b/i,petiteName,'goutte no → '+petiteName);
       if(petiteName && /\bhainaut\b/i.test(corrected) && !/\bpetite\s+gou?te\s+no\b/i.test(corrected))
         replace(/\bhainaut\b/i,petiteName,'Hainaut → '+petiteName);
-      if(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|you\s+four|youforg|you\s+force|youfor|yuforge|u4)\b/i.test(corrected))
-        replace(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|you\s+four|youforg|you\s+force|youfor|yuforge|u4)\b/i,'HueForge','variante → HueForge');
+      if(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|you\s+four|youforg|you\s+force|youfor|yuforge|u[- ]?for|u\s+forge|u\s+four|u4)\b/i.test(corrected))
+        replace(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|you\s+four|youforg|you\s+force|youfor|yuforge|u[- ]?for|u\s+forge|u\s+four|u4)\b/i,'HueForge','variante → HueForge');
       if(/\byouporn\b/i.test(corrected))
         replace(/\byouporn\b/i,'HueForge','variante métier → HueForge');
     }
