@@ -21640,6 +21640,16 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       transition(STATES.ERROR,{keepError:true});
       return getState();
     }
+    // 7G: raccorder automatiquement le moteur navigateur réel au contrat
+    // d’adaptateur déjà utilisé par 7B/7E. Aucun second moteur ni aucune
+    // boucle autonome : start/stop/restart restent arbitrés ici.
+    if(!recognitionAdapter){
+      const detectedAdapter=createDetectedAdapter();
+      if(detectedAdapter){
+        recognitionAdapter=detectedAdapter;
+        lastStopReason='adapter:'+String(detectedAdapter.name||'réel');
+      }
+    }
     await acquireWakeLock(expectedGeneration);
     if(!desiredOn || expectedGeneration!==generation) return getState();
     transition(STATES.WAITING_WAKE_WORD,{detail:recognitionAdapter?'JARVIS ON · attente du mot « Jarvis » · Wake Lock : '+wakeLockStatus:'JARVIS ON · adaptateur réel préparé pour 7G, non activé · Wake Lock : '+wakeLockStatus});
