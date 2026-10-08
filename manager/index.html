@@ -19546,12 +19546,16 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     const authorization=oneShotAuthorizations.get(proposalId);
     if(!authorization||authorization.proposalId!==p.proposalId||authorization.actionId!==p.actionId||authorization.nonce!==p.nonce)throw new Error('ONE_SHOT_AUTHORIZATION_REQUIRED');
     if(Date.now()>authorization.expiresAt){oneShotAuthorizations.delete(proposalId);throw new Error('EXPIRED_AUTHORIZATION');}
+    const security=api();
+    const securityState=security.getState();
+    if(!securityState.dataBackupVerified)throw new Error('DATA_BACKUP_REQUIRED');
+    if(!securityState.restoreTestVerified)throw new Error('RESTORE_TEST_REQUIRED');
     if(executionLock)throw new Error('EXECUTION_IN_PROGRESS'); executionLock=true;
     try{
       const simulation=simulate(proposalId,currentData);
       if(p.actionId!=='stock.adjust')throw new Error('NO_SCOPED_COMMIT_ADAPTER');
       if(typeof root.jarvisScopedStockAdjustCommit!=='function')throw new Error('NO_SCOPED_COMMIT_ADAPTER');
-      const commit=await root.jarvisScopedStockAdjustCommit({actionId:p.actionId,proposal:clone(p),currentData, candidateData:simulation.candidate,dryRun:true});
+      const commit=await root.jarvisScopedStockAdjustCommit({actionId:p.actionId,proposal:clone(p),currentData, candidateData:simulation.candidate,dryRun:false});
       if(commit && commit.firebaseWritePerformed===true && commit.neutralized!==true && currentData && typeof currentData==='object'){
         Object.keys(currentData).forEach(key=>{delete currentData[key];});
         Object.assign(currentData,clone(simulation.candidate));
@@ -20850,12 +20854,14 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       proposal.append('Action proposée : ',code,'. Aucune écriture automatique.');
       if(item.proposal.proposalId && root.JarvisWriteBroker6){
         const actions=document.createElement('div'); actions.className='j4-actions';
-        const confirm=document.createElement('button'); confirm.type='button'; confirm.className='j4-send'; confirm.textContent='Confirmer (écriture verrouillée)';
-        confirm.addEventListener('click',()=>{
+        const confirm=document.createElement('button'); confirm.type='button'; confirm.className='j4-send'; confirm.textContent='Confirmer (autorisation ponctuelle)';
+        confirm.addEventListener('click',async()=>{
           try{
             const confirmationData=(typeof db!=='undefined'&&db)?db:(root.db||{});
+            if(!root.JarvisSecurity||typeof root.JarvisSecurity.verifyRuntimeBackupRestore!=='function') throw new Error('SECURITY_KERNEL_MISSING');
+            root.JarvisSecurity.verifyRuntimeBackupRestore(confirmationData);
             root.JarvisWriteBroker6.confirmProposal(item.proposal.proposalId,{explicit:true,proposalId:item.proposal.proposalId,actionId:item.proposal.actionId,nonce:item.proposal.nonce},confirmationData);
-            root.JarvisWriteBroker6.executeConfirmed(item.proposal.proposalId,confirmationData);
+            await root.JarvisWriteBroker6.executeConfirmedAsync(item.proposal.proposalId,confirmationData);
           }catch(error){ setStatus(error&&error.message==='JARVIS_WRITES_DISABLED'?'Confirmation reçue, mais l écriture reste bloquée par writesEnabled=false.':'Confirmation refusée : '+(error&&error.message||'erreur'),true,false); }
         });
         const cancel=document.createElement('button'); cancel.type='button'; cancel.className='j4-retry'; cancel.textContent='Annuler';
