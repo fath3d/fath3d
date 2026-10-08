@@ -19450,7 +19450,12 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
       next.planningJobs=Array.isArray(next.planningJobs)?next.planningJobs:[];next.planningJobs.push({id:id('print'),title:args.title,quantity:args.quantity||1,durationMinutes:args.durationMinutes||0,constraints:args.constraints||''});return next;
     }
     if(proposal.actionId==='print_task.update'){
-      const task=(next.planningJobs||[]).find(t=>String(t.id)===String(args.taskId));if(!task)throw new Error('TASK_NOT_FOUND');['title','quantity','durationMinutes','constraints'].forEach(k=>{if(args[k]!==undefined)task[k]=args[k];});return next;
+      const legacy=(next.planningJobs||[]).find(t=>String(t.id)===String(args.taskId));
+      if(legacy){['title','quantity','durationMinutes','constraints'].forEach(k=>{if(args[k]!==undefined)legacy[k]=args[k];});return next;}
+      const match=String(args.taskId||'').match(/^(jour|task):([^:]+):(\d+)$/);
+      if(match){const day=next.planningJour&&next.planningJour[match[2]],list=match[1]==='jour'?(day&&day.impressions):(day&&day.taches),task=list&&list[Number(match[3])];if(task){['title','name','nom','quantity','dureeMinutes','constraints'].forEach(k=>{if(args[k]!==undefined&&k==='quantity')task[k]=args[k];});return next;}}
+      const queued=(next.printQueue||[]).find(t=>String(t.id)===String(args.taskId));if(queued){if(args.quantity!==undefined)queued.quantity=args.quantity;if(args.title!==undefined)queued.title=args.title;return next;}
+      throw new Error('TASK_NOT_FOUND');
     }
     if(proposal.actionId==='print_schedule.create'||proposal.actionId==='print_schedule.update'){
       next.planningJour=next.planningJour&&typeof next.planningJour==='object'?next.planningJour:{};next.planningJour[args.date||args.scheduleId]={items:clone(args.items||[]),notes:args.notes||''};return next;
@@ -20515,14 +20520,20 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       if(!date)return {kind:'clarification',answer:'Pour créer ce planning, précise la date.'};
       return {kind:'write_proposal',actionId:'print_schedule.create',args:{date,items:[],notes:''},oldValue:null,newValue:{date,items:[],notes:''},answer:`Proposition de planning d’impression pour le ${date}. Aucune imprimante ne sera pilotée. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
     }
-    const tasks=Array.isArray(currentData&&currentData.planningJobs)?currentData.planningJobs:[];
+    const tasks=[];
+    (Array.isArray(currentData&&currentData.planningJobs)?currentData.planningJobs:[]).forEach((item,index)=>tasks.push({item,taskId:item.id===undefined?`legacy:${index}`:item.id,title:item.title||item.name||item.nom||''}));
+    Object.entries(currentData&&currentData.planningJour&&typeof currentData.planningJour==='object'?currentData.planningJour:{}).forEach(([day,entry])=>{
+      (Array.isArray(entry&&entry.impressions)?entry.impressions:[]).forEach((item,index)=>tasks.push({item,taskId:`jour:${day}:${index}`,title:item.nom||item.name||item.title||''}));
+      (Array.isArray(entry&&entry.taches)?entry.taches:[]).forEach((item,index)=>tasks.push({item,taskId:`task:${day}:${index}`,title:item.nom||item.name||item.texte||item.title||''}));
+    });
+    (Array.isArray(currentData&&currentData.printQueue)?currentData.printQueue:[]).forEach((item,index)=>tasks.push({item,taskId:item.id===undefined?`queue:${index}`:item.id,title:item.nom||item.name||item.title||''}));
     if(updateTask){
       const wanted=(q.match(/\btache\b[\s\S]*?\b(?:impression|imprimante)\b\s+(.+?)(?:,|\s+quantit[ée]\b|$)/)||[])[1]||'';
-      const candidates=tasks.filter(item=>{const hay=normalizeIntent([item.title,item.name,item.nom].filter(Boolean).join(' '));return !wanted||hay.includes(wanted)||wanted.split(' ').filter(Boolean).every(t=>hay.includes(t));});
+      const candidates=tasks.filter(ref=>{const hay=normalizeIntent(ref.title);return !wanted||hay.includes(wanted)||wanted.split(' ').filter(Boolean).every(t=>hay.includes(t));});
       if(!candidates.length)return {kind:'clarification',answer:'Je ne trouve pas cette tâche d’impression.'};
       if(candidates.length>1)return {kind:'clarification',answer:'J’ai trouvé plusieurs tâches d’impression correspondantes. Laquelle veux-tu modifier ?'};
-      const task=candidates[0],quantity=Number((q.match(/\bquantit[ée]\s+(\d+)/)||[])[1]||task.quantity||1);
-      return {kind:'write_proposal',actionId:'print_task.update',args:{taskId:task.id,title:task.title||task.name||task.nom||'',quantity},oldValue:{title:task.title||task.name||task.nom||'',quantity:task.quantity||1},newValue:{title:task.title||task.name||task.nom||'',quantity},answer:`Proposition de modification de la tâche d’impression ${task.title||task.name||task.nom||task.id}. Aucune imprimante ne sera pilotée. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
+      const ref=candidates[0],task=ref.item,quantity=Number((q.match(/\bquantit[ée]\s+(\d+)/)||[])[1]||task.quantity||1);
+      return {kind:'write_proposal',actionId:'print_task.update',args:{taskId:ref.taskId,title:ref.title,quantity},oldValue:{title:ref.title,quantity:task.quantity||1},newValue:{title:ref.title,quantity},answer:`Proposition de modification de la tâche d’impression ${ref.title||ref.taskId}. Aucune imprimante ne sera pilotée. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
     }
     const days=currentData&&currentData.planningJour&&typeof currentData.planningJour==='object'?currentData.planningJour:{};
     const matchingDates=Object.keys(days).filter(key=>!date||key===date);
