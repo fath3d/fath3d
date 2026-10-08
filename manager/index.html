@@ -20549,7 +20549,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   }
   function localCashWriteRoute(message,currentData){
     const q=normalizeIntent(message);
-    if(/\b(valide|valider|enregistre|enregistrer|confirme|confirmer|encaisse|encaisser)\b[\s\S]*\b(ticket|vente)\b|\b(ticket|vente)\b[\s\S]*\b(valide|valider|enregistre|enregistrer|confirme|confirmer|encaisse|encaisser)\b/.test(q))
+    if(/\b(valide|valider|enregistre|enregistrer|confirme|confirmer|encaisse|encaisser)\b[\s\S]*\b(ticket|vente)\b|\b(ticket|vente)\b[\s\S]*\b(valide|valider|enregistre|enregistrer|confirme|confirmer|encaisse|encaisser)\b|\bencaisse(?:[- ]le)?\b/.test(q))
       return {kind:'direct',result:{outcome:'refusal',answer:'La validation d’une vente est interdite à cette étape. Aucun ticket ni aucune donnée financière n’a été modifié.',proposal:null,topic:'cash',missingInformation:[],readAction:null}};
     const preparing=/\b(pr[eé]pare|preparer|prépare|préparer|mets|mettre)\b[\s\S]*\b(ticket|vente)\b/.test(q);
     const correcting=/\b(corrige|corriger|modifie|modifier|change|changer)\b[\s\S]*\b(ticket|quantit[eé]|quantite)\b/.test(q);
