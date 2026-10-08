@@ -20510,6 +20510,21 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     'cash.pending_ticket.prepare','pending_action.correct','pending_action.cancel'
   ]);
   const READ_ACTIONS_5A=Object.freeze(['consult.catalog','consult.stocks','consult.stock_needs','consult.filaments']);
+  const GATEWAY_READ_GROUPS=Object.freeze({
+    stock:Object.freeze(['consult.catalog','consult.stocks','consult.stock_needs']),
+    filaments:Object.freeze(['consult.filaments','consult.catalog']),
+    market:Object.freeze(['consult.markets']),
+    printing:Object.freeze(['consult.printing']),
+    cash:Object.freeze(['consult.cash']),
+    recipe:Object.freeze(['consult.recipe_book']),
+    finance:Object.freeze(['consult.recipe_book','consult.urssaf','consult.global_revenue','consult.market_revenue'])
+  });
+  const GATEWAY_WRITE_GROUPS=Object.freeze({
+    stock:Object.freeze(['stock.adjust','inventory.commit']),
+    market:Object.freeze(['market.create','market.update']),
+    printing:Object.freeze(['print_task.create','print_task.update','print_schedule.create','print_schedule.update']),
+    cash:Object.freeze(['cash.pending_ticket.prepare','pending_action.correct','pending_action.cancel'])
+  });
   const LABELS=Object.freeze({
     clarification:'Précision nécessaire',
     future_capability:'Fonction future',
@@ -20570,6 +20585,33 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function codedError(code,message){ const error=new Error(message); error.code=code; return error; }
   function normalizeText(value){ return String(value||'').trim().slice(0,4000); }
   function normalizeIntent(value){ return normalizeText(value).toLocaleLowerCase('fr-FR').normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+  function selectGatewayActions(message,broker){
+    const q=normalizeIntent(message);
+    const available=new Set([...(broker&&typeof broker.getAllowedActions==='function'?broker.getAllowedActions():READ_ACTIONS_5A),...PROPOSABLE_ACTIONS]);
+    const pick=ids=>Array.from(new Set(ids.filter(actionId=>available.has(actionId)))).slice(0,12);
+    const isWrite=/\b(?:ajoute|ajouter|retire|retirer|enleve|enlever|mets|met|mettre|modifie|modifier|change|changer|cree|creer|cr[eé]e|prepare|pr[eé]pare|enregistre|enregistrer|corrige|corriger)\b/.test(q);
+    const isFinancial=/\b(?:ca|chiffre d affaires|revenu|recette|urssaf|livre de recettes)\b/.test(q);
+    const isPrinterControl=/\b(?:lance|demarre|arrete|stoppe|pause|reprend|pilote|commande)\b[\s\S]*\b(?:imprimante|impression|machine)\b/.test(q);
+    if(isFinancial&&isWrite) return [];
+    if(isPrinterControl) return [];
+    let domain=null;
+    if(/\b(?:stock|inventaire|produit|article|maison)\b/.test(q)) domain='stock';
+    else if(/\b(?:marche|march[eé]s|ville|barnum|grilles?)\b/.test(q)) domain='market';
+    else if(/\b(?:impression|imprimante|planning|tache)\b/.test(q)) domain='printing';
+    else if(/\b(?:ticket|vente|caisse|encaisse)\b/.test(q)) domain='cash';
+    else if(/\b(?:filament|bobine)\b/.test(q)) domain='filaments';
+    else if(/\b(?:recette|livre de recettes)\b/.test(q)) domain='recipe';
+    else if(/\b(?:urssaf|ca|chiffre d affaires|revenu)\b/.test(q)) domain='finance';
+    else if(/\bmarche\b/.test(q)) domain='market';
+    if(isWrite){
+      if(!domain||domain==='finance') return [];
+      return pick(GATEWAY_WRITE_GROUPS[domain]||[]);
+    }
+    if(domain) return pick(GATEWAY_READ_GROUPS[domain]||[]);
+    // Une demande sans domaine fiable ne reçoit aucune capacité arbitraire.
+    // Le Gateway peut alors demander une clarification sans contourner le noyau.
+    return [];
+  }
   function localStockWriteRoute(message,currentData){
     const q=normalizeIntent(message);
     let mode=null,amount=null,target=null;
@@ -20890,8 +20932,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       }else if(route.kind==='read'){
         result=broker.consult(route.actionId,{message:route.message,pending:route.pending});
       }else{
-        const requestedReads=broker&&typeof broker.getAllowedActions==='function'?broker.getAllowedActions():[...READ_ACTIONS_5A];
-        const response=await gateway.send({sessionId:session.id,message,conversation:previous,facts:[],financialSummary:[],requestedActions:[...requestedReads,...PROPOSABLE_ACTIONS]});
+        const requestedActions=selectGatewayActions(message,broker);
+        const response=await gateway.send({sessionId:session.id,message,conversation:previous,facts:[],financialSummary:[],requestedActions});
         result=classifyResponse(response);
         if(result.proposal && root.JarvisWriteBroker6){
           const remote=result.proposal;
