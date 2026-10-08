@@ -19949,6 +19949,7 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
   function clone(value){ return value===undefined?undefined:JSON.parse(JSON.stringify(value)); }
   function freeze(value){ if(value&&typeof value==='object'&&!Object.isFrozen(value)){Object.values(value).forEach(freeze);Object.freeze(value);}return value; }
   function normalize(value){ return base.normalize(value); }
+  function normalizeIntent(value){ return normalize(value).toLocaleLowerCase('fr-FR').normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
   function numberOrNull(value){ const number=Number(value);return value!==''&&value!==null&&value!==undefined&&Number.isFinite(number)?number:null; }
   function codedError(code,message){ const error=new Error(message);error.code=code;return error; }
   function sourceData(){ if(typeof db==='undefined'||!db||typeof db!=='object')throw codedError('READ_SOURCE_UNAVAILABLE','Les données du Manager ne sont pas disponibles.');return db; }
@@ -20044,6 +20045,18 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
       installation:item.installation===undefined?null:String(item.installation),hours:item.horaires===undefined?null:String(item.horaires),notes:item.notes===undefined?(item.observations===undefined?null:String(item.observations)):String(item.notes),status:item.statut===undefined?null:String(item.statut)
     }));
   }
+  function resolveMarketMatch(data, criteria){
+    const markets=projectMarkets(data), wantedCity=normalizeIntent(criteria&&criteria.ville||''), wantedDate=String(criteria&&criteria.date||'').slice(0,10);
+    const compact=s=>normalizeIntent(s).replace(/[^a-z0-9]+/g,'');
+    const cityKey=compact(wantedCity);
+    const candidates=markets.filter(item=>{
+      const itemCity=compact(item.city), itemDate=String(item.date||'').slice(0,10), itemEnd=String(item.dateEnd||item.date||'').slice(0,10);
+      const cityOk=!cityKey||(itemCity===cityKey||itemCity.includes(cityKey)||cityKey.includes(itemCity));
+      const dateOk=!wantedDate||(itemDate===wantedDate||itemEnd===wantedDate||(itemDate&&itemEnd&&itemDate<=wantedDate&&wantedDate<=itemEnd));
+      return cityOk&&dateOk;
+    });
+    return candidates;
+  }
   function marketReader(data,message,pending){
     const q=normalize(message),markets=projectMarkets(data),date=extractISODate(message)||(pending&&pending.date)||null;
     if(/\b(checklist|check list|materiel a prendre|quoi prendre)\b/.test(q)){
@@ -20129,7 +20142,7 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
   }
   function getAllowedActions(){ return [...base.getAllowedActions(),...NEW_ACTIONS]; }
   function getState(){ return {stage:'5B',version:VERSION,writesEnabled:false,persistentConversation:false,genericReadPath:false,maxFacts:MAX_FACTS,printerPhysicalControl:false,aggregateCashTotals:false,marketRevenue:false,allowedActions:getAllowedActions()}; }
-  const API=freeze({version:VERSION,getState,getAllowedActions,route,consult,normalize,similarity:base.similarity,resolveProduct:base.resolveProduct});
+  const API=freeze({version:VERSION,getState,getAllowedActions,route,consult,normalize,similarity:base.similarity,resolveProduct:base.resolveProduct,resolveMarket:(data,criteria)=>resolveMarketMatch(data,criteria)});
   Object.defineProperty(root,'JarvisReadBroker5B',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
@@ -20475,8 +20488,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       return {kind:'write_proposal',actionId:'market.create',args:{ville,date:resolvedDate,horaires:horaires||'',notes},oldValue:null,newValue:{ville,date:resolvedDate,horaires:horaires||'',notes},answer:`Proposition de nouveau marché : ${ville}, ${resolvedDate}${horaires?' · '+horaires:''}${notes?' · '+notes:''}. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
     }
     if(/\bca\b|chiffre d affaires|recette/.test(q)) return {kind:'direct',result:{outcome:'refusal',answer:'La modification du CA marché est interdite. Aucune proposition n’a été créée.',proposal:null,topic:'market',missingInformation:[],readAction:null}};
-    const markets=Array.isArray(currentData&&currentData.marches)?currentData.marches:[];
-    const candidates=markets.filter(item=>item&&(!ville||normalizeIntent(item.ville||item.city||'').includes(ville))&&(!date||String(item.date||'')===date));
+    const sharedMarketResolver=root.JarvisReadBroker5B&&typeof root.JarvisReadBroker5B.resolveMarket==='function'?root.JarvisReadBroker5B.resolveMarket:null;
+    const candidates=sharedMarketResolver?sharedMarketResolver(currentData,{ville,date}):[];
     if(candidates.length!==1) return {kind:'clarification',answer:candidates.length?'J’ai trouvé plusieurs marchés correspondants. Lequel veux-tu modifier ?':'Je ne trouve pas ce marché. Quelle fiche veux-tu modifier ?'};
     const market=candidates[0];
     return {kind:'write_proposal',actionId:'market.update',args:{marketId:market.id,date:date||market.date,ville:ville||market.ville,horaires:horaires||market.horaires||'',notes:market.notes||''},oldValue:{ville:market.ville,date:market.date,horaires:market.horaires||'',notes:market.notes||''},newValue:{ville:ville||market.ville,date:date||market.date,horaires:horaires||market.horaires||'',notes:market.notes||''},answer:`Proposition de modification du marché ${ville||market.ville} le ${date||market.date}. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
