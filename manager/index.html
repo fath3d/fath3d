@@ -20030,11 +20030,38 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     const data=sourceData();
     const products=projectProducts(data).filter(product=>pending.candidates.some(id=>String(id)===String(product.id)));
     if(!products.length) return null;
+    const frenchUnits={zero:0,un:1,une:1,deux:2,trois:3,quatre:4,cinq:5,six:6,sept:7,huit:8,neuf:9,dix:10,onze:11,douze:12,treize:13,quatorze:14,quinze:15,seize:16};
+    const frenchTens={vingt:20,trente:30,quarante:40,cinquante:50,soixante:60};
+    function spokenFrenchInteger(value){
+      const tokens=normalize(value).replace(/-/g,' ').split(/\s+/).filter(Boolean);
+      if(!tokens.length)return null;
+      if(tokens.length===1&&/^\d+$/.test(tokens[0]))return Number(tokens[0]);
+      let total=0, current=0, seen=false;
+      for(let i=0;i<tokens.length;i++){
+        const token=tokens[i];
+        if(token==='et')continue;
+        if(Object.prototype.hasOwnProperty.call(frenchTens,token)){current=frenchTens[token];seen=true;continue;}
+        if(Object.prototype.hasOwnProperty.call(frenchUnits,token)){
+          const unit=frenchUnits[token];
+          if(current===60&&unit>=1&&unit<=16)current+=unit;
+          else if(current===20||current===30||current===40||current===50)current+=unit;
+          else if(current===0)current=unit;
+          else current+=unit;
+          seen=true;continue;
+        }
+        if(token==='cent'){current=(current||1)*100;seen=true;continue;}
+        return null;
+      }
+      return seen?total+current:null;
+    }
     const numberMatch=q.match(/\b(?:le\s+)?(?:numero|n)\s*(?:°|º)?\s*(\d+)\b/);
+    const spokenNumberMatch=q.match(/\b(?:le\s+)?(?:numero|n)\s*(?:°|º)?\s+([a-z]+(?:\s+(?:et\s+)?[a-z]+){0,3})\b/);
+    const bareSpokenNumberMatch=q.match(/\b(?:prends|prend|choisis|choisi)\s+(?:le\s+)?([a-z]+(?:\s+(?:et\s+)?[a-z]+){0,3})\b/);
+    const spokenNumber=spokenNumberMatch?spokenFrenchInteger(spokenNumberMatch[1]):(bareSpokenNumberMatch?spokenFrenchInteger(bareSpokenNumberMatch[1]):null);
     const ordinalWords={premier:0,premiere:0,'première':0,deuxieme:1,'deuxième':1,second:1,seconde:1,troisieme:2,'troisième':2,quatrieme:3,'quatrième':3,cinquieme:4,'cinquième':4};
     let index=-1;
-    if(numberMatch){
-      const number=Number(numberMatch[1]);
+    if(numberMatch||spokenNumber!==null){
+      const number=numberMatch?Number(numberMatch[1]):spokenNumber;
       const byId=products.findIndex(product=>String(product.id)===String(number));
       index=byId>=0?byId:number-1;
     }else{
@@ -21409,14 +21436,16 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       if(next!==corrected){ corrected=next; corrections.push(label); }
     };
     if(productContext){
+      if(petiteName && /\b(?:gouttes?\s+(?:d[\s'’]?eau|non)|jeux\s+de\s+gouttes?\s+non)\b/i.test(corrected))
+        replace(/\b(?:gouttes?\s+(?:d[\s'’]?eau|non)|jeux\s+de\s+gouttes?\s+non)\b/i,petiteName,'variante goutte no → '+petiteName);
       if(petiteName && /\bpetites?\s+gouttes?(?:\s+hainaut)?\b/i.test(corrected))
         replace(/\bpetites?\s+gouttes?(?:\s+hainaut)?\b/i,petiteName,'petites gouttes → '+petiteName);
       if(petiteName && /\bpetite\s+gou?te\s+no\b/i.test(corrected))
         replace(/\bpetite\s+gou?te\s+no\b/i,petiteName,'goutte no → '+petiteName);
       if(petiteName && /\bhainaut\b/i.test(corrected) && !/\bpetite\s+gou?te\s+no\b/i.test(corrected))
         replace(/\bhainaut\b/i,petiteName,'Hainaut → '+petiteName);
-      if(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|youforg|yuforge)\b/i.test(corrected))
-        replace(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|youforg|yuforge)\b/i,'HueForge','variante → HueForge');
+      if(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|you\s+four|youforg|you\s+force|youfor|yuforge|u4)\b/i.test(corrected))
+        replace(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|you\s+four|youforg|you\s+force|youfor|yuforge|u4)\b/i,'HueForge','variante → HueForge');
       if(/\byouporn\b/i.test(corrected))
         replace(/\byouporn\b/i,'HueForge','variante métier → HueForge');
     }
