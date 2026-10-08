@@ -21159,11 +21159,12 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     try{ if(root.speechSynthesis && typeof root.speechSynthesis.cancel==='function') root.speechSynthesis.cancel(); }catch(error){}
   }
 
-  function finishSpeech(generation){
-    if(generation!==speechGeneration) return false;
+  function finishSpeech(speechId,voiceGeneration){
+    if(speechId!==speechGeneration || voiceGeneration!==generation) return false;
     speechUtterance=null;
     if(desiredOn && state===STATES.SPEAKING){
       transition(STATES.WAITING_WAKE_WORD,{detail:'Parole terminée · attente du mot « Jarvis »'});
+      scheduleRestart('speech-complete');
     }
     return true;
   }
@@ -21171,15 +21172,21 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function speakResponse(text){
     const phrase=String(text||'').trim();
     if(!phrase || !root.speechSynthesis || typeof root.speechSynthesis.speak!=='function' || typeof root.SpeechSynthesisUtterance!=='function') return false;
+    if(!desiredOn || (state!==STATES.PROCESSING && state!==STATES.SPEAKING)) return false;
+    const voiceGeneration=generation;
     cancelSpeech();
     const currentGeneration=speechGeneration;
+    if(state!==STATES.SPEAKING){
+      clearCommandWindow();
+      stopRecognition('speaking');
+    }
     let utterance;
     try{ utterance=new root.SpeechSynthesisUtterance(phrase); }catch(error){ return false; }
     const voice=chooseSpeechVoice();
     if(voice) utterance.voice=voice;
     utterance.lang=(voice&&voice.lang)||'fr-FR';
-    utterance.onend=()=>finishSpeech(currentGeneration);
-    utterance.onerror=()=>finishSpeech(currentGeneration);
+    utterance.onend=()=>finishSpeech(currentGeneration,voiceGeneration);
+    utterance.onerror=()=>finishSpeech(currentGeneration,voiceGeneration);
     speechUtterance=utterance;
     try{
       if(state!==STATES.SPEAKING) transition(STATES.SPEAKING,{detail:'Jarvis parle'});
@@ -21192,6 +21199,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   }
 
   function speakResponseHook(payload){
+    if(!desiredOn || (state!==STATES.PROCESSING && state!==STATES.SPEAKING)) return false;
     const answer=payload&&payload.result&&payload.result.answer;
     return speakResponse(answer);
   }
@@ -21701,12 +21709,15 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(!desiredOn) return;
     if(document.visibilityState==='hidden'){
       detailOverride='JARVIS ON · suspendu pendant que la page est masquée';
+      clearRecovery();
+      if(state!==STATES.SPEAKING) stopRecognition('visibility-hidden');
       await releaseWakeLock();
       render();
       return;
     }
     detailOverride='';
     await acquireWakeLock(generation);
+    if(state===STATES.WAITING_WAKE_WORD) scheduleRestart('visibility-visible');
     render();
   }
 
