@@ -19879,7 +19879,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
       const scoped=products.filter(product=>normalize(product.category)===category);
       const scopedQuery=normalizedPrepared.replace(new RegExp('\\b'+category.replace(/\\s+/g,'\\s+')+'\\b','g'),' ').replace(/\\s+/g,' ').trim()||prepared;
       const scopedMatch=resolveItems(scoped,scopedQuery,['name','variant']);
-      if(scopedMatch.matches.length) return scopedMatch;
+      if(scopedMatch.matches.length) return scopedMatch; return {matches:[],ambiguous:false};
     }
     return productMatches(products,prepared);
   }
