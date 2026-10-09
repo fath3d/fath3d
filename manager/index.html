@@ -20293,6 +20293,25 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     });
     return candidates;
   }
+  function marketDateLabelFr(item){
+    const months=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+    const parse=value=>{const m=String(value||'').match(/^(20\d{2})-(\d{2})-(\d{2})$/);return m?{year:Number(m[1]),month:Number(m[2]),day:Number(m[3])}:null;};
+    const start=parse(item.date),end=parse(item.dateEnd);
+    if(!start)return 'date non renseignée';
+    if(end&&(end.day!==start.day||end.month!==start.month)&&end.month===start.month)return start.day+' et '+end.day+' '+months[start.month-1];
+    return start.day+' '+months[start.month-1];
+  }
+  function marketDetailAnswer(item){
+    const details=[marketDateLabelFr(item),item.city||'lieu non renseigné'];
+    if(item.hours)details.push('horaires '+item.hours);
+    if(item.distance)details.push('distance '+item.distance);
+    if(item.equipment)details.push(item.equipment);
+    if(item.installation)details.push('installation '+item.installation);
+    if(item.type)details.push(item.type);
+    if(item.status)details.push('statut '+item.status);
+    if(item.notes)details.push(item.notes);
+    return details.join(' · ')+'.';
+  }
   function marketReader(data,message,pending){
     const q=normalize(message),markets=projectMarkets(data),date=extractISODate(message)||(pending&&pending.date)||null;
     const months={janvier:1,fevrier:2,mars:3,avril:4,mai:5,juin:6,juillet:7,aout:8,septembre:9,octobre:10,novembre:11,decembre:12};
@@ -20306,6 +20325,25 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
       const remaining=keys.filter(key=>checklist[key]!==true),done=keys.length-remaining.length;
       return result('consult.markets',done+' élément(s) coché(s) sur '+keys.length+'.'+(remaining.length?' Il reste : '+remaining.slice(0,12).join(', ')+'.':' La checklist est complète.'),{facts:[fact('market_info','Checklist marché — restant',remaining.length,'éléments')]});
     }
+    const detailRequested=/\b(info|infos|information|informations|detail|details|horaire|horaires|heures|tables?|barnum|grilles?|distance|statut|notes?)\b/.test(q);
+    const listRequested=/\b(quels?|quelles?|marches?|prochains?|prochaines?|liste|ce mois|mois ci|a venir)\b/.test(q)&&!detailRequested;
+    if(pending&&pending.kind==='market_list'&&!listRequested){
+      const contextMarkets=markets.filter(item=>pending.candidates.some(id=>String(id)===String(item.id)));
+      const compact=s=>normalizeIntent(s).replace(/\bst\b/g,'saint').replace(/[^a-z0-9]+/g,'');
+      const dayMatch=q.match(/\b(\d{1,2})(?:er)?(?:\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre))?\b/);
+      const requestedDay=dayMatch?Number(dayMatch[1]):null, requestedMonthName=dayMatch&&dayMatch[2]?dayMatch[2]:null;
+      const selected=contextMarkets.filter(item=>{
+        const city=compact(item.city), cityHit=city&&compact(q).includes(city.slice(0,Math.max(4,Math.min(city.length,compact(q).length))));
+        const dateHit=!requestedDay||(item.date&&Number(String(item.date).slice(8,10))===requestedDay&&(!requestedMonthName||Number(String(item.date).slice(5,7))===months[requestedMonthName]));
+        return cityHit||dateHit;
+      });
+      if(selected.length===1)return result('consult.markets',marketDetailAnswer(selected[0]),{facts:[fact('market_info',selected[0].city||'Marché',marketDetailAnswer(selected[0]))]});
+      if(selected.length>1)return result('consult.markets','Quel marché veux-tu détailler : '+selected.map(item=>item.city).join(', ')+' ?',{outcome:'clarification',pending:{kind:'market_choice',actionId:'consult.markets',candidates:selected.map(item=>item.id)}});
+    }
+    if(pending&&pending.kind==='market_choice'&&Array.isArray(pending.candidates)){
+      const selected=markets.filter(item=>pending.candidates.some(id=>String(id)===String(item.id))&&normalizeIntent(q).includes(normalizeIntent(item.city)));
+      if(selected.length===1)return result('consult.markets',marketDetailAnswer(selected[0]),{facts:[fact('market_info',selected[0].city||'Marché',marketDetailAnswer(selected[0]))]});
+    }
     const cities=markets.filter(item=>item.city&&q.includes(normalize(item.city)));
     let matches=resolveMarketMatch(data,{ville:cities.length?cities[0].city:null,date});
     const wantsFuture=/\b(prochain|prochains|prochaine|prochaines|a venir|bientot)\b/.test(q);
@@ -20315,11 +20353,13 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     const singularNext=/\bprochain\s+marche\b/.test(q)&&!(/\bprochains\s+marches?\b|\bprochaines\s+marches?\b/.test(q));
     if(wantsFuture&&singularNext) matches=matches.slice(0,1);
     if(!matches.length)return result('consult.markets','Je ne trouve aucun marché correspondant.');
-    if(matches.length>1&&!/\b(prochains|marches a venir|liste)\b/.test(q)){
+    if(matches.length>1&&!listRequested){
       const choices=matches.slice(0,5).map(item=>(item.city||'Ville non renseignée')+(item.date?' — '+item.date:'')).join(', ');
       return result('consult.markets','J’ai trouvé plusieurs marchés : '+choices+'. Lequel veux-tu ?',{outcome:'clarification',pending:{kind:'market_choice',actionId:'consult.markets',candidates:matches.slice(0,5).map(item=>item.id)}});
     }
-    const wantsPrice=/\b(prix|cout|coute|tarif).*(place|emplacement)|(place|emplacement).*(prix|cout|coute|tarif)\b/.test(q),shown=matches.slice(0,12);
+    const shown=matches.slice(0,12);
+    if(listRequested)return result('consult.markets',shown.map(item=>marketDateLabelFr(item)+ ' : '+(item.city||'lieu non renseigné')).join('. ')+'.',{facts:shown.map(item=>fact('market_info',item.city||'Marché',marketDateLabelFr(item))),pending:{kind:'market_list',actionId:'consult.markets',candidates:shown.map(item=>item.id)}});
+    const wantsPrice=/\b(prix|cout|coute|tarif).*(place|emplacement)|(place|emplacement).*(prix|cout|coute|tarif)\b/.test(q);
     const descriptions=shown.map(item=>{
       const details=[];if(item.date)details.push(item.date);if(item.hours)details.push(item.hours);if(item.distance)details.push(item.distance);if(item.type)details.push(item.type);if(item.installation)details.push('installation '+item.installation);if(item.equipment)details.push(item.equipment);if(item.status)details.push('statut '+item.status);if(wantsPrice)details.push(item.placePrice===null?'prix de place non renseigné':'place '+item.placePrice.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €');
       return (item.city||'Ville non renseignée')+' : '+details.join(', ');
@@ -20371,6 +20411,7 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     if(/\b(ca|chiffre d affaires|recette|recettes).*(marche|marches)|(marche|marches).*(ca|chiffre d affaires|recette|recettes)\b/.test(q))return direct('La consultation du chiffre d’affaires des marchés est réservée au bloc 5C.','future_capability');
     if(pending&&pending.kind==='cash_target')return freeze({kind:'read',actionId:'consult.cash',message:String(message),pending:clone(pending)});
     if(pending&&pending.kind==='market_choice')return freeze({kind:'read',actionId:'consult.markets',message:String(message),pending:clone(pending)});
+    if(pending&&pending.kind==='market_list')return freeze({kind:'read',actionId:'consult.markets',message:String(message),pending:clone(pending)});
     if(pending&&pending.kind==='printing_printer')return freeze({kind:'read',actionId:'consult.printing',message:String(message),pending:clone(pending)});
     const scores={
       'consult.stocks':(/\b(stock|stocks|inventaire|quantite|quantites|combien)\b/.test(q)?7:0),
