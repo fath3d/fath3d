@@ -20161,7 +20161,11 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     const found=resolveProductMatch(data,message);
     return freeze({matches:clone(found.matches||[]),ambiguous:found.ambiguous===true});
   }
-  const API=freeze({version:VERSION,getState,getAllowedActions:()=>[...ALLOWED_ACTIONS],route,consult,normalize,similarity,resolveProduct,extractStructuredIntent});
+  function resolveProductFromData(data,message){
+    const found=resolveProductMatch(data,message);
+    return freeze({matches:clone(found.matches||[]),ambiguous:found.ambiguous===true});
+  }
+  const API=freeze({version:VERSION,getState,getAllowedActions:()=>[...ALLOWED_ACTIONS],route,consult,normalize,similarity,resolveProduct,resolveProductFromData,extractStructuredIntent});
   Object.defineProperty(root,'JarvisReadBroker',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
@@ -21286,26 +21290,54 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function clean(v){return norm(v).replace(/\b(?:jarvis|inventaire|produit|produits|article|articles|stock|en|dans|la|le|les|de|du|des|un|une|quantite|quantite|maison)\b/g,' ').replace(/\s+/g,' ').trim();}
   function currentProducts(data){return Array.isArray(data&&data.products)?data.products:[];}
   function categoryNames(data){return [...new Set(currentProducts(data).map(p=>p&&p.categorie).filter(Boolean))];}
-  function findCategory(value,data){const q=norm(value);if(!q)return null;const cats=categoryNames(data);return cats.find(c=>norm(c)===q)||cats.find(c=>norm(c).includes(q)||q.includes(norm(c)))||null;}
+  function findCategory(value,data){
+    const raw=String(value||'').trim();
+    const helper=root.JarvisVoice7&&typeof root.JarvisVoice7.normalizeVoiceBusinessTerms==='function'
+      ? root.JarvisVoice7.normalizeVoiceBusinessTerms : null;
+    const canonical=helper?helper('catalogue '+raw):raw;
+    const q=norm(canonical).replace(/^catalogue\s+/,'').trim();
+    if(!q)return null;
+    const cats=categoryNames(data);
+    return cats.find(c=>norm(c)===q)||cats.find(c=>norm(c).includes(q)||q.includes(norm(c)))||null;
+  }
   function parseNumberText(value){
     const q=norm(value); const digit=(q.match(/\b\d+\b/)||[])[0]; if(digit) return Number(digit);
     const t=q.replace(/-/g,' ').split(/\s+/).filter(Boolean); if(!t.length)return null;
-    if(t.length===1&&numberWords[t[0]])return numberWords[t[0]];
-    let total=0; for(let i=0;i<t.length;i++){if(t[i]==='et')continue; if(t[i]==='cent'){total=Math.max(100,total*100||100);continue;} const n=numberWords[t[i]]; if(!n)return null; if(n>=20&&n<100&&i+1<t.length&&numberWords[t[i+1]]===1){total+=n+1;i++;}else total+=n;}
-    return total||null;
+    // Le convertisseur français commun de l’étape 2 reste la source canonique.
+    // Le petit repli local ne traite que les nombres unitaires nécessaires au
+    // protocole inventaire lorsque l’orchestrateur est testé isolément.
+    if(typeof root.ivReadNumber==='function'){
+      const parsed=root.ivReadNumber(t,0);
+      if(parsed&&parsed.next===t.length)return parsed.value;
+    }
+    return t.length===1&&Object.prototype.hasOwnProperty.call(numberWords,t[0])?numberWords[t[0]]:null;
   }
   function quantityAndQuery(value){
-    const raw=norm(value); let qty=null; let match=raw.match(/\b(?:quantite|qte|x)\s*(\d+)\b/);
+    const raw=norm(value); let qty=null; let match=raw.match(/\b(?:quantite|qte)\s*(\d+)\b/);
     if(match){qty=Number(match[1]);return {quantity:qty,query:raw.replace(match[0],'').trim()};}
+    match=raw.match(/\bx\s*(\d+)\b/); if(match){return {quantity:Number(match[1]),query:raw.replace(match[0],'').trim()};}
     match=raw.match(/^(\d+)\s+(.+)$/); if(match){return {quantity:Number(match[1]),query:match[2]};}
-    const words=raw.split(/\s+/); for(let i=Math.min(4,words.length);i>=1;i--){const n=parseNumberText(words.slice(0,i).join(' '));if(n!==null&&n>0&&n<=999&&i<words.length){qty=n;return {quantity:qty,query:words.slice(i).join(' ')};}}
+    const words=raw.split(/\s+/);
+    for(let i=Math.min(4,words.length);i>=1;i--){const n=parseNumberText(words.slice(0,i).join(' '));if(n!==null&&n>0&&n<=999&&i<words.length){qty=n;return {quantity:qty,query:words.slice(i).join(' ')};}}
+    for(let i=Math.min(3,words.length-1);i>=1;i--){const start=words.length-i;const n=parseNumberText(words.slice(start).join(' '));if(n!==null&&n>0&&n<=999)return {quantity:n,query:words.slice(0,start).join(' ')};}
     return {quantity:1,query:raw};
   }
   function productCandidates(value,data){
     const scoped=currentProducts(data).filter(p=>p&&norm(p.categorie)===norm(state.category));
+    const full=norm(value);
+    const exact=scoped.filter(p=>{const name=norm(p.name||p.nom||p.label||'');return name===full||name.replace(/\s+/g,'')===full.replace(/\s+/g,'');});
+    if(exact.length)return {quantity:1,candidates:exact,query:full};
     const parsed=quantityAndQuery(value); const q=clean(parsed.query); if(!q)return {quantity:parsed.quantity,candidates:[],query:q};
-    const scored=scoped.map(p=>{const name=norm(p.name||p.nom||p.label||'');const compact=name.replace(/\s+/g,'');const cq=q.replace(/\s+/g,'');let score=0;if(name===q||compact===cq)score=100;else if(name.includes(q)||q.includes(name))score=70;else{const qt=new Set(q.split(' ')),nt=new Set(name.split(' '));let hit=0;qt.forEach(x=>{if(nt.has(x))hit++;});score=hit?40+hit*8:0;}return {p,score};}).filter(x=>x.score>0).sort((a,b)=>b.score-a.score);
-    const top=scored.length?scored[0].score:0; return {quantity:parsed.quantity,candidates:scored.filter(x=>x.score===top).map(x=>x.p),query:q};
+    // Inventory8 orchestre désormais le resolver produit canonique. Il reçoit
+    // toujours la catégorie active afin d’interdire toute recherche globale.
+    const common=root.JarvisReadBroker&&typeof root.JarvisReadBroker.resolveProductFromData==='function'
+      ? root.JarvisReadBroker.resolveProductFromData(data,`${state.category} ${q}`)
+      : (root.JarvisReadBroker&&typeof root.JarvisReadBroker.resolveProduct==='function'
+        ? root.JarvisReadBroker.resolveProduct(`${state.category} ${q}`) : null);
+    if(!common||!Array.isArray(common.matches))return {quantity:parsed.quantity,candidates:[],query:q};
+    const ids=new Set(common.matches.map(p=>String(p&&p.id)));
+    const candidates=scoped.filter(p=>ids.has(String(idOf(p))));
+    return {quantity:parsed.quantity,candidates,query:q};
   }
   function productLabel(p){return String(p&&((p.name||p.nom||p.label||'Produit')));}
   function idOf(p){return p&&p.id!==undefined?p.id:null;}
