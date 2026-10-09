@@ -21138,7 +21138,10 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       };
       const voiceAction=localVoiceConfirmation(message,currentData);
       const voiceCorrection=voiceAction||localVoiceCorrection(message,currentData);
-      const localWrite=voiceCorrection||localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData);
+      const inventoryRoute=root.JarvisInventory8&&typeof root.JarvisInventory8.route==='function'
+        ? root.JarvisInventory8.route(message,currentData)
+        : null;
+      const localWrite=inventoryRoute||voiceCorrection||localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData);
       const route=localWrite|| (broker?broker.route(message,session.pendingConsultation):{kind:'gateway'});
       let result;
       if(route.kind==='write_proposal'){
@@ -21270,6 +21273,73 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
 
   const API=Object.freeze({version:VERSION,getState,getSession,open,close,reset,sendText,classifyResponse,expireIfInactive,localStockWriteRoute});
   Object.defineProperty(root,'JarvisConversation',{value:API,enumerable:false,configurable:false,writable:false});
+})(typeof window!=='undefined'?window:globalThis);
+</script>
+<script id="jarvis-inventory8-step8a1">
+(function(root){
+  'use strict';
+  if(root.JarvisInventory8) return;
+  const STAGES=Object.freeze({OFF:'OFF',WAITING_LOCATION:'WAITING_LOCATION',WAITING_CATEGORY:'WAITING_CATEGORY',COUNTING:'COUNTING',WAITING_CLARIFICATION:'WAITING_CLARIFICATION',FINISHED:'FINISHED'});
+  const state={active:false,stage:STAGES.OFF,location:null,category:null,entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:''};
+  const numberWords={un:1,une:1,deux:2,trois:3,quatre:4,cinq:5,six:6,sept:7,huit:8,neuf:9,dix:10,onze:11,douze:12,treize:13,quatorze:14,quinze:15,seize:16,dixsept:17,dixhuit:18,dixneuf:19,vingt:20,trente:30,quarante:40,cinquante:50,soixante:60,cent:100,deuxcent:200};
+  function norm(v){return String(v||'').toLocaleLowerCase('fr-FR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[’']/g,' ').replace(/[^a-z0-9]+/g,' ').trim();}
+  function clean(v){return norm(v).replace(/\b(?:jarvis|inventaire|produit|produits|article|articles|stock|en|dans|la|le|les|de|du|des|un|une|quantite|quantite|maison)\b/g,' ').replace(/\s+/g,' ').trim();}
+  function currentProducts(data){return Array.isArray(data&&data.products)?data.products:[];}
+  function categoryNames(data){return [...new Set(currentProducts(data).map(p=>p&&p.categorie).filter(Boolean))];}
+  function findCategory(value,data){const q=norm(value);if(!q)return null;const cats=categoryNames(data);return cats.find(c=>norm(c)===q)||cats.find(c=>norm(c).includes(q)||q.includes(norm(c)))||null;}
+  function parseNumberText(value){
+    const q=norm(value); const digit=(q.match(/\b\d+\b/)||[])[0]; if(digit) return Number(digit);
+    const t=q.replace(/-/g,' ').split(/\s+/).filter(Boolean); if(!t.length)return null;
+    if(t.length===1&&numberWords[t[0]])return numberWords[t[0]];
+    let total=0; for(let i=0;i<t.length;i++){if(t[i]==='et')continue; if(t[i]==='cent'){total=Math.max(100,total*100||100);continue;} const n=numberWords[t[i]]; if(!n)return null; if(n>=20&&n<100&&i+1<t.length&&numberWords[t[i+1]]===1){total+=n+1;i++;}else total+=n;}
+    return total||null;
+  }
+  function quantityAndQuery(value){
+    const raw=norm(value); let qty=null; let match=raw.match(/\b(?:quantite|qte|x)\s*(\d+)\b/);
+    if(match){qty=Number(match[1]);return {quantity:qty,query:raw.replace(match[0],'').trim()};}
+    match=raw.match(/^(\d+)\s+(.+)$/); if(match){return {quantity:Number(match[1]),query:match[2]};}
+    const words=raw.split(/\s+/); for(let i=Math.min(4,words.length);i>=1;i--){const n=parseNumberText(words.slice(0,i).join(' '));if(n!==null&&n>0&&n<=999&&i<words.length){qty=n;return {quantity:qty,query:words.slice(i).join(' ')};}}
+    return {quantity:1,query:raw};
+  }
+  function productCandidates(value,data){
+    const scoped=currentProducts(data).filter(p=>p&&norm(p.categorie)===norm(state.category));
+    const parsed=quantityAndQuery(value); const q=clean(parsed.query); if(!q)return {quantity:parsed.quantity,candidates:[],query:q};
+    const scored=scoped.map(p=>{const name=norm(p.name||p.nom||p.label||'');const compact=name.replace(/\s+/g,'');const cq=q.replace(/\s+/g,'');let score=0;if(name===q||compact===cq)score=100;else if(name.includes(q)||q.includes(name))score=70;else{const qt=new Set(q.split(' ')),nt=new Set(name.split(' '));let hit=0;qt.forEach(x=>{if(nt.has(x))hit++;});score=hit?40+hit*8:0;}return {p,score};}).filter(x=>x.score>0).sort((a,b)=>b.score-a.score);
+    const top=scored.length?scored[0].score:0; return {quantity:parsed.quantity,candidates:scored.filter(x=>x.score===top).map(x=>x.p),query:q};
+  }
+  function productLabel(p){return String(p&&((p.name||p.nom||p.label||'Produit')));}
+  function idOf(p){return p&&p.id!==undefined?p.id:null;}
+  function showPanel(){
+    let panel=document.getElementById('jarvis-inventory8-panel'); if(!state.active&&state.stage===STAGES.OFF){if(panel)panel.remove();return;}
+    if(!panel){panel=document.createElement('section');panel.id='jarvis-inventory8-panel';panel.setAttribute('aria-live','polite');panel.style.cssText='position:fixed;right:18px;bottom:88px;z-index:10000;width:min(360px,calc(100vw - 36px));background:#111827;color:#f8fafc;border:1px solid #facc15;border-radius:10px;padding:12px;box-shadow:0 8px 28px #0008;font:14px system-ui';document.body.appendChild(panel);}
+    const lines=state.entries.map((e,i)=>`<div style="padding:5px 0;border-top:1px solid #374151"><b>${i+1} — ${e.quantity} ${escapeHtml(e.name)}</b> <span>${e.status==='corrected'?'✎ corrigé':'✓ résolu'}</span></div>`).join('');
+    const pending=state.pendingClarification?`<div style="margin-top:8px;color:#fde68a">⚠ clarification : ${state.pendingClarification.candidates.map((p,i)=>`${i+1} — ${escapeHtml(productLabel(p))} — n°${escapeHtml(idOf(p))}`).join(' · ')}</div>`:'';
+    panel.innerHTML=`<strong>Inventaire Jarvis — ${escapeHtml(state.stage)}</strong><div>Lieu : ${escapeHtml(state.location||'—')} · Catégorie : ${escapeHtml(state.category||'—')}</div>${lines||'<div style="margin-top:8px;color:#cbd5e1">Aucune ligne.</div>'}${pending}`;
+  }
+  function escapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+  function result(answer){state.lastMessage=answer;state.lastInteraction=Date.now();showPanel();return {kind:'direct',result:{outcome:'direct_answer',answer,proposal:null,topic:'inventory',missingInformation:[],readAction:null}};}
+  function reset(){Object.assign(state,{active:false,stage:STAGES.OFF,location:null,category:null,entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:''});showPanel();}
+  function start(){Object.assign(state,{active:true,stage:STAGES.WAITING_LOCATION,location:null,category:null,entries:[],pendingClarification:null,startedAt:Date.now(),lastInteraction:Date.now(),lastRawTranscript:''});return result('D’accord. Pour quel emplacement ? Pour 8A-1, dis « Maison ».');}
+  function formatSummary(){if(!state.entries.length)return 'Inventaire terminé. Le brouillon est vide. Aucune écriture n’a été effectuée.';return 'Inventaire terminé. Brouillon Maison / '+state.category+' : '+state.entries.map(e=>`${e.quantity} ${e.name}`).join(' ; ')+'. Aucune écriture n’a été effectuée.';}
+  function clarification(candidates,quantity,raw){state.pendingClarification={candidates,quantity,raw};state.stage=STAGES.WAITING_CLARIFICATION;return result('J’ai trouvé : '+candidates.map((p,i)=>`${i+1} — ${productLabel(p)} — n°${idOf(p)}`).join(' ; ')+'. Dis « le premier », « le deuxième » ou le numéro affiché.');}
+  function choosePending(value,data){const pending=state.pendingClarification;if(!pending)return null;const q=norm(value);let chosen=null;const ordinal=q.match(/^(?:le|la|numero|num)?\s*(premier|premiere|1er|deuxieme|second|seconde|2e|deux|1|2)$/);if(ordinal){const word=ordinal[1];const idx=/prem|1er|^1$/.test(word)?0:1;chosen=pending.candidates[idx]||null;}else{const n=parseNumberText(q);if(n!==null){chosen=pending.candidates.find(p=>String(idOf(p))===String(n))||pending.candidates[n-1]||null;}}
+    if(!chosen)return result('Je n’ai pas trouvé ce numéro dans la clarification. Choisis un candidat affiché.');
+    state.entries.push({productId:idOf(chosen),name:productLabel(chosen),category:state.category,quantity:pending.quantity||1,rawTranscript:pending.raw,normalizedText:norm(pending.raw),status:'resolved'});state.pendingClarification=null;state.stage=STAGES.COUNTING;return result(`${pending.quantity||1} — ${productLabel(chosen)} ✓`);
+  }
+  function correction(value,data){const q=norm(value);if(!state.entries.length)return result('Il n’y a aucune ligne à corriger.');const last=state.entries[state.entries.length-1];const qm=q.match(/\b(?:quantite|qte)\s*(\d+)\b/);if(qm){last.quantity=Number(qm[1]);last.status='corrected';return result(`Dernière ligne corrigée : ${last.quantity} — ${last.name} ✎`);}const spec=q.replace(/^.*?\b(?:dernier|derniere)\b/,'').replace(/^\s*[:,-]?\s*/,'').trim();if(spec){const found=productCandidates(spec.replace(/^corrige\s+/,''),data);if(found.candidates.length===1){last.productId=idOf(found.candidates[0]);last.name=productLabel(found.candidates[0]);last.quantity=found.quantity;last.status='corrected';return result(`Dernière ligne corrigée : ${last.quantity} — ${last.name} ✎`);}}return result('Précise la correction de la dernière ligne, par exemple « quantité 3 ».');}
+  function route(message,data){
+    const raw=String(message||'').trim();const q=norm(raw);if(!q)return null;state.lastRawTranscript=raw;
+    const startRe=/(?:^|\s)(?:on fait|on va faire|commence)\s+l inventaire\b|\bfaisons?\s+l inventaire\b|\bon fait\s+l inventaire\b/.test(q);
+    if(!state.active&&(state.stage===STAGES.OFF||state.stage===STAGES.FINISHED)){if(startRe)return start();return null;}
+    if(/^inventaire\s+termine|^j ai termine l inventaire|^fin de l inventaire/.test(q)){state.active=false;state.stage=STAGES.FINISHED;state.pendingClarification=null;return result(formatSummary());}
+    if(state.stage===STAGES.WAITING_LOCATION){if(/\bmarch/.test(q))return result('Pour 8A-1, l’inventaire est limité à Maison.');if(/\bmaison\b/.test(q)){state.location='Maison';state.stage=STAGES.WAITING_CATEGORY;return result('Quelle catégorie veux-tu inventorier ?');}return result('Dis « Maison ».');}
+    if(state.stage===STAGES.WAITING_CATEGORY){const cat=findCategory(raw,data);if(cat){state.category=cat;state.stage=STAGES.COUNTING;return result(`Catégorie ${cat} sélectionnée. Dicte un produit, ou dis « inventaire terminé ».`);}return result('Je ne trouve pas cette catégorie dans le Manager.');}
+    if(state.stage===STAGES.WAITING_CLARIFICATION)return choosePending(raw,data);
+    if(state.stage===STAGES.COUNTING){if(/\b(?:annule|supprime)\b.*\b(?:derniere|dernier)\b/.test(q)){if(!state.entries.length)return result('Il n’y a aucune ligne à annuler.');const removed=state.entries.pop();return result(`Ligne annulée : ${removed.name}.`);}if(/\bcorrige\b.*\bdern/.test(q)||/\bderniere\s+quantite\b/.test(q))return correction(raw,data);const found=productCandidates(raw,data);if(found.candidates.length===1){const p=found.candidates[0];state.entries.push({productId:idOf(p),name:productLabel(p),category:state.category,quantity:found.quantity,rawTranscript:raw,normalizedText:norm(raw),status:'resolved'});return result(`${found.quantity} — ${productLabel(p)} ✓`);}if(found.candidates.length>1)return clarification(found.candidates,found.quantity,raw);return result('Je ne trouve pas ce produit dans la catégorie sélectionnée.');}
+    return null;
+  }
+  function getState(){return JSON.parse(JSON.stringify(state));}
+  root.JarvisInventory8=Object.freeze({version:'8A-1.0.0',stages:STAGES,route,getState,reset});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
 <script id="jarvis-voice7-step7c">
