@@ -19783,7 +19783,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
   const ALLOWED_ACTIONS=Object.freeze(['consult.catalog','consult.stocks','consult.stock_needs','consult.filaments']);
   const MAX_FACTS=12;
   const LOCATION_LABELS=Object.freeze({maison:'Maison',marche:'Marché',artComplices:'Arts Complices',btvero:'Boutique de Véro'});
-  const STOP_WORDS=new Set('a ai au aux avec ce ces combien dans de des du elle en est et il je j le la les leur ma mes mon ne nos on ou pour que quel quelle quels quelles qu reste se si son sont sous sur ta tes ton tu un une vos votre y jai j ai catalogue catalog produit produits stock stocks piece pieces article articles coute cout prix categorie categories emplacement emplacements filament filaments bobine bobines marque matiere couleur poids gramme grammes maison marche art arts complices boutique vero btvero chez moi total tout tous ensemble global'.split(' '));
+  const STOP_WORDS=new Set('a ai au aux avec ce ces combien dans de des du elle en est et il je j le la les leur ma mes mon ne nos on ou pour que quel quelle quels quelles qu reste se si son sont sous sur ta tes ton tu un une vos votre y jai j ai catalogue catalog produit produits stock stocks piece pieces article articles coute cout prix categorie categories emplacement emplacements filament filaments bobine bobines marque matiere couleur poids gramme grammes maison marche art arts complices boutique vero btvero chez moi total tout tous ensemble global montre montres affiche afficher voir cherche recherche trouve'.split(' '));
 
   function clone(value){ return value===undefined?undefined:JSON.parse(JSON.stringify(value)); }
   function freeze(value){
@@ -19846,6 +19846,14 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
         if(value.length>2&&q.includes(value)) score=Math.max(score,.98);
         const overlap=valueTokens.filter(token=>qTokens.includes(token)).length;
         if(overlap) score=Math.max(score,.45+.5*(overlap/valueTokens.length));
+        qTokens.forEach(queryToken=>valueTokens.forEach(valueToken=>{
+          if(queryToken===valueToken) score=Math.max(score,.7);
+          else if(queryToken.length>=3&&valueToken.length>=3&&(valueToken.startsWith(queryToken)||queryToken.startsWith(valueToken))) score=Math.max(score,.82);
+          else {
+            const tokenSimilarity=similarity(queryToken,valueToken);
+            if(tokenSimilarity>=.72) score=Math.max(score,.45+tokenSimilarity*.4);
+          }
+        }));
         const subject=qTokens.join(' ');
         if(subject&&value.length>2) score=Math.max(score,similarity(subject,value)*.86);
       });
@@ -19860,7 +19868,23 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     const q=normalize(message);
     const categoryMatches=products.filter(product=>product.category&&q.includes(normalize(product.category)));
     if(categoryMatches.length) return {matches:categoryMatches,ambiguous:false,category:true};
-    return resolveItems(products,message,['name','category','variant']);
+    return resolveItems(products,message,['name','variant']);
+  }
+  function detectStructuredCategory(value,categories){
+    const q=normalize(value);
+    const aliases=[
+      {category:'hueforge',patterns:['hueforge','hue forge','youforge','you forge','yuforge','u for','u forge','u four','u fourge','u forg','u force','u forges','you forges','you forge','yeux forge','yeux forges','yeux fort','oeil fort','œil fort','forge','forges']}
+    ];
+    for(const category of categories){
+      if(!category) continue;
+      if(q.includes(category)) return {category,matchedText:category};
+      const alias=aliases.find(item=>item.category===category);
+      if(alias){
+        const matched=alias.patterns.slice().sort((a,b)=>b.length-a.length).find(pattern=>q.includes(pattern));
+        if(matched) return {category,matchedText:matched};
+      }
+    }
+    return null;
   }
   // Résolution canonique partagée par les consultations et les propositions
   // d’écriture : le prétraitement retire les termes d’intention/emplacement
@@ -19874,12 +19898,22 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     // traité comme une consultation générique de tous les Hueforge.
     const normalizedPrepared=normalize(prepared);
     const categories=[...new Set(products.map(product=>normalize(product.category)).filter(Boolean))];
-    const category=categories.find(value=>value&&normalizedPrepared.includes(value));
-    if(category){
+    const categoryHit=detectStructuredCategory(normalizedPrepared,categories);
+    if(categoryHit){
+      const category=categoryHit.category;
       const scoped=products.filter(product=>normalize(product.category)===category);
-      const scopedQuery=normalizedPrepared.replace(new RegExp('\\b'+category.replace(/\\s+/g,'\\s+')+'\\b','g'),' ').replace(/\\s+/g,' ').trim()||prepared;
+      const scopedQuery=normalizedPrepared
+        .split(category).join(' ')
+        .split(categoryHit.matchedText).join(' ')
+        .replace(/\s+/g,' ').trim();
+      if(!scopedQuery) return {matches:scoped,ambiguous:false,category:true,categoryOnly:true};
       const scopedMatch=resolveItems(scoped,scopedQuery,['name','variant']);
-      if(scopedMatch.matches.length) return scopedMatch; return {matches:[],ambiguous:false};
+      if(scopedMatch.matches.length) return {...scopedMatch,category:false,categoryOnly:false};
+      // Une catégorie explicite ne doit jamais reprendre la main lorsque
+      // le nom/variant demandé est incompatible ou introuvable. Retourner
+      // un ensemble vide évite de perdre le filtre produit et de réafficher
+      // toute la catégorie comme faux positif.
+      return {matches:[],ambiguous:false,category:false,categoryOnly:false};
     }
     return productMatches(products,prepared);
   }
@@ -19912,9 +19946,11 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     const pendingMatches=pending&&Array.isArray(pending.candidates)
       ? products.filter(product=>pending.candidates.some(id=>String(id)===String(product.id)))
       : [];
-    const found=pendingMatches.length?{matches:pendingMatches,ambiguous:pendingMatches.length>1}:productMatches(products,message);
+    const found=pendingMatches.length?{matches:pendingMatches,ambiguous:pendingMatches.length>1}:resolveProductMatch(data,message);
     if(!found.matches.length) return result('consult.catalog','Je ne trouve aucun produit correspondant dans le catalogue.');
-    if(found.category){
+    // Une catégorie seule peut être listée, mais elle ne doit jamais
+    // court-circuiter une requête composée catégorie + produit.
+    if(found.categoryOnly===true){
       const names=found.matches.slice(0,12).map(item=>item.name).join(', ');
       const more=found.matches.length>12?' et '+(found.matches.length-12)+' autre(s)':'';
       return result('consult.catalog','Dans la catégorie '+found.matches[0].category+', j’ai trouvé : '+names+more+'.',{facts:found.matches.slice(0,12).map(item=>fact('other_non_sensitive',item.name,item.price===null?'prix non renseigné':item.price,'EUR'))});
@@ -19959,7 +19995,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     return result('consult.stocks','Tu as '+plural(quantity,'pièce')+' de '+product.name+' à '+locationLabel(location)+'.',{facts:[fact('product_stock',product.name+' — '+locationLabel(location),quantity,'pièces')]});
   }
   function stockNeedsReader(data,message){
-    const products=projectProducts(data),found=productMatches(products,message);
+    const products=projectProducts(data),found=resolveProductMatch(data,message);
     const threshold=numberOrNull(data.stockAlertSeuil)!==null?numberOrNull(data.stockAlertSeuil):(numberOrNull(data.stockMinDefaut)!==null?numberOrNull(data.stockMinDefaut):null);
     if(threshold===null) return result('consult.stock_needs','Le seuil minimum n’est pas renseigné dans le Manager.');
     const genericRequest=/\b(quels? produits?|quoi|qu est ce que|sous (leur|le) minimum|a reimprimer|dois reimprimer)\b/.test(normalize(message));
@@ -21447,6 +21483,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         replace(/\bhainaut\b/i,petiteName,'Hainaut → '+petiteName);
       if(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|you\s+four|youforg|you\s+force|youfor|yuforge|u[- ]?for|u\s+forge|u\s+four|u4)\b/i.test(corrected))
         replace(/\b(hue\s*forge|youforge|you\s+forge|you\s+fourge|you\s+four|youforg|you\s+force|youfor|yuforge|u[- ]?for|u\s+forge|u\s+four|u4)\b/i,'HueForge','variante → HueForge');
+      if(/\b(yeux\s+(?:forges?|fort)|(?:oeil|œil)\s+fort|you\s+forges?|u\s+forges?|forges?)\b/i.test(corrected))
+        replace(/\b(yeux\s+(?:forges?|fort)|(?:oeil|œil)\s+fort|you\s+forges?|u\s+forges?|forges?)\b/i,'HueForge','variante phonétique → HueForge');
       if(/\byouporn\b/i.test(corrected))
         replace(/\byouporn\b/i,'HueForge','variante métier → HueForge');
     }
