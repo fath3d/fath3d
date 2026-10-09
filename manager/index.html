@@ -19878,6 +19878,10 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     for(const category of categories){
       if(!category) continue;
       if(q.includes(category)) return {category,matchedText:category};
+      if(category.includes('porte')&&category.includes('clef')){
+        const matched=['porte cles','porte clefs','porte cle','porte-clefs','porte-cles'].find(pattern=>q.includes(pattern));
+        if(matched) return {category,matchedText:matched};
+      }
       const alias=aliases.find(item=>item.category===category);
       if(alias){
         const matched=alias.patterns.slice().sort((a,b)=>b.length-a.length).find(pattern=>q.includes(pattern));
@@ -20308,7 +20312,7 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     if(wantsFuture) matches=markets.filter(item=>item.status!=='annule'&&item.date&&item.date>=localISO()).sort((a,b)=>a.date.localeCompare(b.date));
     if(requestedMonth) matches=matches.filter(item=>item.date&&Number(String(item.date).slice(5,7))===requestedMonth&&(!requestedYear||Number(String(item.date).slice(0,4))===requestedYear));
     else if(requestedYear) matches=matches.filter(item=>item.date&&Number(String(item.date).slice(0,4))===requestedYear);
-    const singularNext=/\bprochain\s+marche\b/.test(q)&&!(/\bprochains?\s+marches?\b/.test(q));
+    const singularNext=/\bprochain\s+marche\b/.test(q)&&!(/\bprochains\s+marches?\b|\bprochaines\s+marches?\b/.test(q));
     if(wantsFuture&&singularNext) matches=matches.slice(0,1);
     if(!matches.length)return result('consult.markets','Je ne trouve aucun marché correspondant.');
     if(matches.length>1&&!/\b(prochains|marches a venir|liste)\b/.test(q)){
