@@ -21380,7 +21380,10 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       }
       return null;
     }
-    if(state.active&&/\b(?:annule|arr[êe]te)\s+l inventaire\b/.test(q)){reset();return result('Inventaire annulé. Aucun stock n’a été modifié.');}
+    // Annulation globale prioritaire : elle doit sortir de tous les états
+    // Inventory8 avant toute résolution de catégorie, produit ou clarification.
+    const cancelInventory=/\b(?:annule|annuler|abandonne|abandonner|arr[êe]te|arreter|stop)\s+(?:l\s+)?inventaire\b/.test(q);
+    if(state.active&&cancelInventory){reset();return result('Inventaire annulé. Aucun stock n’a été modifié.');}
     if(/^inventaire\s+termine|^j ai termine l inventaire|^fin de l inventaire/.test(q)){state.active=false;state.stage=STAGES.FINISHED;state.pendingClarification=null;return result(formatSummary());}
     if(state.stage===STAGES.WAITING_LOCATION){if(/\bmarch/.test(q))return result('Pour 8A-1, l’inventaire est limité à Maison.');if(/\bmaison\b/.test(q)){state.location='Maison';state.stage=STAGES.WAITING_CATEGORY;return result('Quelle catégorie veux-tu inventorier ?');}return result('Dis « Maison ».');}
     if(state.stage===STAGES.WAITING_CATEGORY){const cat=findCategory(raw,data);if(cat){state.category=cat;state.stage=STAGES.COUNTING;return result(`Catégorie ${cat} sélectionnée. Dicte un produit, ou dis « inventaire terminé ».`);}return result('Je ne trouve pas cette catégorie dans le Manager.');}
