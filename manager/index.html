@@ -20293,6 +20293,20 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     });
     return candidates;
   }
+  function marketNameKey(value){
+    return normalizeIntent(String(value||'')).replace(/\bst\b/g,'saint').replace(/[^a-z0-9]+/g,'');
+  }
+  function marketNameMatches(query, city){
+    const qKey=marketNameKey(query), cityText=normalizeIntent(String(city||'')).replace(/\bst\b/g,'saint');
+    const cityKey=marketNameKey(cityText);
+    if(!qKey||!cityKey)return false;
+    if(qKey===cityKey||qKey.includes(cityKey)||cityKey.includes(qKey))return true;
+    const tokens=cityText.split(/\s+/).filter(Boolean);
+    if(!tokens.length)return false;
+    const lead=tokens[0].length<=4&&tokens[1]?tokens.slice(0,2).join(' '):tokens[0];
+    const leadKey=marketNameKey(lead);
+    return leadKey.length>=4&&qKey.includes(leadKey);
+  }
   function marketDateLabelFr(item){
     const months=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
     const parse=value=>{const m=String(value||'').match(/^(20\d{2})-(\d{2})-(\d{2})$/);return m?{year:Number(m[1]),month:Number(m[2]),day:Number(m[3])}:null;};
@@ -20329,12 +20343,11 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     const listRequested=/\b(quels?|quelles?|marches?|prochains?|prochaines?|liste|ce mois|mois ci|a venir)\b/.test(q)&&!detailRequested;
     if(pending&&pending.kind==='market_list'&&!listRequested){
       const contextMarkets=markets.filter(item=>pending.candidates.some(id=>String(id)===String(item.id)));
-      const compact=s=>normalizeIntent(s).replace(/\bst\b/g,'saint').replace(/[^a-z0-9]+/g,'');
       const dayMatch=q.match(/\b(\d{1,2})(?:er)?(?:\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre))?\b/);
       const requestedDay=dayMatch?Number(dayMatch[1]):null, requestedMonthName=dayMatch&&dayMatch[2]?dayMatch[2]:null;
       const selected=contextMarkets.filter(item=>{
-        const city=compact(item.city), cityHit=city&&compact(q).includes(city.slice(0,Math.max(4,Math.min(city.length,compact(q).length))));
-        const dateHit=!requestedDay||(item.date&&Number(String(item.date).slice(8,10))===requestedDay&&(!requestedMonthName||Number(String(item.date).slice(5,7))===months[requestedMonthName]));
+        const cityHit=marketNameMatches(q,item.city);
+        const dateHit=Boolean(requestedDay&&item.date&&Number(String(item.date).slice(8,10))===requestedDay&&(!requestedMonthName||Number(String(item.date).slice(5,7))===months[requestedMonthName]));
         return cityHit||dateHit;
       });
       if(selected.length===1)return result('consult.markets',marketDetailAnswer(selected[0]),{facts:[fact('market_info',selected[0].city||'Marché',marketDetailAnswer(selected[0]))]});
@@ -20344,8 +20357,9 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
       const selected=markets.filter(item=>pending.candidates.some(id=>String(id)===String(item.id))&&normalizeIntent(q).includes(normalizeIntent(item.city)));
       if(selected.length===1)return result('consult.markets',marketDetailAnswer(selected[0]),{facts:[fact('market_info',selected[0].city||'Marché',marketDetailAnswer(selected[0]))]});
     }
-    const cities=markets.filter(item=>item.city&&q.includes(normalize(item.city)));
-    let matches=resolveMarketMatch(data,{ville:cities.length?cities[0].city:null,date});
+    const cities=markets.filter(item=>item.city&&marketNameMatches(q,item.city));
+    let matches=resolveMarketMatch(data,{ville:cities.length===1?cities[0].city:null,date});
+    if(cities.length>1&&!date)matches=cities;
     const wantsFuture=/\b(prochain|prochains|prochaine|prochaines|a venir|bientot)\b/.test(q);
     if(wantsFuture) matches=markets.filter(item=>item.status!=='annule'&&item.date&&item.date>=localISO()).sort((a,b)=>a.date.localeCompare(b.date));
     if(requestedMonth) matches=matches.filter(item=>item.date&&Number(String(item.date).slice(5,7))===requestedMonth&&(!requestedYear||Number(String(item.date).slice(0,4))===requestedYear));
@@ -20413,10 +20427,15 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     if(pending&&pending.kind==='market_choice')return freeze({kind:'read',actionId:'consult.markets',message:String(message),pending:clone(pending)});
     if(pending&&pending.kind==='market_list')return freeze({kind:'read',actionId:'consult.markets',message:String(message),pending:clone(pending)});
     if(pending&&pending.kind==='printing_printer')return freeze({kind:'read',actionId:'consult.printing',message:String(message),pending:clone(pending)});
+    const marketDetailWords=/\b(info|infos|information|informations|detail|details|horaire|horaires|heures|tables?|barnum|grilles?|distance|statut|notes?)\b/.test(q);
+    let marketPlaceMention=false;
+    if(marketDetailWords){
+      try{marketPlaceMention=projectMarkets(sourceData()).some(item=>item.city&&marketNameMatches(q,item.city));}catch(_){marketPlaceMention=false;}
+    }
     const scores={
       'consult.stocks':(/\b(stock|stocks|inventaire|quantite|quantites|combien)\b/.test(q)?7:0),
       'consult.printing':(/\b(impression|impressions|imprimante|imprimantes|planning|file d impression|modele|modeles|template|templates|job|jobs)\b/.test(q)?5:0)+(/\b(duree|charge|attente|aujourd hui|demain)\b/.test(q)?1:0),
-      'consult.markets':(/\b(marche|marches|foire|salon)\b/.test(q)?5:0)+(/\b(prochain|ville|date|horaire|distance|materiel|installation|checklist|place|emplacement)\b/.test(q)?1:0),
+      'consult.markets':(/\b(marche|marches|foire|salon)\b/.test(q)?5:0)+(/\b(prochain|ville|date|horaire|distance|materiel|installation|checklist|place|emplacement)\b/.test(q)?1:0)+(marketPlaceMention?6:0),
       'consult.cash':(/\b(ticket|tickets|caisse)\b/.test(q)?5:0)+(/\b(ligne|lignes|journee|date|quantite|detail)\b/.test(q)?1:0)
     };
     const ranked=Object.entries(scores).sort((a,b)=>b[1]-a[1]);
