@@ -21344,13 +21344,15 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function showPanel(){
     let panel=document.getElementById('jarvis-inventory8-panel'); if(!state.active&&state.stage===STAGES.OFF){if(panel)panel.remove();return;}
     if(!panel){panel=document.createElement('section');panel.id='jarvis-inventory8-panel';panel.setAttribute('aria-live','polite');panel.style.cssText='position:fixed;right:18px;bottom:88px;z-index:10000;width:min(360px,calc(100vw - 36px));background:#111827;color:#f8fafc;border:1px solid #facc15;border-radius:10px;padding:12px;box-shadow:0 8px 28px #0008;font:14px system-ui';document.body.appendChild(panel);}
-    const lines=state.entries.map((e,i)=>`<div style="padding:5px 0;border-top:1px solid #374151"><b>${i+1} — ${e.quantity} ${escapeHtml(e.name)}</b> <span>${e.status==='corrected'?'✎ corrigé':'✓ résolu'}</span></div>`).join('');
+    const lines=state.entries.map((e,i)=>{const cancelled=e.status==='cancelled',validated=e.status==='manually_validated';return `<div style="padding:5px 0;border-top:1px solid #374151;display:flex;align-items:center;gap:5px;${cancelled?'opacity:.55;text-decoration:line-through;':''}"><b style="flex:1">${i+1} — ${e.quantity} ${escapeHtml(e.name)}</b> <span>${cancelled?'✕ annulé':validated?'✓ validé':e.status==='corrected'?'✎ corrigé':'✓ brouillon'}</span>${!cancelled?`<button type="button" data-inventory-action="validate" data-inventory-index="${i}" style="background:#15803d;color:#fff;border:0;border-radius:4px;padding:2px 5px;font-size:11px">Valider</button><button type="button" data-inventory-action="cancel" data-inventory-index="${i}" style="background:#b91c1c;color:#fff;border:0;border-radius:4px;padding:2px 5px;font-size:11px">Annuler</button>`:''}</div>`;}).join('');
     const pending=state.pendingClarification?`<div style="margin-top:8px;color:#fde68a">⚠ clarification : ${state.pendingClarification.candidates.map((p,i)=>`${i+1} — ${escapeHtml(productLabel(p))} — n°${escapeHtml(idOf(p))}`).join(' · ')}</div>`:'';
     panel.innerHTML=`<strong>Inventaire Jarvis — ${escapeHtml(state.stage)}</strong><div>Lieu : ${escapeHtml(state.location||'—')} · Catégorie : ${escapeHtml(state.category||'—')}</div>${lines||'<div style="margin-top:8px;color:#cbd5e1">Aucune ligne.</div>'}${pending}`;
+    if(typeof panel.querySelectorAll==='function') panel.querySelectorAll('[data-inventory-action]').forEach(button=>{button.onclick=()=>manualLineAction(Number(button.dataset.inventoryIndex),button.dataset.inventoryAction);});
   }
   function escapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
   function result(answer){state.lastMessage=answer;state.lastInteraction=Date.now();showPanel();return {kind:'direct',result:{outcome:'direct_answer',answer,proposal:null,topic:'inventory',missingInformation:[],readAction:null}};}
   function reset(){Object.assign(state,{active:false,stage:STAGES.OFF,location:null,category:null,entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:''});showPanel();}
+  function manualLineAction(index,action){const entry=state.entries[index];if(!entry||entry.status==='cancelled')return false;if(action==='validate')entry.status='manually_validated';else if(action==='cancel')entry.status='cancelled';else return false;state.lastInteraction=Date.now();showPanel();return true;}
   function start(initialLocation,initialCategory){
     const location=initialLocation||null, category=initialCategory||null;
     Object.assign(state,{active:true,stage:category?STAGES.COUNTING:(location?STAGES.WAITING_CATEGORY:STAGES.WAITING_LOCATION),location,category,entries:[],pendingClarification:null,startedAt:Date.now(),lastInteraction:Date.now(),lastRawTranscript:''});
@@ -21358,7 +21360,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(location)return result('Quelle catégorie veux-tu inventorier ?');
     return result('D’accord. Pour quel emplacement ? Pour 8A-1, dis « Maison ».');
   }
-  function formatSummary(){if(!state.entries.length)return 'Inventaire terminé. Le brouillon est vide. Aucune écriture n’a été effectuée.';return 'Inventaire terminé. Brouillon Maison / '+state.category+' : '+state.entries.map(e=>`${e.quantity} ${e.name}`).join(' ; ')+'. Aucune écriture n’a été effectuée.';}
+  function formatSummary(){const activeEntries=state.entries.filter(e=>e.status!=='cancelled');if(!activeEntries.length)return 'Inventaire terminé. Le brouillon est vide. Aucune écriture n’a été effectuée.';return 'Inventaire terminé. Brouillon Maison / '+state.category+' : '+activeEntries.map(e=>`${e.quantity} ${e.name}`).join(' ; ')+'. Aucune écriture n’a été effectuée.';}
   function clarification(candidates,quantity,raw){state.pendingClarification={candidates,quantity,raw};state.stage=STAGES.WAITING_CLARIFICATION;return result('J’ai trouvé : '+candidates.map((p,i)=>`${i+1} — ${productLabel(p)} — n°${idOf(p)}`).join(' ; ')+'. Dis « le premier », « le deuxième » ou le numéro affiché.');}
   function choosePending(value,data){const pending=state.pendingClarification;if(!pending)return null;const q=norm(value);let chosen=null;const ordinal=q.match(/^(?:le|la|numero|num)?\s*(premier|premiere|1er|deuxieme|second|seconde|2e|deux|1|2)$/);if(ordinal){const word=ordinal[1];const idx=/prem|1er|^1$/.test(word)?0:1;chosen=pending.candidates[idx]||null;}else{const n=parseNumberText(q);if(n!==null){chosen=pending.candidates.find(p=>String(idOf(p))===String(n))||pending.candidates[n-1]||null;}}
     if(!chosen)return result('Je n’ai pas trouvé ce numéro dans la clarification. Choisis un candidat affiché.');
@@ -21368,7 +21370,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function route(message,data){
     const raw=String(message||'').trim();const q=norm(raw);if(!q)return null;state.lastRawTranscript=raw;
     const inventoryIntent=/\binventaire\b/.test(q)&&!(/\bancien\s+inventaire\b/.test(q));
-    const startRe=inventoryIntent&&(/^(?:jarvis\s+)?(?:inventaire|faire\s+l\s+inventaire|on\s+fait\s+l\s+inventaire|on\s+va\s+faire\s+l\s+inventaire|commence(?:r)?\s+l\s+inventaire|lance(?:r)?\s+l\s+inventaire|demarre(?:r)?\s+l\s+inventaire|je\s+(?:veux|voudrais)\s+faire\s+l\s+inventaire)(?:\s+(?:a\s+|dans\s+|en\s+)?(?:la\s+)?(?:maison|marche))?(?:\s+.*)?$/).test(q);
+    const startRe=inventoryIntent&&(/^(?:jarvis\s+)?(?:inventaire|faire\s+l\s+inventaire|on\s+fait\s+l\s+inventaire|on\s+va\s+faire\s+l\s+inventaire|commence(?:r)?\s+l\s+inventaire|lance(?:r)?\s+l\s+inventaire|demarre(?:r)?\s+(?:l\s+|un\s+)?inventaire|je\s+(?:veux|voudrais)\s+faire\s+l\s+inventaire)(?:\s+(?:a\s+|dans\s+|en\s+)?(?:la\s+)?(?:maison|marche))?(?:\s+.*)?$/).test(q);
     if(!state.active&&(state.stage===STAGES.OFF||state.stage===STAGES.FINISHED)){
       if(inventoryIntent){
         const hasMarket=/\b(?:marche|marché|marches|marchés)\b/.test(q);
@@ -21384,7 +21386,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     // Inventory8 avant toute résolution de catégorie, produit ou clarification.
     const cancelInventory=/\b(?:annule|annuler|abandonne|abandonner|arr[êe]te|arreter|stop)\s+(?:l\s+)?inventaire\b/.test(q);
     if(state.active&&cancelInventory){reset();return result('Inventaire annulé. Aucun stock n’a été modifié.');}
-    if(/^inventaire\s+termine|^j ai termine l inventaire|^fin de l inventaire/.test(q)){state.active=false;state.stage=STAGES.FINISHED;state.pendingClarification=null;return result(formatSummary());}
+    if(state.active&&/\b(?:demarre|demarrer|commence|commencer)\s+(?:un\s+|l\s+)?inventaire\b/.test(q)) return result('Un inventaire est déjà actif. Continue ou dis « inventaire terminé ».');
+    if(state.active&&/^(?:jarvis\s+)?(?:inventaire\s+termine|j\s+ai\s+termine\s+l\s+inventaire|fin\s+(?:de\s+)?inventaire|fin\s+d\s+inventaire|termine(?:r)?\s+(?:l\s+|un\s+)?inventaire)\b/.test(q)){state.active=false;state.stage=STAGES.FINISHED;state.pendingClarification=null;return result(formatSummary());}
     if(state.stage===STAGES.WAITING_LOCATION){if(/\bmarch/.test(q))return result('Pour 8A-1, l’inventaire est limité à Maison.');if(/\bmaison\b/.test(q)){state.location='Maison';state.stage=STAGES.WAITING_CATEGORY;return result('Quelle catégorie veux-tu inventorier ?');}return result('Dis « Maison ».');}
     if(state.stage===STAGES.WAITING_CATEGORY){const cat=findCategory(raw,data);if(cat){state.category=cat;state.stage=STAGES.COUNTING;return result(`Catégorie ${cat} sélectionnée. Dicte un produit, ou dis « inventaire terminé ».`);}return result('Je ne trouve pas cette catégorie dans le Manager.');}
     if(state.stage===STAGES.WAITING_CLARIFICATION)return choosePending(raw,data);
@@ -21392,7 +21395,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     return null;
   }
   function getState(){return JSON.parse(JSON.stringify(state));}
-  root.JarvisInventory8=Object.freeze({version:'8A-1.0.0',stages:STAGES,route,getState,reset});
+  root.JarvisInventory8=Object.freeze({version:'8A-1.0.0',stages:STAGES,route,getState,reset,manualLineAction});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
 <script id="jarvis-voice7-step7c">
