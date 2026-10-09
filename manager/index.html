@@ -20326,9 +20326,14 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     if(item.notes)details.push(item.notes);
     return details.join(' · ')+'.';
   }
+  function marketContextPending(candidates,lastMarketId){
+    return {kind:'market_list',actionId:'consult.markets',candidates:[...new Set((candidates||[]).map(String))],lastMarketId:lastMarketId===undefined?null:String(lastMarketId)};
+  }
   function marketReader(data,message,pending){
     const q=normalize(message),markets=projectMarkets(data),date=extractISODate(message)||(pending&&pending.date)||null;
     const months={janvier:1,fevrier:2,mars:3,avril:4,mai:5,juin:6,juillet:7,aout:8,septembre:9,octobre:10,novembre:11,decembre:12};
+    const dayMonthMatch=String(message||'').toLocaleLowerCase('fr-FR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').match(/\b([0-3]?\d)\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\b/);
+    const requestedDay=dayMonthMatch?Number(dayMonthMatch[1]):null, requestedDayMonth=dayMonthMatch?months[dayMonthMatch[2]]:null;
     const monthName=Object.keys(months).find(name=>new RegExp('\\b'+name+'\\b').test(q));
     const yearMatch=q.match(/\b(20\d{2})\b/), requestedYear=yearMatch?Number(yearMatch[1]):null;
     const requestedMonth=monthName?months[monthName]:null;
@@ -20343,23 +20348,29 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     const listRequested=/\b(quels?|quelles?|marches?|prochains?|prochaines?|liste|ce mois|mois ci|a venir)\b/.test(q)&&!detailRequested;
     if(pending&&pending.kind==='market_list'&&!listRequested){
       const contextMarkets=markets.filter(item=>pending.candidates.some(id=>String(id)===String(item.id)));
-      const dayMatch=q.match(/\b(\d{1,2})(?:er)?(?:\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre))?\b/);
-      const requestedDay=dayMatch?Number(dayMatch[1]):null, requestedMonthName=dayMatch&&dayMatch[2]?dayMatch[2]:null;
       const selected=contextMarkets.filter(item=>{
         const cityHit=marketNameMatches(q,item.city);
-        const dateHit=Boolean(requestedDay&&item.date&&Number(String(item.date).slice(8,10))===requestedDay&&(!requestedMonthName||Number(String(item.date).slice(5,7))===months[requestedMonthName]));
+        const dateHit=Boolean(requestedDay&&item.date&&Number(String(item.date).slice(8,10))===requestedDay&&Number(String(item.date).slice(5,7))===requestedDayMonth);
         return cityHit||dateHit;
       });
-      if(selected.length===1)return result('consult.markets',marketDetailAnswer(selected[0]),{facts:[fact('market_info',selected[0].city||'Marché',marketDetailAnswer(selected[0]))]});
+      if(selected.length===1)return result('consult.markets',marketDetailAnswer(selected[0]),{facts:[fact('market_info',selected[0].city||'Marché',marketDetailAnswer(selected[0]))],pending:marketContextPending(pending.candidates,selected[0].id)});
       if(selected.length>1)return result('consult.markets','Quel marché veux-tu détailler : '+selected.map(item=>item.city).join(', ')+' ?',{outcome:'clarification',pending:{kind:'market_choice',actionId:'consult.markets',candidates:selected.map(item=>item.id)}});
     }
     if(pending&&pending.kind==='market_choice'&&Array.isArray(pending.candidates)){
       const selected=markets.filter(item=>pending.candidates.some(id=>String(id)===String(item.id))&&normalizeIntent(q).includes(normalizeIntent(item.city)));
-      if(selected.length===1)return result('consult.markets',marketDetailAnswer(selected[0]),{facts:[fact('market_info',selected[0].city||'Marché',marketDetailAnswer(selected[0]))]});
+      if(selected.length===1)return result('consult.markets',marketDetailAnswer(selected[0]),{facts:[fact('market_info',selected[0].city||'Marché',marketDetailAnswer(selected[0]))],pending:marketContextPending(pending.candidates,selected[0].id)});
     }
     const cities=markets.filter(item=>item.city&&marketNameMatches(q,item.city));
     let matches=resolveMarketMatch(data,{ville:cities.length===1?cities[0].city:null,date});
     if(cities.length>1&&!date)matches=cities;
+    if(requestedDay&&!date){
+      const scopedMarkets=pending&&pending.kind==='market_list'&&Array.isArray(pending.candidates)
+        ?markets.filter(item=>pending.candidates.some(id=>String(id)===String(item.id)))
+        :markets;
+      const dateMatches=scopedMarkets.filter(item=>item.date&&Number(String(item.date).slice(8,10))===requestedDay&&Number(String(item.date).slice(5,7))===requestedDayMonth);
+      if(dateMatches.length===1)matches=dateMatches;
+      else if(dateMatches.length>1&&!listRequested)return result('consult.markets','Quel marché veux-tu détailler pour le '+requestedDay+' '+dayMonthMatch[2]+' ?',{outcome:'clarification',pending:{kind:'market_choice',actionId:'consult.markets',candidates:dateMatches.map(item=>item.id)}});
+    }
     const wantsFuture=/\b(prochain|prochains|prochaine|prochaines|a venir|bientot)\b/.test(q);
     if(wantsFuture) matches=markets.filter(item=>item.status!=='annule'&&item.date&&item.date>=localISO()).sort((a,b)=>a.date.localeCompare(b.date));
     if(requestedMonth) matches=matches.filter(item=>item.date&&Number(String(item.date).slice(5,7))===requestedMonth&&(!requestedYear||Number(String(item.date).slice(0,4))===requestedYear));
@@ -20378,7 +20389,7 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
       const details=[];if(item.date)details.push(item.date);if(item.hours)details.push(item.hours);if(item.distance)details.push(item.distance);if(item.type)details.push(item.type);if(item.installation)details.push('installation '+item.installation);if(item.equipment)details.push(item.equipment);if(item.status)details.push('statut '+item.status);if(wantsPrice)details.push(item.placePrice===null?'prix de place non renseigné':'place '+item.placePrice.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €');
       return (item.city||'Ville non renseignée')+' : '+details.join(', ');
     });
-    return result('consult.markets',descriptions.join(' ; ')+'.',{facts:shown.map(item=>fact('market_info',item.city||'Marché',[item.date,item.hours,item.distance].filter(Boolean).join(' · ')||'non renseigné'))});
+    return result('consult.markets',descriptions.join(' ; ')+'.',{facts:shown.map(item=>fact('market_info',item.city||'Marché',[item.date,item.hours,item.distance].filter(Boolean).join(' · ')||'non renseigné')),pending:shown.length===1?marketContextPending(shown.map(item=>item.id),shown[0].id):null});
   }
   function projectCash(data){
     return (Array.isArray(data.caisseHistory)?data.caisseHistory:[]).map((ticket,index)=>({
@@ -20424,18 +20435,20 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     if(/\b(modifie|modifier|corrige|corriger|supprime|supprimer|valide|valider|cree|creer|ajoute|ajouter).*(ticket|caisse|vente)|(ticket|caisse|vente).*(modifie|modifier|corrige|corriger|supprime|supprimer|valide|valider|cree|creer|ajoute|ajouter)\b/.test(q))return direct('Toute écriture en caisse est interdite. Aucune vente ni aucun ticket n’a été modifié.','refusal');
     if(/\b(ca|chiffre d affaires|recette|recettes).*(marche|marches)|(marche|marches).*(ca|chiffre d affaires|recette|recettes)\b/.test(q))return direct('La consultation du chiffre d’affaires des marchés est réservée au bloc 5C.','future_capability');
     if(pending&&pending.kind==='cash_target')return freeze({kind:'read',actionId:'consult.cash',message:String(message),pending:clone(pending)});
-    if(pending&&pending.kind==='market_choice')return freeze({kind:'read',actionId:'consult.markets',message:String(message),pending:clone(pending)});
-    if(pending&&pending.kind==='market_list')return freeze({kind:'read',actionId:'consult.markets',message:String(message),pending:clone(pending)});
+    const marketContextActive=!(pending&&(pending.kind==='market_choice'||pending.kind==='market_list')&&/\b(stock|stocks|inventaire|produit|produits|catalogue|hueforge|ca|urssaf|cotisation|caisse|ticket|impression|imprimante)\b/.test(q));
+    if(pending&&pending.kind==='market_choice'&&marketContextActive)return freeze({kind:'read',actionId:'consult.markets',message:String(message),pending:clone(pending)});
+    if(pending&&pending.kind==='market_list'&&marketContextActive)return freeze({kind:'read',actionId:'consult.markets',message:String(message),pending:clone(pending)});
     if(pending&&pending.kind==='printing_printer')return freeze({kind:'read',actionId:'consult.printing',message:String(message),pending:clone(pending)});
     const marketDetailWords=/\b(info|infos|information|informations|detail|details|horaire|horaires|heures|tables?|barnum|grilles?|distance|statut|notes?)\b/.test(q);
     let marketPlaceMention=false;
     if(marketDetailWords){
       try{marketPlaceMention=projectMarkets(sourceData()).some(item=>item.city&&marketNameMatches(q,item.city));}catch(_){marketPlaceMention=false;}
     }
+    const genericMarketDetail=/\b(info|infos|information|informations|detail|details|horaire|horaires|heures|tables?|barnum|grilles?|distance|statut|notes?)\b/.test(q)&&!/\b(produit|produits|stock|stocks|catalogue|inventaire)\b/.test(q);
     const scores={
       'consult.stocks':(/\b(stock|stocks|inventaire|quantite|quantites|combien)\b/.test(q)?7:0),
       'consult.printing':(/\b(impression|impressions|imprimante|imprimantes|planning|file d impression|modele|modeles|template|templates|job|jobs)\b/.test(q)?5:0)+(/\b(duree|charge|attente|aujourd hui|demain)\b/.test(q)?1:0),
-      'consult.markets':(/\b(marche|marches|foire|salon)\b/.test(q)?5:0)+(/\b(prochain|ville|date|horaire|distance|materiel|installation|checklist|place|emplacement)\b/.test(q)?1:0)+(marketPlaceMention?6:0),
+      'consult.markets':(/\b(marche|marches|foire|salon)\b/.test(q)?5:0)+(/\b(prochain|ville|date|horaire|distance|materiel|installation|checklist|place|emplacement)\b/.test(q)?1:0)+(marketPlaceMention||genericMarketDetail?6:0),
       'consult.cash':(/\b(ticket|tickets|caisse)\b/.test(q)?5:0)+(/\b(ligne|lignes|journee|date|quantite|detail)\b/.test(q)?1:0)
     };
     const ranked=Object.entries(scores).sort((a,b)=>b[1]-a[1]);
