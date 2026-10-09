@@ -20360,7 +20360,11 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
       const selected=markets.filter(item=>pending.candidates.some(id=>String(id)===String(item.id))&&normalizeIntent(q).includes(normalizeIntent(item.city)));
       if(selected.length===1)return result('consult.markets',marketDetailAnswer(selected[0]),{facts:[fact('market_info',selected[0].city||'Marché',marketDetailAnswer(selected[0]))],pending:marketContextPending(pending.candidates,selected[0].id)});
     }
-    const cities=markets.filter(item=>item.city&&marketNameMatches(q,item.city));
+    // A list request must not interpret the generic word "marché" as a
+    // place name (for example "quels sont mes marchés de novembre ?").
+    // Resolve a place only for a detail/non-list request; otherwise the
+    // month/date filter must run over the complete market collection.
+    const cities=listRequested?[]:markets.filter(item=>item.city&&marketNameMatches(q,item.city));
     let matches=resolveMarketMatch(data,{ville:cities.length===1?cities[0].city:null,date});
     if(cities.length>1&&!date)matches=cities;
     if(requestedDay&&!date){
@@ -20373,7 +20377,21 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     }
     const wantsFuture=/\b(prochain|prochains|prochaine|prochaines|a venir|bientot)\b/.test(q);
     if(wantsFuture) matches=markets.filter(item=>item.status!=='annule'&&item.date&&item.date>=localISO()).sort((a,b)=>a.date.localeCompare(b.date));
-    if(requestedMonth) matches=matches.filter(item=>item.date&&Number(String(item.date).slice(5,7))===requestedMonth&&(!requestedYear||Number(String(item.date).slice(0,4))===requestedYear));
+    if(requestedMonth){
+      // Include any event whose [date,dateFin] interval overlaps the
+      // requested month.  This keeps multi-day markets (dateFin) in the
+      // list instead of checking only their start date.
+      const filterYear=requestedYear||Number(localISO().slice(0,4));
+      const pad=n=>String(n).padStart(2,'0');
+      const monthStart=filterYear+'-'+pad(requestedMonth)+'-01';
+      const lastDay=new Date(Date.UTC(filterYear,requestedMonth,0)).getUTCDate();
+      const monthEnd=filterYear+'-'+pad(requestedMonth)+'-'+pad(lastDay);
+      matches=matches.filter(item=>{
+        const start=String(item.date||'').slice(0,10);
+        const end=String(item.dateEnd||item.date||'').slice(0,10);
+        return Boolean(start)&&start<=monthEnd&&end>=monthStart;
+      });
+    }
     else if(requestedYear) matches=matches.filter(item=>item.date&&Number(String(item.date).slice(0,4))===requestedYear);
     const singularNext=/\bprochain\s+marche\b/.test(q)&&!(/\bprochains\s+marches?\b|\bprochaines\s+marches?\b/.test(q));
     if(wantsFuture&&singularNext) matches=matches.slice(0,1);
