@@ -19933,6 +19933,24 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     }
     return null;
   }
+  // Collecte structurée minimale avant sélection de route. Les lecteurs
+  // restent responsables de la résolution détaillée, mais aucun domaine ne
+  // doit être choisi sur un seul mot lorsqu'un second critère est présent.
+  function extractStructuredIntent(message){
+    const q=normalize(message), intent={domain:null,category:null,product:null,location:null,month:null,year:null,next:false};
+    if(/\b(stock|stocks|inventaire|quantite|quantites|combien)\b/.test(q)) intent.domain='stock';
+    else if(/\b(catalogue|catalog|montre|montres|affiche|afficher|voir|cherche|recherche|trouve|produit|produits|article|articles)\b/.test(q)) intent.domain='catalog';
+    if(/\bhueforge\b|\bhue forge\b|\byouforge\b|\byuforge\b|\bu[- ]?for\b|\bu forge\b|\bu four\b|\bforge\b/.test(q)) intent.category='HueForge';
+    else if(/\bporte[- ]?cles?\b/.test(q)) intent.category='Porte-clés';
+    else if(/\bfigurines?\b/.test(q)) intent.category='Figurine';
+    if(intent.category) intent.domain='catalog';
+    const locationMatch=q.match(/\b(maison|marche|arts complices|boutique de vero|chez vero)\b/); if(locationMatch) intent.location=locationMatch[1];
+    const yearMatch=q.match(/\b(20\d{2})\b/); if(yearMatch) intent.year=Number(yearMatch[1]);
+    const months={janvier:1,fevrier:2,mars:3,avril:4,mai:5,juin:6,juillet:7,aout:8,septembre:9,octobre:10,novembre:11,decembre:12};
+    for(const [name,number] of Object.entries(months)) if(new RegExp('\\b'+name+'\\b').test(q)){intent.month=number;break;}
+    intent.next=/\b(prochain|prochains|prochaine|prochaines|a venir|bientot)\b/.test(q);
+    return intent;
+  }
   function ambiguityAnswer(matches,label){
     const choices=matches.slice(0,6).map(item=>item.name+(item.category?' — '+item.category:'')+(item.id!==undefined?' (n°'+item.id+')':'')).join(', ');
     return {outcome:'clarification',answer:'J’ai trouvé plusieurs '+label+' possibles : '+choices+'. Lequel veux-tu ?',pending:{kind:'entity',actionId:null,candidates:matches.slice(0,6).map(item=>item.id)}};
@@ -20112,7 +20130,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     return null;
   }
   function route(message,pending){
-    const q=normalize(message);
+    const q=normalize(message),structured=extractStructuredIntent(message);
     if(pending&&pending.kind==='stock_location'){
       const location=extractLocation(q,pending.locations||[]);
       if(location) return freeze({kind:'read',actionId:'consult.stocks',message:q,pending:{...clone(pending),location}});
@@ -20127,7 +20145,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
       'consult.filaments':(/\b(filament|filaments|bobine|bobines|pla|petg|abs|tpu)\b/.test(q)?7:0)+(/\b(poids|gramme|grammes|couleur|matiere|marque|vide|vides)\b/.test(q)?1:0),
       'consult.stock_needs':(/\b(reimprim|reimprimer|reappro|reapprovision|minimum|seuil)\w*\b/.test(q)?4:0)+(/\b(manque|manquent|remonter|bas|rupture)\b/.test(q)&&/\b(stock|marche|produit|produits)\b/.test(q)?3:0),
       'consult.stocks':(/\b(stock|stocks|quantite|quantites|reste|restent)\b/.test(q)?2:0)+(/\b(combien|total|maison|marche|arts? complices|vero)\b/.test(q)?2:0)+(/\bcombien\b/.test(q)&&!/\b(prix|coute|coutent)\b/.test(q)&&/\b(j ai|reste|maison|marche|total|tout)\b/.test(q)?2:0),
-      'consult.catalog':(/\b(catalogue|catalog|categorie|categories|prix|coute|coutent|montre|montres|affiche|afficher|voir|cherche|recherche|trouve|hueforge|hue forge|youforge|yuforge|youporn|forge|you four|you force|youforg|youfor|u[- ]?for|u forge|u four|u4)\b/.test(q)?4:0)+(/\b(produit|produits|article|articles)\b/.test(q)?1:0)
+      'consult.catalog':(/\b(catalogue|catalog|categorie|categories|prix|coute|coutent|montre|montres|affiche|afficher|voir|cherche|recherche|trouve|hueforge|hue forge|youforge|yuforge|youporn|forge|you four|you force|youforg|youfor|u[- ]?for|u forge|u four|u4|porte[- ]?cles?|figurines?|figurine|lampes?|marque page)\b/.test(q)?4:0)+(structured.domain==='catalog'?1:0)+(/\b(produit|produits|article|articles)\b/.test(q)?1:0)
     };
     const ranked=Object.entries(scores).sort((a,b)=>b[1]-a[1]);
     if(ranked[0][1]>=4&&ranked[0][1]-ranked[1][1]>=1) return freeze({kind:'read',actionId:ranked[0][0],message:String(message),pending:null});
@@ -20139,7 +20157,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
     const found=resolveProductMatch(data,message);
     return freeze({matches:clone(found.matches||[]),ambiguous:found.ambiguous===true});
   }
-  const API=freeze({version:VERSION,getState,getAllowedActions:()=>[...ALLOWED_ACTIONS],route,consult,normalize,similarity,resolveProduct});
+  const API=freeze({version:VERSION,getState,getAllowedActions:()=>[...ALLOWED_ACTIONS],route,consult,normalize,similarity,resolveProduct,extractStructuredIntent});
   Object.defineProperty(root,'JarvisReadBroker',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
@@ -20273,6 +20291,10 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
   }
   function marketReader(data,message,pending){
     const q=normalize(message),markets=projectMarkets(data),date=extractISODate(message)||(pending&&pending.date)||null;
+    const months={janvier:1,fevrier:2,mars:3,avril:4,mai:5,juin:6,juillet:7,aout:8,septembre:9,octobre:10,novembre:11,decembre:12};
+    const monthName=Object.keys(months).find(name=>new RegExp('\\b'+name+'\\b').test(q));
+    const yearMatch=q.match(/\b(20\d{2})\b/), requestedYear=yearMatch?Number(yearMatch[1]):null;
+    const requestedMonth=monthName?months[monthName]:null;
     if(/\b(checklist|check list|materiel a prendre|quoi prendre)\b/.test(q)){
       const checklist=data.checklistMarche&&typeof data.checklistMarche==='object'?data.checklistMarche:{};
       const keys=Object.keys(checklist).filter(key=>!key.startsWith('_'));
@@ -20282,7 +20304,12 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     }
     const cities=markets.filter(item=>item.city&&q.includes(normalize(item.city)));
     let matches=resolveMarketMatch(data,{ville:cities.length?cities[0].city:null,date});
-    if(/\b(prochain|prochaine|a venir|bientot)\b/.test(q))matches=markets.filter(item=>item.status!=='annule'&&item.date&&item.date>=localISO()).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,1);
+    const wantsFuture=/\b(prochain|prochains|prochaine|prochaines|a venir|bientot)\b/.test(q);
+    if(wantsFuture) matches=markets.filter(item=>item.status!=='annule'&&item.date&&item.date>=localISO()).sort((a,b)=>a.date.localeCompare(b.date));
+    if(requestedMonth) matches=matches.filter(item=>item.date&&Number(String(item.date).slice(5,7))===requestedMonth&&(!requestedYear||Number(String(item.date).slice(0,4))===requestedYear));
+    else if(requestedYear) matches=matches.filter(item=>item.date&&Number(String(item.date).slice(0,4))===requestedYear);
+    const singularNext=/\bprochain\s+marche\b/.test(q)&&!(/\bprochains?\s+marches?\b/.test(q));
+    if(wantsFuture&&singularNext) matches=matches.slice(0,1);
     if(!matches.length)return result('consult.markets','Je ne trouve aucun marché correspondant.');
     if(matches.length>1&&!/\b(prochains|marches a venir|liste)\b/.test(q)){
       const choices=matches.slice(0,5).map(item=>(item.city||'Ville non renseignée')+(item.date?' — '+item.date:'')).join(', ');
@@ -20492,7 +20519,9 @@ Le CA global délègue au calcul partagé du tableau de bord.
     }
     const action=financialAction(q);
     if(action&&explicitFinancial(q))return {kind:'read',actionId:action,message:String(message),pending:active};
-    const delegated=base5b.route(message,null);
+    // Conserver le contexte de clarification non financier (ex. sélection
+    // d’un produit par numéro) au lieu de relancer une route globale.
+    const delegated=base5b.route(message,pending);
     return delegated.kind==='gateway'?{kind:'gateway',pending:null}:delegated;
   }
   function verifyAction(actionId){
