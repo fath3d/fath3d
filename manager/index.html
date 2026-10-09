@@ -21351,7 +21351,13 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function escapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
   function result(answer){state.lastMessage=answer;state.lastInteraction=Date.now();showPanel();return {kind:'direct',result:{outcome:'direct_answer',answer,proposal:null,topic:'inventory',missingInformation:[],readAction:null}};}
   function reset(){Object.assign(state,{active:false,stage:STAGES.OFF,location:null,category:null,entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:''});showPanel();}
-  function start(){Object.assign(state,{active:true,stage:STAGES.WAITING_LOCATION,location:null,category:null,entries:[],pendingClarification:null,startedAt:Date.now(),lastInteraction:Date.now(),lastRawTranscript:''});return result('D’accord. Pour quel emplacement ? Pour 8A-1, dis « Maison ».');}
+  function start(initialLocation,initialCategory){
+    const location=initialLocation||null, category=initialCategory||null;
+    Object.assign(state,{active:true,stage:category?STAGES.COUNTING:(location?STAGES.WAITING_CATEGORY:STAGES.WAITING_LOCATION),location,category,entries:[],pendingClarification:null,startedAt:Date.now(),lastInteraction:Date.now(),lastRawTranscript:''});
+    if(category)return result(`Catégorie ${category} sélectionnée. Dicte un produit, ou dis « inventaire terminé ».`);
+    if(location)return result('Quelle catégorie veux-tu inventorier ?');
+    return result('D’accord. Pour quel emplacement ? Pour 8A-1, dis « Maison ».');
+  }
   function formatSummary(){if(!state.entries.length)return 'Inventaire terminé. Le brouillon est vide. Aucune écriture n’a été effectuée.';return 'Inventaire terminé. Brouillon Maison / '+state.category+' : '+state.entries.map(e=>`${e.quantity} ${e.name}`).join(' ; ')+'. Aucune écriture n’a été effectuée.';}
   function clarification(candidates,quantity,raw){state.pendingClarification={candidates,quantity,raw};state.stage=STAGES.WAITING_CLARIFICATION;return result('J’ai trouvé : '+candidates.map((p,i)=>`${i+1} — ${productLabel(p)} — n°${idOf(p)}`).join(' ; ')+'. Dis « le premier », « le deuxième » ou le numéro affiché.');}
   function choosePending(value,data){const pending=state.pendingClarification;if(!pending)return null;const q=norm(value);let chosen=null;const ordinal=q.match(/^(?:le|la|numero|num)?\s*(premier|premiere|1er|deuxieme|second|seconde|2e|deux|1|2)$/);if(ordinal){const word=ordinal[1];const idx=/prem|1er|^1$/.test(word)?0:1;chosen=pending.candidates[idx]||null;}else{const n=parseNumberText(q);if(n!==null){chosen=pending.candidates.find(p=>String(idOf(p))===String(n))||pending.candidates[n-1]||null;}}
@@ -21361,8 +21367,20 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function correction(value,data){const q=norm(value);if(!state.entries.length)return result('Il n’y a aucune ligne à corriger.');const last=state.entries[state.entries.length-1];const qm=q.match(/\b(?:quantite|qte)\s*(\d+)\b/);if(qm){last.quantity=Number(qm[1]);last.status='corrected';return result(`Dernière ligne corrigée : ${last.quantity} — ${last.name} ✎`);}const spec=q.replace(/^.*?\b(?:dernier|derniere)\b/,'').replace(/^\s*[:,-]?\s*/,'').trim();if(spec){const found=productCandidates(spec.replace(/^corrige\s+/,''),data);if(found.candidates.length===1){last.productId=idOf(found.candidates[0]);last.name=productLabel(found.candidates[0]);last.quantity=found.quantity;last.status='corrected';return result(`Dernière ligne corrigée : ${last.quantity} — ${last.name} ✎`);}}return result('Précise la correction de la dernière ligne, par exemple « quantité 3 ».');}
   function route(message,data){
     const raw=String(message||'').trim();const q=norm(raw);if(!q)return null;state.lastRawTranscript=raw;
-    const startRe=/(?:^|\s)(?:on fait|on va faire|commence)\s+l inventaire\b|\bfaisons?\s+l inventaire\b|\bon fait\s+l inventaire\b/.test(q);
-    if(!state.active&&(state.stage===STAGES.OFF||state.stage===STAGES.FINISHED)){if(startRe)return start();return null;}
+    const inventoryIntent=/\binventaire\b/.test(q)&&!(/\bancien\s+inventaire\b/.test(q));
+    const startRe=inventoryIntent&&(/^(?:jarvis\s+)?(?:inventaire|faire\s+l\s+inventaire|on\s+fait\s+l\s+inventaire|on\s+va\s+faire\s+l\s+inventaire|commence(?:r)?\s+l\s+inventaire|lance(?:r)?\s+l\s+inventaire|demarre(?:r)?\s+l\s+inventaire|je\s+(?:veux|voudrais)\s+faire\s+l\s+inventaire)(?:\s+(?:a\s+|dans\s+|en\s+)?(?:la\s+)?(?:maison|marche))?(?:\s+.*)?$/).test(q);
+    if(!state.active&&(state.stage===STAGES.OFF||state.stage===STAGES.FINISHED)){
+      if(inventoryIntent){
+        const hasMarket=/\b(?:marche|marché|marches|marchés)\b/.test(q);
+        const hasHome=/\bmaison\b/.test(q);
+        const category=findCategory(raw,data);
+        if(hasMarket){const response=start();return result('Pour 8A-1, l’inventaire est limité à Maison.');}
+        if(hasHome)return start('Maison',category);
+        if(startRe||inventoryIntent)return start();
+      }
+      return null;
+    }
+    if(state.active&&/\b(?:annule|arr[êe]te)\s+l inventaire\b/.test(q)){reset();return result('Inventaire annulé. Aucun stock n’a été modifié.');}
     if(/^inventaire\s+termine|^j ai termine l inventaire|^fin de l inventaire/.test(q)){state.active=false;state.stage=STAGES.FINISHED;state.pendingClarification=null;return result(formatSummary());}
     if(state.stage===STAGES.WAITING_LOCATION){if(/\bmarch/.test(q))return result('Pour 8A-1, l’inventaire est limité à Maison.');if(/\bmaison\b/.test(q)){state.location='Maison';state.stage=STAGES.WAITING_CATEGORY;return result('Quelle catégorie veux-tu inventorier ?');}return result('Dis « Maison ».');}
     if(state.stage===STAGES.WAITING_CATEGORY){const cat=findCategory(raw,data);if(cat){state.category=cat;state.stage=STAGES.COUNTING;return result(`Catégorie ${cat} sélectionnée. Dicte un produit, ou dis « inventaire terminé ».`);}return result('Je ne trouve pas cette catégorie dans le Manager.');}
