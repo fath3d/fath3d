@@ -20296,16 +20296,14 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
   function marketNameKey(value){
     return normalizeIntent(String(value||'')).replace(/\bst\b/g,'saint').replace(/[^a-z0-9]+/g,'');
   }
+  const MARKET_GENERIC_LOCATION_TOKENS=new Set(['saint','st','sainte','ste','marche','marches','noel','de','du','des','le','la','les','sur','dans','pour','infos','info','information','informations','donne','moi','montre','montres']);
+  function marketSignificantTokens(value){
+    return normalizeIntent(String(value||'')).replace(/\bst\b/g,'saint').split(/[^a-z0-9]+/).filter(token=>token&&token.length>2&&!MARKET_GENERIC_LOCATION_TOKENS.has(token));
+  }
   function marketNameMatches(query, city){
-    const qKey=marketNameKey(query), cityText=normalizeIntent(String(city||'')).replace(/\bst\b/g,'saint');
-    const cityKey=marketNameKey(cityText);
-    if(!qKey||!cityKey)return false;
-    if(qKey===cityKey||qKey.includes(cityKey)||cityKey.includes(qKey))return true;
-    const tokens=cityText.split(/\s+/).filter(Boolean);
-    if(!tokens.length)return false;
-    const lead=tokens[0].length<=4&&tokens[1]?tokens.slice(0,2).join(' '):tokens[0];
-    const leadKey=marketNameKey(lead);
-    return leadKey.length>=4&&qKey.includes(leadKey);
+    const queryTokens=marketSignificantTokens(query),cityTokens=marketSignificantTokens(city);
+    if(!queryTokens.length||!cityTokens.length)return false;
+    return cityTokens.some(cityToken=>queryTokens.some(queryToken=>queryToken===cityToken||queryToken.startsWith(cityToken)||cityToken.startsWith(queryToken)));
   }
   function marketDateLabelFr(item){
     const months=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
@@ -20348,6 +20346,11 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     const listRequested=/\b(quels?|quelles?|marches?|prochains?|prochaines?|liste|ce mois|mois ci|a venir)\b/.test(q)&&!detailRequested;
     if(pending&&pending.kind==='market_list'&&!listRequested){
       const contextMarkets=markets.filter(item=>pending.candidates.some(id=>String(id)===String(item.id)));
+      if(requestedDay&&!date){
+        const dateMatches=contextMarkets.filter(item=>item.date&&Number(String(item.date).slice(8,10))===requestedDay&&Number(String(item.date).slice(5,7))===requestedDayMonth);
+        if(dateMatches.length===1)return result('consult.markets',marketDetailAnswer(dateMatches[0]),{facts:[fact('market_info',dateMatches[0].city||'Marché',marketDetailAnswer(dateMatches[0]))],pending:marketContextPending(pending.candidates,dateMatches[0].id)});
+        if(dateMatches.length>1)return result('consult.markets','Quel marché veux-tu détailler pour le '+requestedDay+' '+dayMonthMatch[2]+' ?',{outcome:'clarification',pending:{kind:'market_choice',actionId:'consult.markets',candidates:dateMatches.map(item=>item.id)}});
+      }
       const selected=contextMarkets.filter(item=>{
         const cityHit=marketNameMatches(q,item.city);
         const dateHit=Boolean(requestedDay&&item.date&&Number(String(item.date).slice(8,10))===requestedDay&&Number(String(item.date).slice(5,7))===requestedDayMonth);
