@@ -108,6 +108,16 @@ if ('serviceWorker' in navigator) {
   window.jarvisScopedStockAdjustCommit = async function(request) {
     const input = request && typeof request === 'object' ? request : {};
     if(input.actionId !== 'stock.adjust') throw new Error('NO_SCOPED_COMMIT_ADAPTER');
+    const securityState = window.JarvisSecurity && typeof window.JarvisSecurity.getState === 'function'
+      ? window.JarvisSecurity.getState() : null;
+    const scoped = input.scopedAuthorization;
+    const scopedValid = !!(scoped && scoped.actionId === 'stock.adjust' && scoped.location === 'maison'
+      && scoped.proposalId === (input.proposal && input.proposal.proposalId)
+      && scoped.nonce === (input.proposal && input.proposal.nonce)
+      && scoped.productId !== undefined
+      && Number.isInteger(Number(scoped.expectedBefore))
+      && Number.isInteger(Number(scoped.proposedAfter)));
+    if((!securityState || securityState.writesEnabled !== true) && !scopedValid) throw new Error('JARVIS_WRITES_DISABLED');
     if(!window.firebaseReady || !DOC_REF) throw new Error('FIREBASE_NOT_READY');
     const proposal = input.proposal || {};
     const args = proposal.parameters || {};
@@ -19468,6 +19478,7 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
   const proposals=new Map();
   const pendingTickets=new Map();
   const oneShotAuthorizations=new Map();
+  const scopedAuthorizations=new Map();
   let executionLock=false;
 
   function clone(value){return value===undefined?undefined:JSON.parse(JSON.stringify(value));}
@@ -19500,6 +19511,8 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
   function cancel(proposalId){const p=get(proposalId);p.state='cancelled';p.nonce=null;proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,state:'cancelled',realDataChanged:false};}
   function correct(proposalId,normalizedArgs,currentData,summary,oldValue,nextValue){const p=get(proposalId);p.state='corrected';p.nonce=null;proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return create(p.actionId,normalizedArgs,currentData,summary,oldValue,nextValue);}
   function confirm(proposalId,confirmation,currentData){const p=get(proposalId);if(p.state!=='pending')throw new Error('PROPOSAL_NOT_PENDING');if(!confirmation||confirmation.explicit!==true||confirmation.proposalId!==p.proposalId||confirmation.actionId!==p.actionId||confirmation.nonce!==p.nonce)throw new Error('CONFIRMATION_MISMATCH');if(hash(currentData)!==p.beforeHash)throw new Error('STALE_PROPOSAL');if(hash(p.parameters)!==p.parameterHash)throw new Error('PARAMETERS_CHANGED');p.state='confirmed';oneShotAuthorizations.set(p.proposalId,{proposalId:p.proposalId,actionId:p.actionId,nonce:p.nonce,expiresAt:p.expiresAt});return clone(p);}
+  function authorizeScopedStockAdjust(proposalId){const p=get(proposalId);if(p.state!=='confirmed')throw new Error('CONFIRMATION_REQUIRED');if(p.actionId!=='stock.adjust')throw new Error('SCOPED_ACTION_NOT_ALLOWED');const args=p.parameters||{};const expected=Number(p.oldValue),proposed=Number(p.newValue);if(args.location!=='maison')throw new Error('SCOPED_LOCATION_INVALID');if(!Number.isInteger(expected)||expected<0)throw new Error('EXPECTED_BEFORE_UNKNOWN');if(!Number.isInteger(proposed)||proposed<0)throw new Error('PROPOSED_AFTER_INVALID');const auth={proposalId:p.proposalId,actionId:p.actionId,nonce:p.nonce,productId:args.productId,location:'maison',expectedBefore:expected,proposedAfter:proposed,expiresAt:p.expiresAt,consumed:false};scopedAuthorizations.set(p.proposalId,auth);return clone(auth);}
+  function scopedFor(proposalId,p){const auth=scopedAuthorizations.get(proposalId);if(!auth||auth.consumed)throw new Error('SCOPED_AUTHORIZATION_REQUIRED');if(Date.now()>auth.expiresAt){scopedAuthorizations.delete(proposalId);throw new Error('SCOPED_AUTHORIZATION_EXPIRED');}if(auth.proposalId!==p.proposalId||auth.actionId!=='stock.adjust'||auth.nonce!==p.nonce||String(auth.productId)!==String(p.parameters.productId)||auth.location!=='maison'||auth.expectedBefore!==Number(p.oldValue)||auth.proposedAfter!==Number(p.newValue))throw new Error('SCOPED_AUTHORIZATION_MISMATCH');auth.consumed=true;return clone(auth);}
   function candidate(proposal,currentData){
     const next=clone(currentData||{}), args=proposal.parameters||{};
     if(proposal.actionId==='cash.pending_ticket.prepare'){pendingTickets.set(proposal.proposalId,{proposalId:proposal.proposalId,items:clone(args.items||[]),note:String(args.note||'')});return next;}
@@ -19548,6 +19561,8 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     if(Date.now()>authorization.expiresAt){oneShotAuthorizations.delete(proposalId);throw new Error('EXPIRED_AUTHORIZATION');}
     const security=api();
     const securityState=security.getState();
+    let scoped=null;
+    if(securityState.writesEnabled!==true) scoped=scopedFor(proposalId,p);
     if(!securityState.dataBackupVerified)throw new Error('DATA_BACKUP_REQUIRED');
     if(!securityState.restoreTestVerified)throw new Error('RESTORE_TEST_REQUIRED');
     if(executionLock)throw new Error('EXECUTION_IN_PROGRESS'); executionLock=true;
@@ -19555,18 +19570,18 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
       const simulation=simulate(proposalId,currentData);
       if(p.actionId!=='stock.adjust')throw new Error('NO_SCOPED_COMMIT_ADAPTER');
       if(typeof root.jarvisScopedStockAdjustCommit!=='function')throw new Error('NO_SCOPED_COMMIT_ADAPTER');
-      const commit=await root.jarvisScopedStockAdjustCommit({actionId:p.actionId,proposal:clone(p),currentData, candidateData:simulation.candidate,dryRun:false});
+      const commit=await root.jarvisScopedStockAdjustCommit({actionId:p.actionId,proposal:clone(p),currentData, candidateData:simulation.candidate,scopedAuthorization:scoped,dryRun:false});
       if(commit && commit.firebaseWritePerformed===true && commit.neutralized!==true && currentData && typeof currentData==='object'){
         Object.keys(currentData).forEach(key=>{delete currentData[key];});
         Object.assign(currentData,clone(simulation.candidate));
       }
-      p.state='consumed';proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);
+      p.state='consumed';proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);scopedAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);
       return {ok:true,proposalId,actionId:p.actionId,state:'consumed',simulation,commit,realDataChanged:false};
     }catch(error){oneShotAuthorizations.delete(proposalId);throw error;}finally{executionLock=false;}
   }
-  function execute(proposalId,currentData){const p=get(proposalId);if(p.state!=='confirmed')throw new Error('CONFIRMATION_REQUIRED');const authorization=oneShotAuthorizations.get(proposalId);if(!authorization||authorization.proposalId!==p.proposalId||authorization.actionId!==p.actionId||authorization.nonce!==p.nonce)throw new Error('ONE_SHOT_AUTHORIZATION_REQUIRED');if(Date.now()>authorization.expiresAt){oneShotAuthorizations.delete(proposalId);throw new Error('EXPIRED_AUTHORIZATION');}if(executionLock)throw new Error('EXECUTION_IN_PROGRESS');executionLock=true;try{const simulation=simulate(proposalId,currentData);const commit=scopedCommitAdapter(p.actionId,p,currentData,simulation.candidate);p.state='consumed';proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,actionId:p.actionId,state:'consumed',simulation,commit,realDataChanged:false};}catch(error){oneShotAuthorizations.delete(proposalId);throw error;}finally{executionLock=false;}}
-  function reset(){proposals.clear();pendingTickets.clear();oneShotAuthorizations.clear();executionLock=false;}
-  const API=Object.freeze({version:VERSION,ttlMs:TTL_MS,allowedActions:ALLOWED,createProposal:create,getProposal:id=>clone(get(id)),correctProposal:correct,cancelProposal:cancel,confirmProposal:confirm,simulateCandidate:simulate,executeConfirmed:execute,executeConfirmedAsync,reset,getState:()=>({version:VERSION,writesEnabled:false,temporary:true,proposalCount:proposals.size,pendingTicketCount:pendingTickets.size,oneShotAuthorizationCount:oneShotAuthorizations.size})});
+  function execute(proposalId,currentData){const p=get(proposalId);if(p.state!=='confirmed')throw new Error('CONFIRMATION_REQUIRED');const authorization=oneShotAuthorizations.get(proposalId);if(!authorization||authorization.proposalId!==p.proposalId||authorization.actionId!==p.actionId||authorization.nonce!==p.nonce)throw new Error('ONE_SHOT_AUTHORIZATION_REQUIRED');if(Date.now()>authorization.expiresAt){oneShotAuthorizations.delete(proposalId);throw new Error('EXPIRED_AUTHORIZATION');}const securityState=api().getState();if(securityState.writesEnabled!==true)scopedFor(proposalId,p);if(executionLock)throw new Error('EXECUTION_IN_PROGRESS');executionLock=true;try{const simulation=simulate(proposalId,currentData);const commit=scopedCommitAdapter(p.actionId,p,currentData,simulation.candidate);p.state='consumed';proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);scopedAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,actionId:p.actionId,state:'consumed',simulation,commit,realDataChanged:false};}catch(error){oneShotAuthorizations.delete(proposalId);throw error;}finally{executionLock=false;}}
+  function reset(){proposals.clear();pendingTickets.clear();oneShotAuthorizations.clear();scopedAuthorizations.clear();executionLock=false;}
+  const API=Object.freeze({version:VERSION,ttlMs:TTL_MS,allowedActions:ALLOWED,createProposal:create,getProposal:id=>clone(get(id)),correctProposal:correct,cancelProposal:cancel,confirmProposal:confirm,authorizeScopedStockAdjust,simulateCandidate:simulate,executeConfirmed:execute,executeConfirmedAsync,reset,getState:()=>({version:VERSION,writesEnabled:false,temporary:true,proposalCount:proposals.size,pendingTicketCount:pendingTickets.size,oneShotAuthorizationCount:scopedAuthorizations.size})});
   Object.defineProperty(root,'JarvisWriteBroker6',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
@@ -21284,7 +21299,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   'use strict';
   if(root.JarvisInventory8) return;
   const STAGES=Object.freeze({OFF:'OFF',WAITING_LOCATION:'WAITING_LOCATION',WAITING_CATEGORY:'WAITING_CATEGORY',COUNTING:'COUNTING',WAITING_CLARIFICATION:'WAITING_CLARIFICATION',FINISHED:'FINISHED'});
-  const state={active:false,stage:STAGES.OFF,location:null,category:null,entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:'',snapshot:null,comparison:null};
+  const state={active:false,stage:STAGES.OFF,location:null,category:null,entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:'',snapshot:null,comparison:null,finalProposal:null,finalValidation:null};
   const numberWords={un:1,une:1,deux:2,trois:3,quatre:4,cinq:5,six:6,sept:7,huit:8,neuf:9,dix:10,onze:11,douze:12,treize:13,quatorze:14,quinze:15,seize:16,dixsept:17,dixhuit:18,dixneuf:19,vingt:20,trente:30,quarante:40,cinquante:50,soixante:60,cent:100,deuxcent:200};
   function norm(v){return String(v||'').toLocaleLowerCase('fr-FR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[’']/g,' ').replace(/[^a-z0-9]+/g,' ').trim();}
   function clean(v){return norm(v).replace(/\b(?:jarvis|inventaire|produit|produits|article|articles|stock|en|dans|la|le|les|de|du|des|un|une|quantite|quantite|maison)\b/g,' ').replace(/\s+/g,' ').trim();}
@@ -21349,13 +21364,14 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const lines=state.entries.map((e,i)=>{const cancelled=e.status==='cancelled',validated=e.status==='manually_validated';return `<div style="padding:5px 0;border-top:1px solid #374151;display:flex;align-items:center;gap:5px;${cancelled?'opacity:.55;text-decoration:line-through;':''}"><b style="flex:1">${i+1} — ${e.quantity} ${escapeHtml(e.name)}</b> <span>${cancelled?'✕ annulé':validated?'✓ validé':e.status==='corrected'?'✎ corrigé':'✓ brouillon'}</span>${!cancelled?`<button type="button" data-inventory-action="validate" data-inventory-index="${i}" style="background:#15803d;color:#fff;border:0;border-radius:4px;padding:2px 5px;font-size:11px">Valider</button><button type="button" data-inventory-action="cancel" data-inventory-index="${i}" style="background:#b91c1c;color:#fff;border:0;border-radius:4px;padding:2px 5px;font-size:11px">Annuler</button>`:''}</div>`;}).join('');
     const pending=state.pendingClarification?`<div style="margin-top:8px;color:#fde68a">⚠ clarification : ${state.pendingClarification.candidates.map((p,i)=>`${i+1} — ${escapeHtml(productLabel(p))} — n°${escapeHtml(idOf(p))}`).join(' · ')}</div>`:'';
     const comparison=state.comparison;
-    const comparisonHtml=comparison?`<div data-inventory-comparison style="margin-top:10px;padding-top:8px;border-top:1px solid #facc15"><strong>Comparatif lecture seule — Maison</strong>${comparison.rows.map(row=>`<div style="margin-top:7px;padding:6px;border:1px solid #374151;border-radius:6px"><b>${escapeHtml(row.name)}</b><br><span>Manager : ${row.stockKnown?escapeHtml(row.stock):'inconnu'} · Compté : ${escapeHtml(row.counted)} · Écart : ${row.stockKnown?escapeHtml(row.delta>0?'+'+row.delta:String(row.delta)):'—'}</span></div>`).join('')}${comparison.rows.length&&comparison.rows.every(row=>row.stockKnown&&row.delta===0)?'<div style="margin-top:8px;color:#86efac">Inventaire terminé — aucun écart détecté.</div>':''}</div>`:'';
+    const comparisonHtml=comparison?`<div data-inventory-comparison style="margin-top:10px;padding-top:8px;border-top:1px solid #facc15"><strong>Comparatif lecture seule — Maison</strong>${comparison.rows.map(row=>`<div style="margin-top:7px;padding:6px;border:1px solid #374151;border-radius:6px"><b>${escapeHtml(row.name)}</b><br><span>Manager : ${row.stockKnown?escapeHtml(row.stock):'inconnu'} · Compté : ${escapeHtml(row.counted)} · Écart : ${row.stockKnown?escapeHtml(row.delta>0?'+'+row.delta:String(row.delta)):'—'}</span></div>`).join('')}${comparison.rows.length&&comparison.rows.every(row=>row.stockKnown&&row.delta===0)?'<div style="margin-top:8px;color:#86efac">Inventaire terminé — aucun écart détecté.</div>':''}${state.finalProposal?`<div data-inventory-final-proposal style="margin-top:10px;padding-top:8px;border-top:1px solid #facc15"><strong>Mise à jour proposée</strong>${state.finalProposal.proposals.map(item=>`<div style="margin-top:6px"><b>${escapeHtml(item.name)}</b><br>Actuel : ${escapeHtml(item.expectedBefore)} · Nouveau : ${escapeHtml(item.proposedAfter)} · Écart : ${escapeHtml(item.delta>0?'+'+item.delta:String(item.delta))}</div>`).join('')}${state.finalProposal.blockedRows.length?`<div style="margin-top:6px;color:#fca5a5">${state.finalProposal.blockedRows.length} ligne(s) bloquée(s) — stock inconnu ou invalide.</div>`:''}<div style="margin-top:8px"><button type="button" data-inventory-final-action="validate" style="background:#15803d;color:#fff;border:0;border-radius:4px;padding:4px 7px;font-size:11px">Valider les modifications</button><button type="button" data-inventory-final-action="cancel" style="background:#b91c1c;color:#fff;border:0;border-radius:4px;padding:4px 7px;font-size:11px">Annuler</button></div></div>`:''}</div>`:'';
     panel.innerHTML=`<strong>Inventaire Jarvis — ${escapeHtml(state.stage)}</strong><div>Lieu : ${escapeHtml(state.location||'—')} · Catégorie : ${escapeHtml(state.category||'—')}</div>${lines||'<div style="margin-top:8px;color:#cbd5e1">Aucune ligne.</div>'}${pending}${comparisonHtml}`;
     if(typeof panel.querySelectorAll==='function') panel.querySelectorAll('[data-inventory-action]').forEach(button=>{button.onclick=()=>manualLineAction(Number(button.dataset.inventoryIndex),button.dataset.inventoryAction);});
+    if(typeof panel.querySelectorAll==='function') panel.querySelectorAll('[data-inventory-final-action]').forEach(button=>{button.onclick=()=>manualFinalAction(button.dataset.inventoryFinalAction);});
   }
   function escapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
   function result(answer){state.lastMessage=answer;state.lastInteraction=Date.now();showPanel();return {kind:'direct',result:{outcome:'direct_answer',answer,proposal:null,topic:'inventory',missingInformation:[],readAction:null}};}
-  function reset(){Object.assign(state,{active:false,stage:STAGES.OFF,location:null,category:null,entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:'',snapshot:null,comparison:null});showPanel();}
+  function reset(){Object.assign(state,{active:false,stage:STAGES.OFF,location:null,category:null,entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:'',snapshot:null,comparison:null,finalProposal:null,finalValidation:null});showPanel();}
   function manualLineAction(index,action){const entry=state.entries[index];if(!entry||entry.status==='cancelled')return false;if(action==='validate')entry.status='manually_validated';else if(action==='cancel')entry.status='cancelled';else return false;state.lastInteraction=Date.now();showPanel();return true;}
   function start(initialLocation,initialCategory){
     const location=initialLocation||null, category=initialCategory||null;
@@ -21382,8 +21398,42 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(state.snapshot)return state.comparison;
     state.snapshot={version:'8C-1.0.0',location:'Maison',category:state.category,createdAt:Date.now(),entries:state.entries.filter(e=>e&&e.status!=='cancelled').map(e=>({productId:e.productId,name:e.name,category:e.category,location:'Maison',quantity:Number(e.quantity)||0,status:e.status,rawTranscript:e.rawTranscript,normalizedText:e.normalizedText}))};
     state.comparison=buildComparison(data);
+    prepareFinalProposals(data);
     return state.comparison;
   }
+  function prepareFinalProposals(data){
+    if(state.finalProposal)return state.finalProposal;
+    const broker=root.JarvisWriteBroker6;
+    const proposals=[],blockedRows=[];
+    const sessionId=`inventory8-${state.startedAt||Date.now()}`;
+    const snapshotHash=state.snapshot&&JSON.stringify(state.snapshot).length+':'+state.snapshot.createdAt;
+    (state.comparison&&state.comparison.rows||[]).forEach(row=>{
+      if(!row.stockKnown){blockedRows.push({...row,reason:'STOCK_UNKNOWN'});return;}
+      if(row.delta===0)return;
+      if(!broker||typeof broker.createProposal!=='function'){blockedRows.push({...row,reason:'WRITE_BROKER_UNAVAILABLE'});return;}
+      try{
+        const args={productId:row.productId,location:'maison',newQuantity:row.counted,inventorySessionId:sessionId,snapshotHash,expectedBefore:row.stock,proposedAfter:row.counted,delta:row.delta};
+        const proposal=broker.createProposal('stock.adjust',args,data,`Inventaire Maison — ${row.name} : ${row.stock} → ${row.counted}`,row.stock,row.counted);
+        proposals.push({proposalId:proposal.proposalId,name:row.name,productId:row.productId,location:'maison',expectedBefore:row.stock,proposedAfter:row.counted,delta:row.delta,status:'pending',sessionId,snapshotHash});
+      }catch(error){blockedRows.push({...row,reason:error&&error.message||'PROPOSAL_REJECTED'});}
+    });
+    state.finalProposal={version:'8D-A.0.0',sessionId,snapshotHash,proposals,blockedRows,createdAt:Date.now(),status:'pending'};
+    return state.finalProposal;
+  }
+  function cancelFinal(){
+    const broker=root.JarvisWriteBroker6;
+    (state.finalProposal&&state.finalProposal.proposals||[]).forEach(item=>{try{if(broker&&broker.cancelProposal)broker.cancelProposal(item.proposalId);}catch(_){}});
+    if(state.finalProposal)state.finalProposal.status='cancelled'; state.finalValidation={explicit:true,status:'cancelled'}; showPanel(); return {ok:true,status:'cancelled',writes:0};
+  }
+  async function validateFinal(data,options){
+    const opts=options||{}; const final=state.finalProposal||prepareFinalProposals(data); if(!opts.explicit)throw new Error('FINAL_CONFIRMATION_REQUIRED');
+    if(final.status!=='pending')throw new Error('FINAL_PROPOSAL_NOT_PENDING');
+    if(opts.dryRun!==false){state.finalValidation={explicit:true,status:'validated_dry_run',writes:0};final.status='validated_dry_run';showPanel();return {ok:true,status:final.status,results:[],writes:0};}
+    const broker=root.JarvisWriteBroker6;if(!broker)throw new Error('WRITE_BROKER_UNAVAILABLE');const results=[];
+    for(const item of final.proposals){try{const p=broker.getProposal(item.proposalId);broker.confirmProposal(item.proposalId,{explicit:true,proposalId:p.proposalId,actionId:p.actionId,nonce:p.nonce},data);broker.authorizeScopedStockAdjust(item.proposalId);const result=await broker.executeConfirmedAsync(item.proposalId,data);results.push({productId:item.productId,name:item.name,status:'ok',result});}catch(error){results.push({productId:item.productId,name:item.name,status:error&&error.message==='STALE_REMOTE_STOCK'?'stale':'error',error:error&&error.message||'ERROR'});break;}}
+    final.status=results.every(item=>item.status==='ok')?'executed':'partial_or_failed';state.finalValidation={explicit:true,status:final.status,results};showPanel();return {ok:final.status==='executed',status:final.status,results,writes:results.filter(item=>item.status==='ok').length};
+  }
+  function manualFinalAction(action){if(action==='cancel')return cancelFinal();if(action==='validate'){return validateFinal((typeof db!=='undefined'&&db)?db:(root.db||{}),{explicit:true,dryRun:true});}return null;}
   function formatSummary(){const activeEntries=state.entries.filter(e=>e.status!=='cancelled');if(!activeEntries.length)return 'Inventaire terminé. Le brouillon est vide. Aucune écriture n’a été effectuée.';const comparison=state.comparison;const suffix=comparison&&comparison.rows.length?` Comparatif lecture seule disponible : ${comparison.rows.map(row=>`${row.name} — Manager ${row.stockKnown?row.stock:'inconnu'}, compté ${row.counted}, écart ${row.stockKnown?(row.delta>0?'+'+row.delta:row.delta):'—'}`).join(' ; ')}.`:'';return 'Inventaire terminé. Brouillon Maison / '+state.category+' : '+activeEntries.map(e=>`${e.quantity} ${e.name}`).join(' ; ')+'.'+suffix+' Aucune écriture n’a été effectuée.';}
   function clarification(candidates,quantity,raw){state.pendingClarification={candidates,quantity,raw};state.stage=STAGES.WAITING_CLARIFICATION;return result('J’ai trouvé : '+candidates.map((p,i)=>`${i+1} — ${productLabel(p)} — n°${idOf(p)}`).join(' ; ')+'. Dis « le premier », « le deuxième » ou le numéro affiché.');}
   function choosePending(value,data){const pending=state.pendingClarification;if(!pending)return null;const q=norm(value);let chosen=null;const ordinal=q.match(/^(?:le|la|numero|num)?\s*(premier|premiere|1er|deuxieme|second|seconde|2e|deux|1|2)$/);if(ordinal){const word=ordinal[1];const idx=/prem|1er|^1$/.test(word)?0:1;chosen=pending.candidates[idx]||null;}else{const n=parseNumberText(q);if(n!==null){chosen=pending.candidates.find(p=>String(idOf(p))===String(n))||pending.candidates[n-1]||null;}}
@@ -21449,7 +21499,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   }
   function getState(){return JSON.parse(JSON.stringify(state));}
   function getComparison(){return state.comparison?JSON.parse(JSON.stringify(state.comparison)):null;}
-  root.JarvisInventory8=Object.freeze({version:'8C-1.0.0',stages:STAGES,route,getState,getComparison,reset,manualLineAction});
+  function getFinalProposal(){return state.finalProposal?JSON.parse(JSON.stringify(state.finalProposal)):null;}
+  root.JarvisInventory8=Object.freeze({version:'8D-A.0.0',stages:STAGES,route,getState,getComparison,getFinalProposal,prepareFinalProposals,validateFinal,cancelFinal,reset,manualLineAction});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
 <script id="jarvis-voice7-step7c">
