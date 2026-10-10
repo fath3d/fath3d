@@ -21368,10 +21368,26 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const comparisonHtml=comparison?`<div data-inventory-comparison style="margin-top:10px;padding-top:8px;border-top:1px solid #facc15"><strong>Comparatif lecture seule — Maison</strong>${comparison.rows.map(row=>`<div style="margin-top:7px;padding:6px;border:1px solid #374151;border-radius:6px"><b>${escapeHtml(row.name)}</b><br><span>Manager : ${row.stockKnown?escapeHtml(row.stock):'inconnu'} · Compté : ${escapeHtml(row.counted)} · Écart : ${row.stockKnown?escapeHtml(row.delta>0?'+'+row.delta:String(row.delta)):'—'}</span></div>`).join('')}${comparison.rows.length&&comparison.rows.every(row=>row.stockKnown&&row.delta===0)?'<div style="margin-top:8px;color:#86efac">Inventaire terminé — aucun écart détecté.</div>':''}${state.finalProposal?`<div data-inventory-final-proposal style="margin-top:10px;padding-top:8px;border-top:1px solid #facc15"><strong>Mise à jour proposée</strong>${state.finalProposal.proposals.map(item=>`<div style="margin-top:6px"><b>${escapeHtml(item.name)}</b><br>Actuel : ${escapeHtml(item.expectedBefore)} · Nouveau : ${escapeHtml(item.proposedAfter)} · Écart : ${escapeHtml(item.delta>0?'+'+item.delta:String(item.delta))}</div>`).join('')}${state.finalProposal.blockedRows.length?`<div style="margin-top:6px;color:#fca5a5">${state.finalProposal.blockedRows.length} ligne(s) bloquée(s) — stock inconnu ou invalide.</div>`:''}<div style="margin-top:8px"><button type="button" data-inventory-final-action="validate" style="background:#15803d;color:#fff;border:0;border-radius:4px;padding:4px 7px;font-size:11px">Valider les modifications</button><button type="button" data-inventory-final-action="cancel" style="background:#b91c1c;color:#fff;border:0;border-radius:4px;padding:4px 7px;font-size:11px">Annuler</button></div></div>`:''}</div>`:'';
     const batchesHtml=state.batches.filter(batch=>batch.status==='validated').map((batch,index)=>`<details data-inventory-batch="${escapeHtml(batch.batchId)}"><summary>Série ${index+1} — ${batch.entries.filter(e=>e.status!=='cancelled').length} lignes · validée</summary><div style="padding:4px 0;color:#cbd5e1">${batch.entries.filter(e=>e.status!=='cancelled').map(e=>`${escapeHtml(e.quantity)} — ${escapeHtml(e.name)}`).join(' ; ')||'Aucune ligne active.'}</div></details>`).join('');
     const seriesAction=state.active&&state.stage===STAGES.COUNTING?'<button type="button" data-inventory-series-action="validate" style="margin-top:8px;background:#2563eb;color:#fff;border:0;border-radius:4px;padding:4px 7px;font-size:11px">Valider la série</button>':'';
-    panel.innerHTML=`<strong>Inventaire Jarvis — ${escapeHtml(state.stage)}</strong><div>Lieu : ${escapeHtml(state.location||'—')} · Catégorie : ${escapeHtml(state.category||'—')}</div><div style="margin-top:4px">${allEntries().filter(e=>e.status!=='cancelled').length} référence(s) comptée(s)</div>${batchesHtml}${lines||'<div style="margin-top:8px;color:#cbd5e1">Aucune ligne dans la série en cours.</div>'}${seriesAction}${pending}${comparisonHtml}`;
-    if(typeof panel.querySelectorAll==='function') panel.querySelectorAll('[data-inventory-action]').forEach(button=>{button.onclick=()=>manualLineAction(Number(button.dataset.inventoryIndex),button.dataset.inventoryAction);});
-    if(typeof panel.querySelectorAll==='function') panel.querySelectorAll('[data-inventory-final-action]').forEach(button=>{button.onclick=()=>manualFinalAction(button.dataset.inventoryFinalAction);});
-    if(typeof panel.querySelectorAll==='function') panel.querySelectorAll('[data-inventory-series-action]').forEach(button=>{button.onclick=()=>validateBatch();});
+    panel.innerHTML=`<strong>Inventaire Jarvis — ${escapeHtml(state.stage)}</strong><div>Lieu : ${escapeHtml(state.location||'—')} · Catégorie : ${escapeHtml(state.category||'—')}</div><div style="margin-top:4px">${allEntries().filter(e=>e.status!=='cancelled').length} référence(s) comptée(s)</div>${batchesHtml}${lines||'<div style="margin-top:8px;color:#cbd5e1">Aucune ligne dans la série en cours.</div>'}${seriesAction}${pending}${comparisonHtml}${state.lastMessage?`<div data-inventory-feedback style="margin-top:8px;color:#cbd5e1">${escapeHtml(state.lastMessage)}</div>`:''}`;
+    // Le panneau est rerendu par innerHTML à chaque étape. Une délégation
+    // attachée au panneau (une seule fois par instance) évite de perdre les
+    // handlers des boutons finaux après le rerender du comparatif 8D.
+    if(!panel.__inventory8ClickBound && typeof panel.addEventListener==='function'){
+      panel.addEventListener('click',event=>{
+        const target=event.target&&event.target.closest?event.target.closest('[data-inventory-action],[data-inventory-final-action],[data-inventory-series-action]'):null;
+        if(!target||!panel.contains(target))return;
+        event.preventDefault();
+        if(target.dataset.inventoryAction){ manualLineAction(Number(target.dataset.inventoryIndex),target.dataset.inventoryAction); return; }
+        if(target.dataset.inventorySeriesAction){ validateBatch(); return; }
+        if(target.dataset.inventoryFinalAction){
+          Promise.resolve(manualFinalAction(target.dataset.inventoryFinalAction)).catch(error=>{
+            state.lastMessage=error&&error.message==='FINAL_PROPOSAL_NOT_PENDING'?'Proposition expirée.':'Validation impossible.';
+            showPanel();
+          });
+        }
+      });
+      panel.__inventory8ClickBound=true;
+    }
   }
   function escapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
   function result(answer){state.lastMessage=answer;state.lastInteraction=Date.now();showPanel();return {kind:'direct',result:{outcome:'direct_answer',answer,proposal:null,topic:'inventory',missingInformation:[],readAction:null}};}
@@ -21428,12 +21444,12 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function cancelFinal(){
     const broker=root.JarvisWriteBroker6;
     (state.finalProposal&&state.finalProposal.proposals||[]).forEach(item=>{try{if(broker&&broker.cancelProposal)broker.cancelProposal(item.proposalId);}catch(_){}});
-    if(state.finalProposal)state.finalProposal.status='cancelled'; state.finalValidation={explicit:true,status:'cancelled'}; showPanel(); return {ok:true,status:'cancelled',writes:0};
+    if(state.finalProposal)state.finalProposal.status='cancelled'; state.finalValidation={explicit:true,status:'cancelled'}; state.lastMessage='Mise à jour annulée. Aucune écriture effectuée.'; showPanel(); return {ok:true,status:'cancelled',writes:0};
   }
   async function validateFinal(data,options){
     const opts=options||{}; const final=state.finalProposal||prepareFinalProposals(data); if(!opts.explicit)throw new Error('FINAL_CONFIRMATION_REQUIRED');
     if(final.status!=='pending')throw new Error('FINAL_PROPOSAL_NOT_PENDING');
-    if(opts.dryRun!==false){state.finalValidation={explicit:true,status:'validated_dry_run',writes:0};final.status='validated_dry_run';showPanel();return {ok:true,status:final.status,results:[],writes:0};}
+    if(opts.dryRun!==false){state.finalValidation={explicit:true,status:'validated_dry_run',writes:0};final.status='validated_dry_run';state.lastMessage='Validation reçue. Écriture réelle désactivée dans ce diagnostic.';showPanel();return {ok:true,status:final.status,results:[],writes:0};}
     const broker=root.JarvisWriteBroker6;if(!broker)throw new Error('WRITE_BROKER_UNAVAILABLE');const results=[];
     for(const item of final.proposals){try{const p=broker.getProposal(item.proposalId);broker.confirmProposal(item.proposalId,{explicit:true,proposalId:p.proposalId,actionId:p.actionId,nonce:p.nonce},data);broker.authorizeScopedStockAdjust(item.proposalId);const result=await broker.executeConfirmedAsync(item.proposalId,data);results.push({productId:item.productId,name:item.name,status:'ok',result});}catch(error){results.push({productId:item.productId,name:item.name,status:error&&error.message==='STALE_REMOTE_STOCK'?'stale':'error',error:error&&error.message||'ERROR'});break;}}
     final.status=results.every(item=>item.status==='ok')?'executed':'partial_or_failed';state.finalValidation={explicit:true,status:final.status,results};showPanel();return {ok:final.status==='executed',status:final.status,results,writes:results.filter(item=>item.status==='ok').length};
