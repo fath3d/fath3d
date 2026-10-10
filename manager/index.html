@@ -21299,7 +21299,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   'use strict';
   if(root.JarvisInventory8) return;
   const STAGES=Object.freeze({OFF:'OFF',WAITING_LOCATION:'WAITING_LOCATION',WAITING_CATEGORY:'WAITING_CATEGORY',COUNTING:'COUNTING',WAITING_CLARIFICATION:'WAITING_CLARIFICATION',FINISHED:'FINISHED'});
-  const state={active:false,stage:STAGES.OFF,location:null,category:null,sessionId:null,batches:[],entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:'',snapshot:null,comparison:null,finalProposal:null,finalValidation:null};
+  const state={active:false,stage:STAGES.OFF,location:null,category:null,sessionId:null,batches:[],entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:'',snapshot:null,comparison:null,finalProposal:null,finalValidation:null,finalValidationInFlight:false};
   const numberWords={un:1,une:1,deux:2,trois:3,quatre:4,cinq:5,six:6,sept:7,huit:8,neuf:9,dix:10,onze:11,douze:12,treize:13,quatorze:14,quinze:15,seize:16,dixsept:17,dixhuit:18,dixneuf:19,vingt:20,trente:30,quarante:40,cinquante:50,soixante:60,cent:100,deuxcent:200};
   function norm(v){return String(v||'').toLocaleLowerCase('fr-FR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[’']/g,' ').replace(/[^a-z0-9]+/g,' ').trim();}
   function clean(v){return norm(v).replace(/\b(?:jarvis|inventaire|produit|produits|article|articles|stock|en|dans|la|le|les|de|du|des|un|une|quantite|quantite|maison)\b/g,' ').replace(/\s+/g,' ').trim();}
@@ -21391,12 +21391,12 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   }
   function escapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
   function result(answer){state.lastMessage=answer;state.lastInteraction=Date.now();showPanel();return {kind:'direct',result:{outcome:'direct_answer',answer,proposal:null,topic:'inventory',missingInformation:[],readAction:null}};}
-  function reset(){Object.assign(state,{active:false,stage:STAGES.OFF,location:null,category:null,sessionId:null,batches:[],entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:'',snapshot:null,comparison:null,finalProposal:null,finalValidation:null});showPanel();}
+  function reset(){Object.assign(state,{active:false,stage:STAGES.OFF,location:null,category:null,sessionId:null,batches:[],entries:[],pendingClarification:null,startedAt:null,lastInteraction:null,lastRawTranscript:'',lastMessage:'',snapshot:null,comparison:null,finalProposal:null,finalValidation:null,finalValidationInFlight:false});showPanel();}
   function manualLineAction(index,action){const entry=state.entries[index];if(!entry||entry.status==='cancelled')return false;if(action==='validate')entry.status='manually_validated';else if(action==='cancel')entry.status='cancelled';else return false;state.lastInteraction=Date.now();showPanel();return true;}
   function validateBatch(){if(!state.active||state.stage!==STAGES.COUNTING)return result('Aucune série active à valider.');const current=state.batches[state.batches.length-1];current.entries=state.entries.map(entry=>({...entry}));current.status='validated';current.validatedAt=Date.now();state.entries=[];const next={batchId:`batch-${Date.now()}`,status:'current',createdAt:Date.now(),validatedAt:null,entries:[]};state.batches.push(next);state.lastInteraction=Date.now();showPanel();return result('Série validée. Tu peux continuer dans la même catégorie.');}
   function start(initialLocation,initialCategory){
     const location=initialLocation||null, category=initialCategory||null;
-    const startedAt=Date.now(); Object.assign(state,{active:true,stage:category?STAGES.COUNTING:(location?STAGES.WAITING_CATEGORY:STAGES.WAITING_LOCATION),location,category,sessionId:`inventory8-${startedAt}-${Math.random().toString(36).slice(2,8)}`,batches:[{batchId:`batch-${startedAt}`,status:'current',createdAt:startedAt,validatedAt:null,entries:[]}],entries:[],pendingClarification:null,startedAt,lastInteraction:startedAt,lastRawTranscript:'',snapshot:null,comparison:null,finalProposal:null,finalValidation:null});
+    const startedAt=Date.now(); Object.assign(state,{active:true,stage:category?STAGES.COUNTING:(location?STAGES.WAITING_CATEGORY:STAGES.WAITING_LOCATION),location,category,sessionId:`inventory8-${startedAt}-${Math.random().toString(36).slice(2,8)}`,batches:[{batchId:`batch-${startedAt}`,status:'current',createdAt:startedAt,validatedAt:null,entries:[]}],entries:[],pendingClarification:null,startedAt,lastInteraction:startedAt,lastRawTranscript:'',snapshot:null,comparison:null,finalProposal:null,finalValidation:null,finalValidationInFlight:false});
     if(category)return result(`Catégorie ${category} sélectionnée. Dicte un produit, ou dis « inventaire terminé ».`);
     if(location)return result('Quelle catégorie veux-tu inventorier ?');
     return result('D’accord. Pour quel emplacement ? Pour 8A-1, dis « Maison ».');
@@ -21444,17 +21444,17 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function cancelFinal(){
     const broker=root.JarvisWriteBroker6;
     (state.finalProposal&&state.finalProposal.proposals||[]).forEach(item=>{try{if(broker&&broker.cancelProposal)broker.cancelProposal(item.proposalId);}catch(_){}});
-    if(state.finalProposal)state.finalProposal.status='cancelled'; state.finalValidation={explicit:true,status:'cancelled'}; state.lastMessage='Mise à jour annulée. Aucune écriture effectuée.'; showPanel(); return {ok:true,status:'cancelled',writes:0};
+    if(state.finalProposal)state.finalProposal.status='cancelled'; state.finalValidation={explicit:true,status:'cancelled'}; state.finalValidationInFlight=false; state.lastMessage='Mise à jour annulée. Aucune écriture effectuée.'; showPanel(); return {ok:true,status:'cancelled',writes:0};
   }
   async function validateFinal(data,options){
     const opts=options||{}; const final=state.finalProposal||prepareFinalProposals(data); if(!opts.explicit)throw new Error('FINAL_CONFIRMATION_REQUIRED');
     if(final.status!=='pending')throw new Error('FINAL_PROPOSAL_NOT_PENDING');
-    if(opts.dryRun!==false){state.finalValidation={explicit:true,status:'validated_dry_run',writes:0};final.status='validated_dry_run';state.lastMessage='Validation reçue. Écriture réelle désactivée dans ce diagnostic.';showPanel();return {ok:true,status:final.status,results:[],writes:0};}
+    if(opts.dryRun!==false){state.finalValidation={explicit:true,status:'validated_dry_run',writes:0};final.status='validated_dry_run';state.finalValidationInFlight=false;state.lastMessage='Validation reçue. Écriture réelle désactivée dans ce diagnostic.';showPanel();return {ok:true,status:final.status,results:[],writes:0};}
     const broker=root.JarvisWriteBroker6;if(!broker)throw new Error('WRITE_BROKER_UNAVAILABLE');const results=[];
     for(const item of final.proposals){try{const p=broker.getProposal(item.proposalId);broker.confirmProposal(item.proposalId,{explicit:true,proposalId:p.proposalId,actionId:p.actionId,nonce:p.nonce},data);broker.authorizeScopedStockAdjust(item.proposalId);const result=await broker.executeConfirmedAsync(item.proposalId,data);results.push({productId:item.productId,name:item.name,status:'ok',result});}catch(error){results.push({productId:item.productId,name:item.name,status:error&&error.message==='STALE_REMOTE_STOCK'?'stale':'error',error:error&&error.message||'ERROR'});break;}}
-    final.status=results.every(item=>item.status==='ok')?'executed':'partial_or_failed';state.finalValidation={explicit:true,status:final.status,results};showPanel();return {ok:final.status==='executed',status:final.status,results,writes:results.filter(item=>item.status==='ok').length};
+    final.status=results.every(item=>item.status==='ok')?'executed':'partial_or_failed';state.finalValidationInFlight=false;state.finalValidation={explicit:true,status:final.status,results};state.lastMessage=final.status==='executed'?'Modifications validées.':'Validation impossible.';showPanel();return {ok:final.status==='executed',status:final.status,results,writes:results.filter(item=>item.status==='ok').length};
   }
-  function manualFinalAction(action){if(action==='cancel')return cancelFinal();if(action==='validate'){return validateFinal((typeof db!=='undefined'&&db)?db:(root.db||{}),{explicit:true,dryRun:true});}return null;}
+  function manualFinalAction(action){if(action==='cancel')return cancelFinal();if(action==='validate'){if(state.finalValidationInFlight)return Promise.resolve({ok:false,status:'in_flight',writes:0});state.finalValidationInFlight=true;state.lastMessage='Validation en cours…';showPanel();const adapter=root.jarvisScopedStockAdjustCommit;const mockMode=!!(adapter&&adapter.__inventory8Mock===true);return validateFinal((typeof db!=='undefined'&&db)?db:(root.db||{}),{explicit:true,dryRun:!mockMode});}return null;}
   function formatSummary(){const activeEntries=allEntries().filter(e=>e.status!=='cancelled');if(!activeEntries.length)return 'Inventaire terminé. Le brouillon est vide. Aucune écriture n’a été effectuée.';const comparison=state.comparison;const suffix=comparison&&comparison.rows.length?` Comparatif lecture seule disponible : ${comparison.rows.length} produit(s) comparé(s).`:'';return 'Inventaire terminé. Brouillon Maison / '+state.category+' : '+activeEntries.map(e=>`${e.quantity} ${e.name}`).join(' ; ')+'.'+suffix+' Aucune écriture n’a été effectuée.';}
   function clarification(candidates,quantity,raw){state.pendingClarification={candidates,quantity,raw};state.stage=STAGES.WAITING_CLARIFICATION;return result('J’ai trouvé : '+candidates.map((p,i)=>`${i+1} — ${productLabel(p)} — n°${idOf(p)}`).join(' ; ')+'. Dis « le premier », « le deuxième » ou le numéro affiché.');}
   function choosePending(value,data){const pending=state.pendingClarification;if(!pending)return null;const q=norm(value);let chosen=null;const ordinal=q.match(/^(?:le|la|numero|num)?\s*(premier|premiere|1er|deuxieme|second|seconde|2e|deux|1|2)$/);if(ordinal){const word=ordinal[1];const idx=/prem|1er|^1$/.test(word)?0:1;chosen=pending.candidates[idx]||null;}else{const n=parseNumberText(q);if(n!==null){chosen=pending.candidates.find(p=>String(idOf(p))===String(n))||pending.candidates[n-1]||null;}}
@@ -21496,6 +21496,13 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const finishCommand=/^(?:jarvis\s+)?(?:inventaire\s+termine|j\s+ai\s+termine\s+l\s+inventaire|fin\s+(?:de\s+)?inventaire|fin\s+d\s+inventaire|termine(?:r)?\s+(?:l\s+|un\s+)?inventaire)\b/.test(q);
     if(!state.active&&state.stage===STAGES.FINISHED&&finishCommand)return result('Inventaire déjà terminé. Le comparatif reste disponible.');
     const inventoryIntent=/\binventaire\b/.test(q)&&!(/\bancien\s+inventaire\b/.test(q));
+    const finalCancel=/^(?:jarvis\s+)?(?:annule|annuler)\s+(?:les\s+)?(?:modifications|modification|changements|changement|proposition)\b/.test(q);
+    const finalValidate=/^(?:jarvis\s+)?(?:valide|valider|confirme|confirmer)\s+(?:les\s+)?(?:modifications|modification|changements|changement|proposition|inventaire)\b/.test(q)
+      || /^(?:jarvis\s+)?oui\s+(?:valide|confirme)\b/.test(q);
+    if(state.stage===STAGES.FINISHED&&state.finalProposal&&state.finalProposal.status==='pending'){
+      if(finalCancel){cancelFinal();return result('Mise à jour annulée. Aucune écriture effectuée.');}
+      if(finalValidate){manualFinalAction('validate');return result('Validation en cours…');}
+    }
     const startRe=inventoryIntent&&(/^(?:jarvis\s+)?(?:inventaire|faire\s+l\s+inventaire|on\s+fait\s+l\s+inventaire|on\s+va\s+faire\s+l\s+inventaire|commence(?:r)?\s+l\s+inventaire|lance(?:r)?\s+l\s+inventaire|demarre(?:r)?\s+(?:l\s+|un\s+)?inventaire|je\s+(?:veux|voudrais)\s+faire\s+l\s+inventaire)(?:\s+(?:a\s+|dans\s+|en\s+)?(?:la\s+)?(?:maison|marche))?(?:\s+.*)?$/).test(q);
     if(!state.active&&(state.stage===STAGES.OFF||state.stage===STAGES.FINISHED)){
       if(inventoryIntent){
@@ -21512,6 +21519,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     // Inventory8 avant toute résolution de catégorie, produit ou clarification.
     const cancelInventory=/\b(?:annule|annuler|abandonne|abandonner|arr[êe]te|arreter|stop)\s+(?:l\s+)?inventaire\b/.test(q);
     if(state.active&&cancelInventory){reset();return result('Inventaire annulé. Aucun stock n’a été modifié.');}
+    // Après FINISHED, les confirmations finales doivent viser la proposition
+    // 8D affichée, jamais le catalogue ni une nouvelle ligne d’inventaire.
     if(state.active&&/\b(?:demarre|demarrer|commence|commencer)\s+(?:un\s+|l\s+)?inventaire\b/.test(q)) return result('Un inventaire est déjà actif. Continue ou dis « inventaire terminé ».');
     if(state.active&&/^(?:jarvis\s+)?(?:valide(?:r)?|termin[ée]e?)\s+la\s+s[ée]rie\b/.test(q))return validateBatch();
     if(state.active&&/^(?:jarvis\s+)?(?:inventaire\s+termine|j\s+ai\s+termine\s+l\s+inventaire|fin\s+(?:de\s+)?inventaire|fin\s+d\s+inventaire|termine(?:r)?\s+(?:l\s+|un\s+)?inventaire)\b/.test(q)){finalizeSnapshot(data);state.active=false;state.stage=STAGES.FINISHED;state.pendingClarification=null;return result(formatSummary());}
