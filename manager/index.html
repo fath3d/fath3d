@@ -19477,6 +19477,8 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
   const TTL_MS=10*60*1000;
   const ALLOWED=Object.freeze(['stock.adjust','inventory.commit','print_task.create','print_task.update','print_schedule.create','print_schedule.update','market.create','market.update','cash.pending_ticket.prepare','pending_action.correct','pending_action.cancel']);
   const proposals=new Map();
+  const proposalBaselines=new Map();
+  const completedInventoryWrites=new Map();
   const pendingTickets=new Map();
   const oneShotAuthorizations=new Map();
   const scopedAuthorizations=new Map();
@@ -19505,13 +19507,32 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     const now=Date.now(); const params=clone(normalizedArgs||{});
     const proposal={proposalId:id('proposal'),action:actionId,actionId,parameters:params,oldValue:clone(oldValue),newValue:clone(nextValue),summary:String(summary).trim(),createdAt:now,expiresAt:now+TTL_MS,nonce:id('nonce'),state:'pending',parameterHash:hash(params),beforeHash:hash(currentData),financialBeforeHash:hash(api().captureFinancialSnapshot(currentData)),confirmationRequired:true,executionAllowed:false};
     proposals.set(proposal.proposalId,proposal);
+    if(actionId==='stock.adjust'&&params.inventorySessionId)proposalBaselines.set(proposal.proposalId,{data:clone(currentData),hash:proposal.beforeHash});
     if(actionId==='cash.pending_ticket.prepare') pendingTickets.set(proposal.proposalId,{proposalId:proposal.proposalId,items:clone(input.items||[]),note:String(input.note||'')});
     return clone(proposal);
   }
   function get(proposalId){const p=proposals.get(proposalId);if(!p)throw new Error('UNKNOWN_PROPOSAL');if(Date.now()>p.expiresAt){p.state='expired';proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);throw new Error('EXPIRED_PROPOSAL');}return p;}
-  function cancel(proposalId){const p=get(proposalId);p.state='cancelled';p.nonce=null;proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,state:'cancelled',realDataChanged:false};}
-  function correct(proposalId,normalizedArgs,currentData,summary,oldValue,nextValue){const p=get(proposalId);p.state='corrected';p.nonce=null;proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return create(p.actionId,normalizedArgs,currentData,summary,oldValue,nextValue);}
+  function cancel(proposalId){const p=get(proposalId);p.state='cancelled';p.nonce=null;proposals.delete(proposalId);proposalBaselines.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,state:'cancelled',realDataChanged:false};}
+  function correct(proposalId,normalizedArgs,currentData,summary,oldValue,nextValue){const p=get(proposalId);p.state='corrected';p.nonce=null;proposals.delete(proposalId);proposalBaselines.delete(proposalId);oneShotAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return create(p.actionId,normalizedArgs,currentData,summary,oldValue,nextValue);}
   function confirm(proposalId,confirmation,currentData){const p=get(proposalId);if(p.state!=='pending')throw new Error('PROPOSAL_NOT_PENDING');if(!confirmation||confirmation.explicit!==true||confirmation.proposalId!==p.proposalId||confirmation.actionId!==p.actionId||confirmation.nonce!==p.nonce)throw new Error('CONFIRMATION_MISMATCH');if(hash(currentData)!==p.beforeHash)throw new Error('STALE_PROPOSAL');if(hash(p.parameters)!==p.parameterHash)throw new Error('PARAMETERS_CHANGED');p.state='confirmed';oneShotAuthorizations.set(p.proposalId,{proposalId:p.proposalId,actionId:p.actionId,nonce:p.nonce,expiresAt:p.expiresAt});return clone(p);}
+  function rebasePendingInventoryStockProposal(proposalId,currentData){
+    const p=get(proposalId),baseline=proposalBaselines.get(proposalId);
+    if(p.state!=='pending'||p.actionId!=='stock.adjust'||!p.parameters||!p.parameters.inventorySessionId||!baseline)throw new Error('INVENTORY_REBASE_NOT_ALLOWED');
+    if(hash(baseline.data)!==baseline.hash)throw new Error('STALE_PROPOSAL');
+    const writes=completedInventoryWrites.get(p.parameters.inventorySessionId)||[],expected=clone(baseline.data),seen=new Set();
+    for(const write of writes){
+      if(write.actionId!=='stock.adjust'||write.location!=='maison'||seen.has(String(write.productId))||!Number.isInteger(write.expectedBefore)||!Number.isInteger(write.proposedAfter))throw new Error('STALE_PROPOSAL');
+      const matches=(expected.products||[]).filter(item=>String(item&&item.id)===String(write.productId));
+      if(matches.length!==1||Number(matches[0].stocks&&matches[0].stocks.maison)!==write.expectedBefore)throw new Error('STALE_PROPOSAL');
+      matches[0].stocks=matches[0].stocks||{};matches[0].stocks.maison=write.proposedAfter;seen.add(String(write.productId));
+    }
+    const currentHash=hash(currentData);
+    if(currentHash!==hash(expected)||(p.beforeHash!==baseline.hash&&p.beforeHash!==currentHash)||hash(api().captureFinancialSnapshot(baseline.data))!==p.financialBeforeHash||hash(api().captureFinancialSnapshot(currentData))!==p.financialBeforeHash)throw new Error('STALE_PROPOSAL');
+    const target=(currentData.products||[]).filter(item=>String(item&&item.id)===String(p.parameters.productId));
+    if(target.length!==1||p.parameters.location!=='maison'||Number(target[0].stocks&&target[0].stocks.maison)!==Number(p.oldValue)||hash(p.parameters)!==p.parameterHash)throw new Error('STALE_PROPOSAL');
+    p.beforeHash=hash(currentData);
+    return {ok:true,proposalId:p.proposalId,sessionId:p.parameters.inventorySessionId,expectedBefore:Number(p.oldValue),completedAdjustments:writes.length,expiresAt:p.expiresAt};
+  }
   function authorizeScopedStockAdjust(proposalId){const p=get(proposalId);if(p.state!=='confirmed')throw new Error('CONFIRMATION_REQUIRED');if(p.actionId!=='stock.adjust')throw new Error('SCOPED_ACTION_NOT_ALLOWED');const args=p.parameters||{};const expected=Number(p.oldValue),proposed=Number(p.newValue);if(args.location!=='maison')throw new Error('SCOPED_LOCATION_INVALID');if(!Number.isInteger(expected)||expected<0)throw new Error('EXPECTED_BEFORE_UNKNOWN');if(!Number.isInteger(proposed)||proposed<0)throw new Error('PROPOSED_AFTER_INVALID');const auth={proposalId:p.proposalId,actionId:p.actionId,nonce:p.nonce,productId:args.productId,location:'maison',expectedBefore:expected,proposedAfter:proposed,expiresAt:p.expiresAt,consumed:false};scopedAuthorizations.set(p.proposalId,auth);return clone(auth);}
   function scopedFor(proposalId,p){const auth=scopedAuthorizations.get(proposalId);if(!auth||auth.consumed)throw new Error('SCOPED_AUTHORIZATION_REQUIRED');if(Date.now()>auth.expiresAt){scopedAuthorizations.delete(proposalId);throw new Error('SCOPED_AUTHORIZATION_EXPIRED');}if(auth.proposalId!==p.proposalId||auth.actionId!=='stock.adjust'||auth.nonce!==p.nonce||String(auth.productId)!==String(p.parameters.productId)||auth.location!=='maison'||auth.expectedBefore!==Number(p.oldValue)||auth.proposedAfter!==Number(p.newValue))throw new Error('SCOPED_AUTHORIZATION_MISMATCH');auth.consumed=true;return clone(auth);}
   function candidate(proposal,currentData){
@@ -19566,23 +19587,25 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     if(securityState.writesEnabled!==true) scoped=scopedFor(proposalId,p);
     if(!securityState.dataBackupVerified)throw new Error('DATA_BACKUP_REQUIRED');
     if(!securityState.restoreTestVerified)throw new Error('RESTORE_TEST_REQUIRED');
-    if(executionLock)throw new Error('EXECUTION_IN_PROGRESS'); executionLock=true;
+    if(executionLock)throw new Error('EXECUTION_IN_PROGRESS'); executionLock=true;let adapterInvoked=false;
     try{
       const simulation=simulate(proposalId,currentData);
       if(p.actionId!=='stock.adjust')throw new Error('NO_SCOPED_COMMIT_ADAPTER');
       if(typeof root.jarvisScopedStockAdjustCommit!=='function')throw new Error('NO_SCOPED_COMMIT_ADAPTER');
+      adapterInvoked=true;
       const commit=await root.jarvisScopedStockAdjustCommit({actionId:p.actionId,proposal:clone(p),currentData, candidateData:simulation.candidate,scopedAuthorization:scoped,dryRun:false});
       if(commit && commit.firebaseWritePerformed===true && commit.neutralized!==true && currentData && typeof currentData==='object'){
         Object.keys(currentData).forEach(key=>{delete currentData[key];});
         Object.assign(currentData,clone(simulation.candidate));
       }
-      p.state='consumed';proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);scopedAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);
+      if(commit && commit.firebaseWritePerformed===true && commit.neutralized!==true && p.actionId==='stock.adjust' && p.parameters.inventorySessionId){const key=p.parameters.inventorySessionId,list=completedInventoryWrites.get(key)||[];list.push({proposalId:p.proposalId,actionId:p.actionId,productId:p.parameters.productId,location:p.parameters.location,expectedBefore:Number(p.oldValue),proposedAfter:Number(p.newValue)});completedInventoryWrites.set(key,list);}
+      p.state='consumed';proposals.delete(proposalId);proposalBaselines.delete(proposalId);oneShotAuthorizations.delete(proposalId);scopedAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);
       return {ok:true,proposalId,actionId:p.actionId,state:'consumed',simulation,commit,realDataChanged:false};
-    }catch(error){oneShotAuthorizations.delete(proposalId);throw error;}finally{executionLock=false;}
+    }catch(error){oneShotAuthorizations.delete(proposalId);try{error.writeOutcome=!adapterInvoked||error.firebaseWritePerformed===false||error.writeOutcome==='not_written'?'not_written':'uncertain';}catch(_){}throw error;}finally{executionLock=false;}
   }
   function execute(proposalId,currentData){const p=get(proposalId);if(p.state!=='confirmed')throw new Error('CONFIRMATION_REQUIRED');const authorization=oneShotAuthorizations.get(proposalId);if(!authorization||authorization.proposalId!==p.proposalId||authorization.actionId!==p.actionId||authorization.nonce!==p.nonce)throw new Error('ONE_SHOT_AUTHORIZATION_REQUIRED');if(Date.now()>authorization.expiresAt){oneShotAuthorizations.delete(proposalId);throw new Error('EXPIRED_AUTHORIZATION');}const securityState=api().getState();if(securityState.writesEnabled!==true)scopedFor(proposalId,p);if(executionLock)throw new Error('EXECUTION_IN_PROGRESS');executionLock=true;try{const simulation=simulate(proposalId,currentData);const commit=scopedCommitAdapter(p.actionId,p,currentData,simulation.candidate);p.state='consumed';proposals.delete(proposalId);oneShotAuthorizations.delete(proposalId);scopedAuthorizations.delete(proposalId);pendingTickets.delete(proposalId);return {ok:true,proposalId,actionId:p.actionId,state:'consumed',simulation,commit,realDataChanged:false};}catch(error){oneShotAuthorizations.delete(proposalId);throw error;}finally{executionLock=false;}}
-  function reset(){proposals.clear();pendingTickets.clear();oneShotAuthorizations.clear();scopedAuthorizations.clear();executionLock=false;}
-  const API=Object.freeze({version:VERSION,ttlMs:TTL_MS,allowedActions:ALLOWED,createProposal:create,getProposal:id=>clone(get(id)),correctProposal:correct,cancelProposal:cancel,confirmProposal:confirm,authorizeScopedStockAdjust,simulateCandidate:simulate,executeConfirmed:execute,executeConfirmedAsync,reset,getState:()=>({version:VERSION,writesEnabled:false,temporary:true,proposalCount:proposals.size,pendingTicketCount:pendingTickets.size,oneShotAuthorizationCount:scopedAuthorizations.size})});
+  function reset(){proposals.clear();proposalBaselines.clear();completedInventoryWrites.clear();pendingTickets.clear();oneShotAuthorizations.clear();scopedAuthorizations.clear();executionLock=false;}
+  const API=Object.freeze({version:VERSION,ttlMs:TTL_MS,allowedActions:ALLOWED,createProposal:create,getProposal:id=>clone(get(id)),correctProposal:correct,cancelProposal:cancel,confirmProposal:confirm,rebasePendingInventoryStockProposal,authorizeScopedStockAdjust,simulateCandidate:simulate,executeConfirmed:execute,executeConfirmedAsync,reset,getState:()=>({version:VERSION,writesEnabled:false,temporary:true,proposalCount:proposals.size,pendingTicketCount:pendingTickets.size,oneShotAuthorizationCount:scopedAuthorizations.size})});
   Object.defineProperty(root,'JarvisWriteBroker6',{value:API,enumerable:false,configurable:false,writable:false});
 })(typeof window!=='undefined'?window:globalThis);
 </script>
@@ -21367,7 +21390,10 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const lines=state.entries.map((e,i)=>{const cancelled=e.status==='cancelled',validated=e.status==='manually_validated';return `<div style="padding:5px 0;border-top:1px solid #374151;display:flex;align-items:center;gap:5px;${cancelled?'opacity:.55;text-decoration:line-through;':''}"><b style="flex:1">${i+1} — ${e.quantity} ${escapeHtml(e.name)}</b> <span>${cancelled?'✕ annulé':validated?'✓ validé':e.status==='corrected'?'✎ corrigé':'✓ brouillon'}</span>${!cancelled?`<button type="button" data-inventory-action="validate" data-inventory-index="${i}" style="background:#15803d;color:#fff;border:0;border-radius:4px;padding:2px 5px;font-size:11px">Valider</button><button type="button" data-inventory-action="cancel" data-inventory-index="${i}" style="background:#b91c1c;color:#fff;border:0;border-radius:4px;padding:2px 5px;font-size:11px">Annuler</button>`:''}</div>`;}).join('');
     const pending=state.pendingClarification?`<div style="margin-top:8px;color:#fde68a">⚠ clarification : ${state.pendingClarification.candidates.map((p,i)=>`${i+1} — ${escapeHtml(productLabel(p))} — n°${escapeHtml(idOf(p))}`).join(' · ')}</div>`:'';
     const comparison=state.comparison;
-    const comparisonHtml=comparison?`<div data-inventory-comparison style="margin-top:10px;padding-top:8px;border-top:1px solid #facc15"><strong>Comparatif lecture seule — Maison</strong>${comparison.rows.map(row=>`<div style="margin-top:7px;padding:6px;border:1px solid #374151;border-radius:6px"><b>${escapeHtml(row.name)}</b><br><span>Manager : ${row.stockKnown?escapeHtml(row.stock):'inconnu'} · Compté : ${escapeHtml(row.counted)} · Écart : ${row.stockKnown?escapeHtml(row.delta>0?'+'+row.delta:String(row.delta)):'—'}</span></div>`).join('')}${comparison.rows.length&&comparison.rows.every(row=>row.stockKnown&&row.delta===0)?'<div style="margin-top:8px;color:#86efac">Inventaire terminé — aucun écart détecté.</div>':''}${state.finalProposal?`<div data-inventory-final-proposal style="margin-top:10px;padding-top:8px;border-top:1px solid #facc15"><strong>Mise à jour proposée</strong>${state.finalProposal.proposals.map(item=>`<div style="margin-top:6px"><b>${escapeHtml(item.name)}</b><br>Actuel : ${escapeHtml(item.expectedBefore)} · Nouveau : ${escapeHtml(item.proposedAfter)} · Écart : ${escapeHtml(item.delta>0?'+'+item.delta:String(item.delta))}</div>`).join('')}${state.finalProposal.blockedRows.length?`<div style="margin-top:6px;color:#fca5a5">${state.finalProposal.blockedRows.length} ligne(s) bloquée(s) — stock inconnu ou invalide.</div>`:''}${state.finalProposal.status==='pending'?'<div style="margin-top:8px"><button type="button" data-inventory-final-action="validate" style="background:#15803d;color:#fff;border:0;border-radius:4px;padding:4px 7px;font-size:11px">Valider les modifications</button><button type="button" data-inventory-final-action="cancel" style="background:#b91c1c;color:#fff;border:0;border-radius:4px;padding:4px 7px;font-size:11px">Annuler</button></div>':state.finalProposal.status==='executed'?'':`<div style="margin-top:8px;color:#cbd5e1">${state.finalProposal.status==='cancelled'?'Mise à jour annulée. Aucune écriture effectuée.':'Proposition déjà traitée.'}</div>`}</div>`:''}</div>`:'';
+    const finalStatus=state.finalProposal&&state.finalProposal.status;
+    const finalResults=state.finalValidation&&state.finalValidation.results||[];
+    const partialOutcomeHtml=['partial_or_failed','blocked_uncertain'].includes(finalStatus)?`<div data-inventory-final-outcome style="margin-top:8px;color:#cbd5e1"><strong>${finalStatus==='blocked_uncertain'?'Validation bloquée — résultat incertain':'Validation partielle'}</strong>${[['succeeded','Produits modifiés avec succès'],['refused','Produits refusés'],['not_executed','Produits non exécutés'],['uncertain','Produits au résultat incertain']].map(([status,label])=>{const rows=finalResults.filter(row=>row.status===status);return `<div data-inventory-outcome="${status}">${label} : ${rows.length}${rows.length?' — '+rows.map(row=>escapeHtml(row.name)+(row.code||row.message?' ('+escapeHtml(row.message||row.code)+')':'')).join(' ; '):''}</div>`;}).join('')}</div>`:'';
+    const comparisonHtml=comparison?`<div data-inventory-comparison style="margin-top:10px;padding-top:8px;border-top:1px solid #facc15"><strong>Comparatif lecture seule — Maison</strong>${comparison.rows.map(row=>`<div style="margin-top:7px;padding:6px;border:1px solid #374151;border-radius:6px"><b>${escapeHtml(row.name)}</b><br><span>Manager : ${row.stockKnown?escapeHtml(row.stock):'inconnu'} · Compté : ${escapeHtml(row.counted)} · Écart : ${row.stockKnown?escapeHtml(row.delta>0?'+'+row.delta:String(row.delta)):'—'}</span></div>`).join('')}${comparison.rows.length&&comparison.rows.every(row=>row.stockKnown&&row.delta===0)?'<div style="margin-top:8px;color:#86efac">Inventaire terminé — aucun écart détecté.</div>':''}${state.finalProposal?`<div data-inventory-final-proposal style="margin-top:10px;padding-top:8px;border-top:1px solid #facc15"><strong>Mise à jour proposée</strong>${state.finalProposal.proposals.map(item=>`<div style="margin-top:6px"><b>${escapeHtml(item.name)}</b><br>Actuel : ${escapeHtml(item.expectedBefore)} · Nouveau : ${escapeHtml(item.proposedAfter)} · Écart : ${escapeHtml(item.delta>0?'+'+item.delta:String(item.delta))}</div>`).join('')}${state.finalProposal.blockedRows.length?`<div style="margin-top:6px;color:#fca5a5">${state.finalProposal.blockedRows.length} ligne(s) bloquée(s) — stock inconnu ou invalide.</div>`:''}${state.finalProposal.status==='pending'?'<div style="margin-top:8px"><button type="button" data-inventory-final-action="validate" style="background:#15803d;color:#fff;border:0;border-radius:4px;padding:4px 7px;font-size:11px">Valider les modifications</button><button type="button" data-inventory-final-action="cancel" style="background:#b91c1c;color:#fff;border:0;border-radius:4px;padding:4px 7px;font-size:11px">Annuler</button></div>':state.finalProposal.status==='executed'?'':partialOutcomeHtml?partialOutcomeHtml:state.finalProposal.status==='expired'?'':`<div style="margin-top:8px;color:#cbd5e1">${state.finalProposal.status==='cancelled'?'Mise à jour annulée. Aucune écriture effectuée.':'Proposition déjà traitée.'}</div>`}</div>`:''}</div>`:'';
     const batchesHtml=state.batches.filter(batch=>batch.status==='validated').map((batch,index)=>`<details data-inventory-batch="${escapeHtml(batch.batchId)}"><summary>Série ${index+1} — ${batch.entries.filter(e=>e.status!=='cancelled').length} lignes · validée</summary><div style="padding:4px 0;color:#cbd5e1">${batch.entries.filter(e=>e.status!=='cancelled').map(e=>`${escapeHtml(e.quantity)} — ${escapeHtml(e.name)}`).join(' ; ')||'Aucune ligne active.'}</div></details>`).join('');
     const seriesAction=state.active&&state.stage===STAGES.COUNTING?'<button type="button" data-inventory-series-action="validate" style="margin-top:8px;background:#2563eb;color:#fff;border:0;border-radius:4px;padding:4px 7px;font-size:11px">Valider la série</button>':'';
     panel.innerHTML=`<strong>Inventaire Jarvis — ${escapeHtml(state.stage)}</strong><div>Lieu : ${escapeHtml(state.location||'—')} · Catégorie : ${escapeHtml(state.category||'—')}</div><div style="margin-top:4px">${allEntries().filter(e=>e.status!=='cancelled').length} référence(s) comptée(s)</div>${batchesHtml}${lines||'<div style="margin-top:8px;color:#cbd5e1">Aucune ligne dans la série en cours.</div>'}${seriesAction}${pending}${comparisonHtml}${state.lastMessage?`<div data-inventory-feedback style="margin-top:8px;color:#cbd5e1">${escapeHtml(state.lastMessage)}</div>`:''}`;
@@ -21454,17 +21480,72 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const opts=options||{}; const final=state.finalProposal||prepareFinalProposals(data); if(!opts.explicit)throw new Error('FINAL_CONFIRMATION_REQUIRED');
     if(final.status!=='pending')throw new Error('FINAL_PROPOSAL_NOT_PENDING');
     if(opts.dryRun!==false){state.finalValidation={explicit:true,status:'validated_dry_run',writes:0};final.status='validated_dry_run';state.finalValidationInFlight=false;state.lastMessage='Validation reçue. Écriture réelle désactivée dans ce diagnostic.';showPanel();return {ok:true,status:final.status,results:[],writes:0};}
-    const broker=root.JarvisWriteBroker6;if(!broker)throw new Error('WRITE_BROKER_UNAVAILABLE');const results=[];
-    const prewriteErrors=new Set(['DATA_BACKUP_REQUIRED','RESTORE_TEST_REQUIRED','FIREBASE_NOT_READY','JARVIS_WRITES_DISABLED','NO_SCOPED_COMMIT_ADAPTER','SCOPED_TARGET_INVALID','SCOPED_LOCATION_INVALID','EXPECTED_BEFORE_UNKNOWN','PROPOSED_AFTER_INVALID','BACKUP_INVALID','RESTORE_MISMATCH','BACKUP_REQUIRED_PRODUCT_MISSING','SECURITY_KERNEL_MISSING']);
-    for(const item of final.proposals){try{const security=root.JarvisSecurity;if(!security||typeof security.verifyRuntimeBackupRestore!=='function')throw new Error('SECURITY_KERNEL_MISSING');security.verifyRuntimeBackupRestore(data);const p=broker.getProposal(item.proposalId);broker.confirmProposal(item.proposalId,{explicit:true,proposalId:p.proposalId,actionId:p.actionId,nonce:p.nonce},data);broker.authorizeScopedStockAdjust(item.proposalId);const result=await broker.executeConfirmedAsync(item.proposalId,data);results.push({productId:item.productId,name:item.name,status:'ok',result});}catch(error){const code=error&&error.message||'ERROR';if(prewriteErrors.has(code)){try{broker.cancelProposal(item.proposalId);}catch(_){ } state.finalProposal=null;const replacement=prepareFinalProposals(data);replacement.retryReason=code;state.finalValidationInFlight=false;state.finalValidation={explicit:true,status:'retry_pending',error:code,writes:0};state.lastMessage=`Validation impossible avant écriture : ${code}. Une nouvelle confirmation explicite est requise.`;showPanel();return {ok:false,status:'retry_pending',error:code,results,writes:0};}results.push({productId:item.productId,name:item.name,status:'uncertain',error:code});final.status='blocked_uncertain';final.error=code;state.finalValidationInFlight=false;state.finalValidation={explicit:true,status:'blocked_uncertain',error:code,results};state.lastMessage=`Validation bloquée : ${code}. Vérifie le stock avant toute nouvelle tentative.`;showPanel();return {ok:false,status:'blocked_uncertain',error:code,results,writes:0};}}
-    final.status=results.every(item=>item.status==='ok')?'executed':'partial_or_failed';state.finalValidationInFlight=false;state.finalValidation={explicit:true,status:final.status,results};state.lastMessage=final.status==='executed'?'Modifications validées.':'Validation impossible.';showPanel();return {ok:final.status==='executed',status:final.status,results,writes:results.filter(item=>item.status==='ok').length};
+    const broker=root.JarvisWriteBroker6;if(!broker)throw new Error('WRITE_BROKER_UNAVAILABLE');
+    const baseline=JSON.parse(JSON.stringify(data)),results=[],successful=[];
+    const prewriteErrors=new Set(['DATA_BACKUP_REQUIRED','RESTORE_TEST_REQUIRED','FIREBASE_NOT_READY','JARVIS_WRITES_DISABLED','NO_SCOPED_COMMIT_ADAPTER','SCOPED_TARGET_INVALID','SCOPED_LOCATION_INVALID','EXPECTED_BEFORE_UNKNOWN','PROPOSED_AFTER_INVALID','BACKUP_INVALID','RESTORE_MISMATCH','BACKUP_REQUIRED_PRODUCT_MISSING','SECURITY_KERNEL_MISSING','FINAL_CONFIRMATION_REQUIRED','FINAL_PROPOSAL_NOT_PENDING','CONFIRMATION_MISMATCH','STALE_PROPOSAL','PARAMETERS_CHANGED','CONFIRMATION_REQUIRED','SCOPED_ACTION_NOT_ALLOWED','SCOPED_LOCATION_INVALID','SCOPED_AUTHORIZATION_REQUIRED','SCOPED_AUTHORIZATION_EXPIRED','SCOPED_AUTHORIZATION_MISMATCH','ONE_SHOT_AUTHORIZATION_REQUIRED','EXPIRED_AUTHORIZATION','EXPIRED_PROPOSAL','STALE_REMOTE_STOCK','INVALID_STOCK_TARGET','PRODUCT_NOT_FOUND','PRODUCT_AMBIGUOUS']);
+    const errorCode=error=>String(error&&(error.code||error.message)||'ERROR');
+    const errorMessage=error=>String(error&&error.message||errorCode(error));
+    const finalizeFailure=(item,index,error,uncertain)=>{
+      const code=errorCode(error),message=errorMessage(error),status=uncertain?'uncertain':'refused';
+      results.push({productId:item.productId,name:item.name,status,code,message});
+      if(!uncertain)try{broker.cancelProposal(item.proposalId);}catch(_){}
+      for(let next=index+1;next<final.proposals.length;next++){const skipped=final.proposals[next];try{broker.cancelProposal(skipped.proposalId);}catch(_){}results.push({productId:skipped.productId,name:skipped.name,status:'not_executed',reason:'STOPPED_AFTER_PREVIOUS_FAILURE'});}
+      const writes=successful.length;final.results=results;final.status=uncertain?'blocked_uncertain':(writes?'partial_or_failed':'retry_pending');final.error=code;
+      const successesText=successful.map(row=>row.name).join(', ')||'aucun';
+      const remainingText=results.filter(row=>row.status==='not_executed').map(row=>row.name).join(', ')||'aucun';
+      if(uncertain||writes){
+        state.finalValidationInFlight=false;state.finalValidation={explicit:true,status:final.status,code,message,results,writes};
+        state.lastMessage=uncertain?`Résultat incertain pour ${item.name} : ${message}. Succès confirmés : ${successesText}. Non exécutés : ${remainingText}. Vérifie le stock avant toute nouvelle tentative.`:`Validation partielle. Modifiés : ${successesText}. Refusé : ${item.name} (${message}). Non exécutés : ${remainingText}. Relance un inventaire après vérification.`;
+        showPanel();return {ok:false,status:final.status,code,error:message,results,writes};
+      }
+      if(code==='EXPIRED_PROPOSAL'){
+        final.status='expired';state.finalValidationInFlight=false;
+        state.finalValidation={explicit:true,status:'expired',code,message,results,writes:0};
+        state.lastMessage='Proposition expirée. Aucune modification effectuée.';
+        showPanel();return {ok:false,status:'expired',code,error:message,results,writes:0};
+      }
+      try{broker.cancelProposal(item.proposalId);}catch(_){}
+      for(let prior=0;prior<index;prior++)try{broker.cancelProposal(final.proposals[prior].proposalId);}catch(_){}
+      state.finalProposal=null;state.comparison=buildComparison(data);const replacement=prepareFinalProposals(data);replacement.retryReason=code;replacement.retryMessage=message;replacement.retryRequiresExplicitConfirmation=true;
+      state.finalValidationInFlight=false;state.finalValidation={explicit:true,status:'retry_pending',code,message,results,writes:0};
+      state.lastMessage=`Validation bloquée avant écriture : ${item.name} (${message}). Non exécutés : ${remainingText}. Une nouvelle confirmation explicite est requise.`;showPanel();return {ok:false,status:'retry_pending',code,error:message,results,writes:0};
+    };
+    for(let index=0;index<final.proposals.length;index++){
+      const item=final.proposals[index];
+      try{
+        const security=root.JarvisSecurity;if(!security||typeof security.verifyRuntimeBackupRestore!=='function')throw new Error('SECURITY_KERNEL_MISSING');
+        security.verifyRuntimeBackupRestore(data);
+        if(successful.length&&typeof broker.rebasePendingInventoryStockProposal==='function')broker.rebasePendingInventoryStockProposal(item.proposalId,data);
+        const p=broker.getProposal(item.proposalId);
+        broker.confirmProposal(item.proposalId,{explicit:true,proposalId:p.proposalId,actionId:p.actionId,nonce:p.nonce},data);
+        broker.authorizeScopedStockAdjust(item.proposalId);
+        const result=await broker.executeConfirmedAsync(item.proposalId,data);
+        const completed={productId:item.productId,name:item.name,status:'succeeded',result};results.push(completed);successful.push(completed);
+      }catch(error){
+        const code=errorCode(error),certainBeforeWrite=prewriteErrors.has(code)||error&&error.writeOutcome==='not_written';
+        return finalizeFailure(item,index,error,!certainBeforeWrite);
+      }
+    }
+    final.results=results;final.status='executed';state.finalValidationInFlight=false;state.finalValidation={explicit:true,status:final.status,results,writes:successful.length};state.lastMessage='Modifications validées.';showPanel();return {ok:true,status:final.status,results,writes:successful.length};
   }
-  function manualFinalAction(action){if(action==='cancel')return cancelFinal();if(action==='validate'){if(state.finalValidationInFlight)return Promise.resolve({ok:false,status:'in_flight',writes:0});state.finalValidationInFlight=true;state.lastMessage='Validation en cours…';showPanel();return validateFinal((typeof db!=='undefined'&&db)?db:(root.db||{}),{explicit:true,dryRun:false});}return null;}
+  function manualFinalAction(action){if(action==='cancel')return cancelFinal();if(action==='validate'){if(state.finalProposal&&state.finalProposal.status==='expired'){state.lastMessage='Proposition expirée. Aucune modification effectuée.';showPanel();return Promise.resolve({ok:false,status:'expired',writes:0});}if(state.finalValidationInFlight)return Promise.resolve({ok:false,status:'in_flight',writes:0});state.finalValidationInFlight=true;state.lastMessage='Validation en cours…';showPanel();return validateFinal((typeof db!=='undefined'&&db)?db:(root.db||{}),{explicit:true,dryRun:false});}return null;}
   function formatSummary(){const activeEntries=allEntries().filter(e=>e.status!=='cancelled');if(!activeEntries.length)return 'Inventaire terminé. Le brouillon est vide. Aucune écriture n’a été effectuée.';const comparison=state.comparison;const suffix=comparison&&comparison.rows.length?` Comparatif lecture seule disponible : ${comparison.rows.length} produit(s) comparé(s).`:'';return 'Inventaire terminé. Brouillon Maison / '+state.category+' : '+activeEntries.map(e=>`${e.quantity} ${e.name}`).join(' ; ')+'.'+suffix+' Aucune écriture n’a été effectuée.';}
-  function clarification(candidates,quantity,raw){state.pendingClarification={candidates,quantity,raw};state.stage=STAGES.WAITING_CLARIFICATION;return result('J’ai trouvé : '+candidates.map((p,i)=>`${i+1} — ${productLabel(p)} — n°${idOf(p)}`).join(' ; ')+'. Dis « le premier », « le deuxième » ou le numéro affiché.');}
+  function clarification(candidates,quantity,raw,remainingSegments,unknownSegments){
+    state.pendingClarification={candidates,quantity,raw};
+    if(remainingSegments)Object.assign(state.pendingClarification,{remainingSegments:remainingSegments.slice(),unknownSegments:(unknownSegments||[]).slice()});
+    state.stage=STAGES.WAITING_CLARIFICATION;
+    return result('J’ai trouvé : '+candidates.map((p,i)=>`${i+1} — ${productLabel(p)} — n°${idOf(p)}`).join(' ; ')+'. Dis « le premier », « le deuxième » ou le numéro affiché.');
+  }
   function choosePending(value,data){const pending=state.pendingClarification;if(!pending)return null;const q=norm(value);let chosen=null;const ordinal=q.match(/^(?:le|la|numero|num)?\s*(premier|premiere|1er|deuxieme|second|seconde|2e|deux|1|2)$/);if(ordinal){const word=ordinal[1];const idx=/prem|1er|^1$/.test(word)?0:1;chosen=pending.candidates[idx]||null;}else{const n=parseNumberText(q);if(n!==null){chosen=pending.candidates.find(p=>String(idOf(p))===String(n))||pending.candidates[n-1]||null;}}
     if(!chosen)return result('Je n’ai pas trouvé ce numéro dans la clarification. Choisis un candidat affiché.');
-    state.entries.push({productId:idOf(chosen),name:productLabel(chosen),category:state.category,quantity:pending.quantity||1,rawTranscript:pending.raw,normalizedText:norm(pending.raw),status:'resolved'});state.pendingClarification=null;state.stage=STAGES.COUNTING;return result(`${pending.quantity||1} — ${productLabel(chosen)} ✓`);
+    addResolvedEntry(chosen,pending.quantity||1,pending.raw);state.pendingClarification=null;state.stage=STAGES.COUNTING;
+    const selected=`${pending.quantity||1} — ${productLabel(chosen)} ✓`;
+    if(pending.remainingSegments&&pending.remainingSegments.length){
+      const resumed=processBurst(null,data,pending.remainingSegments,pending.unknownSegments);
+      return result(selected+' '+resumed.result.answer);
+    }
+    const unknown=pending.unknownSegments||[];
+    return result(selected+(unknown.length?` Segment(s) non reconnu(s) : ${unknown.join(' ; ')}.`:''));
   }
   function correction(value,data){const q=norm(value);if(!state.entries.length)return result('Il n’y a aucune ligne à corriger.');const last=state.entries[state.entries.length-1];const qm=q.match(/\b(?:quantite|qte)\s*(\d+)\b/);if(qm){last.quantity=Number(qm[1]);last.status='corrected';return result(`Dernière ligne corrigée : ${last.quantity} — ${last.name} ✎`);}const spec=q.replace(/^.*?\b(?:dernier|derniere)\b/,'').replace(/^\s*[:,-]?\s*/,'').trim();if(spec){const found=productCandidates(spec.replace(/^corrige\s+/,''),data);if(found.candidates.length===1){last.productId=idOf(found.candidates[0]);last.name=productLabel(found.candidates[0]);last.quantity=found.quantity;last.status='corrected';return result(`Dernière ligne corrigée : ${last.quantity} — ${last.name} ✎`);}}return result('Précise la correction de la dernière ligne, par exemple « quantité 3 ».');}
   function addResolvedEntry(product,quantity,raw){
@@ -21479,20 +21560,36 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(explicit.length>1)return explicit;
     const scoped=currentProducts(data).filter(p=>p&&norm(p.categorie)===norm(state.category));
     const names=scoped.map(p=>norm(p.name||p.nom||p.label||'')).filter(Boolean).sort((a,b)=>b.length-a.length);
-    const hits=[];for(const name of names){let from=0;while(true){const at=q.indexOf(name,from);if(at<0)break;const duplicate=hits.some(hit=>hit.start===at);if(!duplicate)hits.push({start:at,name});from=at+Math.max(1,name.length);}}
+    const hits=[];for(const name of names){let from=0;while(true){const at=q.indexOf(name,from);if(at<0)break;const end=at+name.length;const boundary=(at===0||q[at-1]===' ')&&(end===q.length||q[end]===' ');const overlap=hits.some(hit=>at<hit.end&&end>hit.start);if(boundary&&!overlap)hits.push({start:at,end,name});from=end;}}
     hits.sort((a,b)=>a.start-b.start);if(hits.length<2)return [];
-    return hits.map((hit,index)=>{let start=hit.start;const prefix=q.slice(Math.max(0,start-8),start);const m=prefix.match(/(?:^|\s)(\d+|un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix)\s*$/);if(m)start=hit.start-m[0].trim().length;return q.slice(start,index+1<hits.length?hits[index+1].start:q.length).replace(/\s+/g,' ').trim();});
+    const gaps=[q.slice(0,hits[0].start).trim(),...hits.slice(1).map((hit,index)=>q.slice(hits[index].end,hit.start).trim()),q.slice(hits[hits.length-1].end).trim()];
+    const quantities=gaps.map(gap=>gap?parseNumberText(gap.replace(/^(?:quantite|qte|x)\s*/,'').trim()):null);
+    const uncertain=()=>{
+      const segments=[];
+      segments.clarificationMessage='Je ne peux pas associer ces quantités avec certitude. Sépare les produits avec « puis », par exemple « ANGE 2 puis PIKACHU 3 ». Aucun produit de cette rafale n’a été ajouté.';
+      return segments;
+    };
+    if(gaps.some((gap,index)=>gap&&(quantities[index]===null||quantities[index]<1||quantities[index]>999)))return uncertain();
+    const hasPrefix=quantities[0]!==null,hasSuffix=quantities[quantities.length-1]!==null;
+    const hasBetween=quantities.slice(1,-1).some(quantity=>quantity!==null);
+    if(hasBetween&&hasPrefix===hasSuffix)return uncertain();
+    const prefixMode=hasPrefix&&!hasSuffix;
+    return hits.map((hit,index)=>{
+      const start=index===0&&hasPrefix?0:(index>0&&prefixMode?hits[index-1].end:hit.start);
+      const end=index===hits.length-1&&hasSuffix?q.length:(index<hits.length-1&&!prefixMode?hits[index+1].start:hit.end);
+      return q.slice(start,end).trim();
+    });
   }
-  function processBurst(value,data){
-    const segments=splitBurstSegments(value,data);if(segments.length<2)return null;
-    const added=[],unknown=[];
-    for(const segment of segments){
-      const found=productCandidates(segment,data);
+  function processBurst(value,data,remainingSegments,previousUnknown){
+    const segments=remainingSegments||splitBurstSegments(value,data);if(segments.clarificationMessage)return result(segments.clarificationMessage);if(!remainingSegments&&segments.length<2)return null;
+    const added=[],unknown=(previousUnknown||[]).slice();
+    for(let index=0;index<segments.length;index++){
+      const segment=segments[index],found=productCandidates(segment,data);
       if(found.candidates.length===1){const entry=addResolvedEntry(found.candidates[0],found.quantity,segment);added.push(`${entry.quantity} — ${entry.name}`);continue;}
-      if(found.candidates.length>1)return clarification(found.candidates,found.quantity,segment);
+      if(found.candidates.length>1)return clarification(found.candidates,found.quantity,segment,segments.slice(index+1),unknown);
       unknown.push(segment);
     }
-    if(!added.length)return result('Je ne trouve aucun produit certain dans cette dictée.');
+    if(!added.length)return result('Je ne trouve aucun produit certain dans cette dictée.'+(unknown.length?` Segment(s) non reconnu(s) : ${unknown.join(' ; ')}.`:''));
     const suffix=unknown.length?` Segment(s) non reconnu(s) : ${unknown.join(' ; ')}.`:'';
     return result(`Ajouté(s) au brouillon : ${added.join(' ; ')}.${suffix}`);
   }
@@ -21505,6 +21602,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const finalValidate=/^(?:jarvis\s+)?(?:valide|valider|confirme|confirmer)\s+(?:les\s+)?(?:modifications|modification|changements|changement|proposition|inventaire)\b/.test(q)
       || /^(?:jarvis\s+)?oui\s+(?:valide|confirme)\b/.test(q);
     if(state.stage===STAGES.FINISHED&&state.finalProposal&&state.finalProposal.status==='cancelled'&&(finalCancel||finalValidate))return result('Cette mise à jour a déjà été annulée. Relance l’inventaire pour créer une nouvelle proposition.');
+    if(state.stage===STAGES.FINISHED&&state.finalProposal&&state.finalProposal.status==='expired'&&(finalCancel||finalValidate))return result('Proposition expirée. Aucune modification effectuée. Relance l’inventaire pour créer une nouvelle proposition.');
     if(state.stage===STAGES.FINISHED&&state.finalProposal&&state.finalProposal.status==='pending'){
       if(finalCancel){cancelFinal();return result('Mise à jour annulée. Aucune écriture effectuée.');}
       if(finalValidate){manualFinalAction('validate');return result('Validation en cours…');}
