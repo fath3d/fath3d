@@ -52,8 +52,9 @@ if ('serviceWorker' in navigator) {
 
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-  import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, doc, collection, setDoc, getDoc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+  import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, doc, collection, getDoc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
   import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+  import { createManagerVersionedPersistence, createMarketToHomeTransferService } from './manager-versioned-persistence.mjs';
 
   const firebaseConfig = {
     apiKey: "AIzaSyAlp4oODPnNTa67uT8Pgdk-Womp7sTUuUw",
@@ -107,31 +108,46 @@ if ('serviceWorker' in navigator) {
   
   let DOC_REF = null;
   let isSyncingFromCloud = false;
-  let lastSaveHash = '';
+  let managerPersistence = null;
+  let managerMarketToHomeTransfer = null;
+  // Phase 1 is an emulator prototype only; deliberately not enabled for a live project.
+  const MANAGER_VERSIONED_WRITES_ENABLED = false;
+  const MANAGER_RECOVERY_KEY = 'fath3d_manager_pending_remote_saves';
+  const managerRecoveryStore = {
+    read() { try { const value=JSON.parse(localStorage.getItem(MANAGER_RECOVERY_KEY)||'[]'); return Array.isArray(value)?value:[]; } catch { return []; } },
+    write(value) { localStorage.setItem(MANAGER_RECOVERY_KEY,JSON.stringify(value)); }
+  };
+  function bindManagerPersistence(ref) {
+    DOC_REF = ref;
+    managerPersistence = createManagerVersionedPersistence({db:db_firebase,docRef:ref,sdk:{getDocFromServer,runTransaction},recoveryStore:managerRecoveryStore});
+    managerMarketToHomeTransfer = createMarketToHomeTransferService({
+      persistence:managerPersistence,
+      isWriteEnabled:()=>MANAGER_VERSIONED_WRITES_ENABLED
+    });
+    window.prepareMarketToHomeTransfer = () => managerMarketToHomeTransfer.preview();
+    window.prepareIndividualStockTransfer = args => managerMarketToHomeTransfer.previewTransfer(args);
+    window.preparePhysicalStockCount = args => managerMarketToHomeTransfer.previewCounts(args);
+    window.prepareSinglePhysicalStockCount = args => managerMarketToHomeTransfer.previewCount(args);
+    window.commitMarketToHomeTransfer = (proposalId, options) => managerMarketToHomeTransfer.confirm(proposalId, options);
+    window.commitVersionedStockOperation = (proposalId, options) => managerMarketToHomeTransfer.confirm(proposalId, options);
+    window.abortMarketToHomeTransfer = (proposalId, options) => managerMarketToHomeTransfer.cancel(proposalId, options);
+    window.abortVersionedStockOperation = (proposalId, options) => managerMarketToHomeTransfer.cancel(proposalId, options);
+    window.managerVersionedWritesEnabled = () => MANAGER_VERSIONED_WRITES_ENABLED;
+    window.managerPersistenceState = () => managerPersistence ? managerPersistence.getState() : {loaded:false,exists:false,revision:null,revisionInitialized:false,recoveryCount:0};
+  }
 
-  // Save to Firebase
+  // Save to Firebase only after loading and matching the current document revision.
   window.saveToFirebase = async function(data) {
-    if(!DOC_REF) return;
-    try {
-      const payload = JSON.stringify(data);
-      if(payload === lastSaveHash) return;
-      lastSaveHash = payload;
-      await setDoc(DOC_REF, { payload: payload, updated: new Date().toISOString() });
-    } catch(e) {
-      console.warn('Firebase save error:', e);
-    }
+    if(!MANAGER_VERSIONED_WRITES_ENABLED) throw new Error('MANAGER_VERSIONED_WRITES_DISABLED');
+    if(!managerPersistence) throw new Error('MANAGER_REVISION_NOT_LOADED');
+    return managerPersistence.save(data,{reason:'manager.saveData'});
   };
 
   // Load from Firebase
   window.loadFromFirebase = async function() {
-    if(!DOC_REF) return null;
-    try {
-      const snap = await getDoc(DOC_REF);
-      if(snap.exists()) return JSON.parse(snap.data().payload);
-    } catch(e) {
-      console.warn('Firebase load error:', e);
-    }
-    return null;
+    if(!managerPersistence) return null;
+    const loadedManager = await managerPersistence.load();
+    return loadedManager.exists ? loadedManager.data : null;
   };
 
   // Pont strict pour l'exécution future de stock.adjust. Le mode neutralisé
@@ -178,15 +194,16 @@ if ('serviceWorker' in navigator) {
       const checked = readPayload(await getDoc(DOC_REF));
       return {ok:true,neutralized:true,actionId:'stock.adjust',proposalId:proposal.proposalId||null,productId,location,beforeValue:checked.actualBefore,afterValue:requestedAfter,firebaseWritePerformed:false};
     }
-    const result = await runTransaction(db_firebase, async transaction => {
-      const checked = readPayload(await transaction.get(DOC_REF));
-      const next = JSON.parse(JSON.stringify(checked.value));
-      const target = next.products.find(p => String(p && p.id) === String(productId));
-      target.stocks = target.stocks || {};
-      target.stocks[location] = requestedAfter;
-      transaction.set(DOC_REF, {payload:JSON.stringify(next), updated:new Date().toISOString()});
-      return {beforeValue:checked.actualBefore,afterValue:requestedAfter};
-    });
+    if(!MANAGER_VERSIONED_WRITES_ENABLED) throw new Error('MANAGER_VERSIONED_WRITES_DISABLED');
+    if(!managerPersistence) throw new Error('MANAGER_REVISION_NOT_LOADED');
+    const latest = await managerPersistence.load();
+    const checked = readPayload({exists:()=>latest.exists,data:()=>({payload:JSON.stringify(latest.data),revision:latest.revision})});
+    const next = JSON.parse(JSON.stringify(checked.value));
+    const target = next.products.find(p => String(p && p.id) === String(productId));
+    target.stocks = target.stocks || {};
+    target.stocks[location] = requestedAfter;
+    const committed = await managerPersistence.save(next,{expectedRevision:latest.revision,reason:'stock.adjust'});
+    const result={beforeValue:checked.actualBefore,afterValue:requestedAfter,revision:committed.revision};
     return {ok:true,neutralized:false,actionId:'stock.adjust',proposalId:proposal.proposalId||null,productId,location,beforeValue:result.beforeValue,afterValue:result.afterValue,firebaseWritePerformed:true};
   };
 
@@ -196,10 +213,9 @@ if ('serviceWorker' in navigator) {
     onSnapshot(DOC_REF, (snap) => {
       if(snap.exists() && !isSyncingFromCloud) {
         isSyncingFromCloud = true;
-        try {
-          const data = JSON.parse(snap.data().payload);
-          onUpdate(data);
-        } catch(e) {}
+        Promise.resolve(managerPersistence ? managerPersistence.observeSnapshot(snap) : JSON.parse(snap.data().payload))
+          .then(data => { if(data) onUpdate(data); })
+          .catch(e => console.warn('Firebase snapshot error:',e));
         setTimeout(() => { isSyncingFromCloud = false; }, 1000);
       }
     });
@@ -227,7 +243,7 @@ if ('serviceWorker' in navigator) {
   onAuthStateChanged(auth, (user) => {
     if(user) {
       // User is signed in
-      DOC_REF = doc(db_firebase, 'fath3d', user.uid);
+      bindManagerPersistence(doc(db_firebase, 'fath3d', user.uid));
       
       // Hide auth screen, show app
       const authScreen = document.getElementById('auth-screen');
@@ -1307,10 +1323,25 @@ function loadData() {
 // 🛡️ Garde anti-écrasement : on ne sauvegarde QUE après que Firebase a chargé ses données
 let firebaseDataLoaded = false;
 let pendingSaves = 0;
+let activeCloudSaveCount = 0;
+let cloudSaveBatchFailed = false;
+let deferredSaveSuccessToasts = [];
+
+function settleCloudSaveBatch(success) {
+  if(!success) cloudSaveBatchFailed = true;
+  activeCloudSaveCount = Math.max(0, activeCloudSaveCount - 1);
+  if(activeCloudSaveCount !== 0) return;
+  const queued = deferredSaveSuccessToasts;
+  deferredSaveSuccessToasts = [];
+  const mayShowSuccess = !cloudSaveBatchFailed;
+  cloudSaveBatchFailed = false;
+  if(mayShowSuccess) queued.forEach(item => showToast(item.message,item.success));
+}
 
 function saveData() {
   if(window.managerSyncBoutiques)managerSyncBoutiques();
-  localStorage.setItem(DB_KEY, JSON.stringify(db));
+  const localSnapshot = JSON.stringify(db);
+  localStorage.setItem(DB_KEY, localSnapshot);
   // 🛡️ Sécurité : ne pas pousser vers Firebase tant qu'on n'a pas chargé ses données
   // Sinon on risque d'écraser les modifs faites depuis un autre appareil
   if(!firebaseDataLoaded) {
@@ -1320,7 +1351,45 @@ function saveData() {
   }
   // Sync to Firebase if available
   if(window.saveToFirebase) {
-    window.saveToFirebase(db);
+    const cloudSnapshot = JSON.parse(localSnapshot);
+    activeCloudSaveCount++;
+    return Promise.resolve().then(()=>window.saveToFirebase(cloudSnapshot)).then(result => {
+      if(result && result.ok === false) throw new Error(result.reason||'MANAGER_SAVE_NOT_CONFIRMED');
+      settleCloudSaveBatch(true);
+      return result;
+    }).catch(error => {
+      // Preserve the rejected/uncertain payload locally before the next cloud sync can replace it.
+      let localSnapshotPreserved=false;
+      let outcome='blocked';
+      try {
+        const key='fath3d_manager_pending_remote_saves';
+        const records=JSON.parse(localStorage.getItem(key)||'[]');
+        if(!Array.isArray(records)) throw new Error('RECOVERY_QUEUE_INVALID');
+        const existing=records.find(item=>item&&item.payload===localSnapshot);
+        if(existing) {
+          localSnapshotPreserved=true;
+          outcome=existing.status||outcome;
+        } else {
+          const message=error&&error.message||'MANAGER_WRITE_FAILED';
+          outcome=message==='MANAGER_REVISION_CONFLICT'||/PERMISSION_DENIED|permission-denied/.test(message)?'conflict':'blocked';
+          records.push({id:'manager-local-'+Date.now(),expectedRevision:window.managerPersistenceState?.().revision??null,reason:'manager.saveData',createdAt:new Date().toISOString(),payload:localSnapshot,status:outcome,error:message});
+          localStorage.setItem(key,JSON.stringify(records));
+          localSnapshotPreserved=true;
+        }
+      } catch(recoveryError) {
+        console.error('[SAVE] Impossible de conserver la copie de récupération locale:', recoveryError);
+      }
+      const message=error&&error.message||'erreur';
+      const userMessage=outcome==='uncertain'
+        ? 'Résultat de sauvegarde cloud incertain ('+message+'). Ne pas répéter avant vérification; copie locale '+(localSnapshotPreserved?'conservée.':'non confirmée.')
+        : outcome==='conflict'
+          ? 'Conflit de révision ('+message+'). Cloud inchangé par cette demande; copie locale '+(localSnapshotPreserved?'conservée pour récupération.':'non confirmée.')
+          : 'Sauvegarde cloud bloquée ('+message+'). Copie locale '+(localSnapshotPreserved?'conservée pour récupération.':'non confirmée.')
+      console.warn('[SAVE] Échec ou résultat incertain; vérifier la copie locale de récupération:',error);
+      if(window.showToast) window.showToast(userMessage,false);
+      settleCloudSaveBatch(false);
+      return {ok:false,reason:message,localSnapshotPreserved,outcome};
+    });
   }
 }
 
@@ -7269,7 +7338,7 @@ function highlightRow(row) {
 }
 
 function renderStocks(el, actions) {
-  actions.innerHTML = `<button class="btn btn-secondary btn-sm" onclick="openStockHistory()">📋 Historique</button> <button class="btn btn-secondary btn-sm" onclick="openReassortStats()">📈 Stats Réassort</button> <button class="btn btn-secondary btn-sm" onclick="exportReassortPDF()">📄 Bon Réassort</button> <button class="btn btn-secondary btn-sm" onclick="openRetourModal()">🏠 Retour → Maison</button> <button class="btn btn-sm" onclick="openJaiImprime(null,'stocks')" style="background:#7c5cff;border:1px solid #7c5cff;color:#fff;font-weight:700;">🖨️ J'ai imprimé</button> <button class="btn btn-secondary btn-sm solaire-btn" onclick="toggleSolaire()">☀️ Plein soleil</button>`;
+  actions.innerHTML = `<button class="btn btn-primary btn-sm" onclick="openMarketToHomeTransfer()" title="Aperçu sécurisé du transfert global">⇩ TRANSFÉRER TOUT MARCHÉ VERS MAISON</button> <button class="btn btn-secondary btn-sm" onclick="openStockHistory()">📋 Historique</button> <button class="btn btn-secondary btn-sm" onclick="openReassortStats()">📈 Stats Réassort</button> <button class="btn btn-secondary btn-sm" onclick="exportReassortPDF()">📄 Bon Réassort</button> <button class="btn btn-sm" onclick="openJaiImprime(null,'stocks')" style="background:#7c5cff;border:1px solid #7c5cff;color:#fff;font-weight:700;">🖨️ J'ai imprimé</button> <button class="btn btn-secondary btn-sm solaire-btn" onclick="toggleSolaire()">☀️ Plein soleil</button>`;
 
   const cats = ['all', ...[...new Set(db.products.map(p=>p.categorie).filter(Boolean))].sort((a,b)=>a.localeCompare(b))];
   const filtered = db.products.filter(p => {
@@ -7362,6 +7431,68 @@ function renderStocks(el, actions) {
   setTimeout(syncStickyHeaders, 50);
 }
 
+function stockTransferEscape(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+async function openMarketToHomeTransfer() {
+  if(typeof window.prepareMarketToHomeTransfer !== 'function') {
+    openModal(`<div class="modal-title">Transfert indisponible</div><p>La session Firebase authentifiée ou le document Manager n’est pas prêt. Aucune donnée n’a été modifiée.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>`);
+    return;
+  }
+  try {
+    const preview = await window.prepareMarketToHomeTransfer();
+    if(!preview.ok) {
+      const anomalies = preview.anomalies.map(item=>`<li><strong>${stockTransferEscape(item.code)}</strong> — ${stockTransferEscape(item.message)}</li>`).join('');
+      openModal(`<div class="modal-title">Transfert bloqué — aucune écriture</div><p>Les stocks doivent être complets, cohérents et la révision sécurisée initialisée avant tout transfert.</p><ul style="max-height:42vh;overflow:auto;padding-left:22px;">${anomalies}</ul><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>`);
+      return;
+    }
+    if(preview.noOp) {
+      openModal(`<div class="modal-title">Aucun transfert nécessaire</div><p>Le stock Marché est vide. Aucune écriture n’a été effectuée.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>`);
+      return;
+    }
+    const rows = preview.items.map(item=>`<tr><td>${stockTransferEscape(item.name)} <small>#${stockTransferEscape(item.id)}</small></td><td style="text-align:right">${item.marketBefore}</td><td style="text-align:right">${item.homeBefore} → ${item.homeAfter}</td><td style="text-align:right">${item.totalBefore}</td></tr>`).join('');
+    const gateClosed = typeof window.managerVersionedWritesEnabled!=='function' || window.managerVersionedWritesEnabled() !== true;
+    openModal(`<div class="modal-title">Aperçu — Marché vers Maison</div>
+      <p><strong>${preview.references}</strong> références · <strong>${preview.pieces}</strong> pièces à déplacer · révision ${preview.revision}</p>
+      <p>Les quantités Marché ci-dessous seront ajoutées à Maison puis ramenées à zéro. Le total par produit reste inchangé.</p>
+      <div style="max-height:38vh;overflow:auto;border:1px solid var(--border);border-radius:8px"><table style="width:100%"><thead><tr><th>Produit</th><th>Marché avant</th><th>Maison avant → après</th><th>Total inchangé</th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${gateClosed?'<p role="status" style="color:var(--danger);font-weight:700">Confirmation désactivée : le verrou des écritures versionnées est fermé dans ce prototype. Aucune écriture réelle ne peut être effectuée.</p>':'<p>Confirme explicitement ce transfert global.</p>'}
+      <div class="modal-actions"><button class="btn btn-secondary" onclick="cancelMarketToHomeTransferUI('${stockTransferEscape(preview.proposalId)}')">Annuler</button><button class="btn btn-primary" ${gateClosed?'disabled':''} onclick="confirmMarketToHomeTransferUI('${stockTransferEscape(preview.proposalId)}')">Confirmer le transfert</button></div>`);
+  } catch(error) {
+    const code=stockTransferEscape(error&&error.message||'TRANSFER_PREVIEW_FAILED');
+    openModal(`<div class="modal-title">Aperçu impossible — aucune écriture</div><p role="alert">${code}</p><p>Vérifie la connexion et la révision, puis relance explicitement l’aperçu. Aucun transfert n’a été effectué.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>`);
+  }
+}
+
+async function confirmMarketToHomeTransferUI(proposalId) {
+  const button=document.querySelector('#modal-content .btn.btn-primary');
+  if(button?.disabled)return;
+  if(button){button.disabled=true;button.textContent='Transfert en cours…';}
+  try {
+    const result=await window.commitMarketToHomeTransfer(proposalId,{explicit:true});
+    for(const item of result.items||[]) {
+      const product=db.products.find(p=>String(p.id)===String(item.id));
+      if(product) { product.stocks=product.stocks||{};product.stocks.maison=item.homeAfter;product.stocks.marche=0; }
+    }
+    closeModal();
+    showToast(`Transfert terminé : ${result.references} références, ${result.pieces} pièces. Révision ${result.revision}.`,true);
+    if(document.getElementById('content')&&currentPage==='stocks')render('stocks');
+  } catch(error) {
+    const code=stockTransferEscape(error&&error.message||'TRANSFER_FAILED');
+    if(button){button.disabled=true;button.textContent='Transfert non exécuté';}
+    const note=code==='MANAGER_VERSIONED_WRITES_DISABLED'?'Le verrou des écritures est fermé. Aucune donnée n’a été modifiée.':'Le transfert n’a pas été confirmé. Ne relance pas la même proposition; recharge l’aperçu et vérifie la révision avant toute nouvelle action.';
+    const content=document.getElementById('modal-content');
+    if(content)content.insertAdjacentHTML('beforeend',`<p role="alert" style="color:var(--danger)"><strong>${code}</strong><br>${note}</p>`);
+  }
+}
+
+function cancelMarketToHomeTransferUI(proposalId) {
+  try { window.abortMarketToHomeTransfer(proposalId,{explicit:true}); }
+  catch(error) { console.warn('Transfer cancellation:',error); }
+  closeModal();
+}
+
 function syncStickyHeaders() {
   const bar = document.getElementById('stocks-filter-bar') || document.getElementById('prod-filter-bar');
   if(bar) {
@@ -7411,6 +7542,84 @@ function updateStocksTable() {
   if(input) { const pos = input.value.length; input.focus(); input.setSelectionRange(pos,pos); }
 }
 
+function stockVersionedWritesClosed() {
+  return typeof window.managerVersionedWritesEnabled!=='function' || window.managerVersionedWritesEnabled() !== true;
+}
+
+function stockOperationBlockHtml(preview) {
+  const list=(preview.anomalies||[]).map(item=>`<li><strong>${stockTransferEscape(item.code)}</strong> — ${stockTransferEscape(item.message)}</li>`).join('');
+  return `<div class="modal-title">Opération bloquée — aucune écriture</div><p>Vérifie la révision et les quantités. Rien n’a été modifié.</p><ul>${list}</ul><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>`;
+}
+
+function stockOperationPreviewHtml(preview, title) {
+  const item=preview.items[0];
+  const count=preview.operation==='physical_count';
+  const rows=count
+    ? `<tr><th>Lieu</th><th>Avant</th><th>Compté</th></tr><tr><td>Maison</td><td>${item.maisonBefore}</td><td>${item.homeAfter}</td></tr><tr><td>Marché</td><td>${item.marcheBefore}</td><td>${item.marketAfter}</td></tr>`
+    : `<tr><th>Lieu</th><th>Avant</th><th>Après</th></tr><tr><td>Maison</td><td>${item.maisonBefore}</td><td>${item.homeAfter}</td></tr><tr><td>Marché</td><td>${item.marcheBefore}</td><td>${item.marketAfter}</td></tr>`;
+  const gateClosed=stockVersionedWritesClosed();
+  return `<div class="modal-title">${stockTransferEscape(title)} — ${stockTransferEscape(item.name)}</div>
+    <p>Référence #${stockTransferEscape(item.id)} · révision ${preview.revision}</p>
+    <table style="width:100%"><tbody>${rows}</tbody></table>
+    ${count?'<p>Comptage physique : correction du chiffre saisi, ce n’est pas un transfert.</p>':`<p>${item.quantity} pièce(s) déplacée(s), total par produit inchangé.</p>`}
+    ${gateClosed?'<p role="status" style="color:var(--danger);font-weight:700">Verrou des écritures versionnées fermé : aperçu seulement, aucune sauvegarde n’est possible dans cette version.</p>':'<p>Confirme explicitement pour enregistrer cette opération.</p>'}
+    <div class="modal-actions"><button class="btn btn-secondary" onclick="cancelVersionedStockOperationUI('${stockTransferEscape(preview.proposalId)}')">Annuler</button><button class="btn btn-primary" ${gateClosed?'disabled':''} onclick="confirmVersionedStockOperationUI('${stockTransferEscape(preview.proposalId)}')">Confirmer</button></div>`;
+}
+
+async function prepareManualStockOperation(previewPromise, title) {
+  try {
+    const preview=await (typeof previewPromise==='function'?previewPromise():previewPromise);
+    if(!preview||!preview.ok) { openModal(stockOperationBlockHtml(preview||{anomalies:[{code:'STOCK_PREVIEW_FAILED',message:'Aperçu indisponible.'}]})); return; }
+    if(preview.noOp) { openModal(`<div class="modal-title">Aucun changement</div><p>Les quantités sont déjà identiques. Aucune écriture n’a été effectuée.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>`); return; }
+    openModal(stockOperationPreviewHtml(preview,title));
+  } catch(error) {
+    openModal(`<div class="modal-title">Aperçu impossible — aucune écriture</div><p role="alert">${stockTransferEscape(error&&error.message||'STOCK_PREVIEW_FAILED')}</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>`);
+  }
+}
+
+function openSecureIndividualTransfer(productId,source,destination) {
+  const p=db.products.find(x=>String(x.id)===String(productId));
+  if(!p) { showToast('Produit introuvable. Aucune opération préparée.',false); return; }
+  const sourceLabel=source==='maison'?'Maison':'Marché',destinationLabel=destination==='maison'?'Maison':'Marché';
+  const available=p.stocks&&p.stocks[source];
+  openModal(`<div class="modal-title">Transfert ${sourceLabel} → ${destinationLabel}</div>
+    <p>${stockTransferEscape(p.emoji||'📦')} <strong>${stockTransferEscape(p.name)}</strong> · disponible ${stockTransferEscape(available)}</p>
+    <div class="form-group"><label class="form-label">Quantité à transférer</label><input type="number" class="form-input" id="secure-transfer-quantity" min="1" max="${stockTransferEscape(available)}" step="1" value="${Number.isSafeInteger(available)&&available>0?1:''}"></div>
+    <div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="prepareIndividualTransferUI('${escapeJs(String(p.id))}','${source}','${destination}')">Préparer l’aperçu</button></div>`);
+}
+
+async function prepareIndividualTransferUI(productId,source,destination) {
+  const raw=document.getElementById('secure-transfer-quantity')?.value||'';
+  if(!/^\d+$/.test(raw)||Number(raw)<1||!Number.isSafeInteger(Number(raw))) { showToast('Saisis une quantité entière positive.',false); return; }
+  await prepareManualStockOperation(()=>window.prepareIndividualStockTransfer({productId,quantity:Number(raw),source,destination}),`Transfert ${source==='maison'?'Maison':'Marché'} → ${destination==='maison'?'Maison':'Marché'}`);
+}
+
+async function confirmVersionedStockOperationUI(proposalId) {
+  const button=document.querySelector('#modal-content .btn.btn-primary');
+  if(!button||button.disabled)return;
+  button.disabled=true;button.textContent='Enregistrement…';
+  try {
+    const result=await window.commitVersionedStockOperation(proposalId,{explicit:true});
+    for(const item of result.items||[]) {
+      const product=db.products.find(p=>String(p.id)===String(item.id));
+      if(product) { product.stocks=product.stocks||{};product.stocks.maison=item.homeAfter;product.stocks.marche=item.marketAfter; }
+    }
+    closeModal();
+    showToast(result.operation==='physical_count'?'Comptage enregistré après confirmation.':`Transfert de ${result.pieces} pièce(s) enregistré.`,true);
+    if(document.getElementById('content')&&currentPage==='stocks')render('stocks');
+  } catch(error) {
+    const code=stockTransferEscape(error&&error.message||'STOCK_OPERATION_FAILED');
+    button.textContent='Opération non confirmée';
+    const content=document.getElementById('modal-content');
+    if(content)content.insertAdjacentHTML('beforeend',`<p role="alert" style="color:var(--danger)"><strong>${code}</strong><br>Aucun succès n’est annoncé. Vérifie l’état distant avant toute nouvelle proposition.</p>`);
+  }
+}
+
+function cancelVersionedStockOperationUI(proposalId) {
+  try { window.abortVersionedStockOperation(proposalId,{explicit:true}); } catch(error) { console.warn('Stock operation cancellation:',error); }
+  closeModal();
+}
+
 function openAdjustStockMM(productId) {
   const p = db.products.find(x=>x.id===productId);
   openModal(`
@@ -7432,66 +7641,24 @@ function openAdjustStockMM(productId) {
     </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="doAdjustStockMM(${productId})">Enregistrer</button>
+      <button class="btn btn-primary" onclick="doAdjustStockMM(${productId})">Préparer le comptage sécurisé</button>
     </div>
   `);
 }
 
 function doAdjustStockMM(productId) {
   const p = db.products.find(x=>x.id===productId);
-  const beforeMaison = p.stocks.maison||0;
-  const beforeMarche = p.stocks.marche||0;
-  const raisonEl = document.getElementById('adj-raison');
-  const raison = (raisonEl && raisonEl.value.trim()) ? raisonEl.value.trim() : 'Correction manuelle';
-  p.stocks.maison = Math.max(0, +document.getElementById('adj-maison').value);
-  p.stocks.marche = Math.max(0, +document.getElementById('adj-marche').value);
-  if(p.stocks.maison!==beforeMaison) logStockChange(p.id, p.name, 'maison', beforeMaison, p.stocks.maison, raison);
-  if(p.stocks.marche!==beforeMarche) logStockChange(p.id, p.name, 'marche', beforeMarche, p.stocks.marche, raison);
-  saveData(); closeModal(); showToast('Stock mis à jour ✅', true);
-  renderStocks(document.getElementById('content'), document.getElementById('topbar-actions'));
+  if(!p) return;
+  const rawMaison=document.getElementById('adj-maison')?.value??'',rawMarche=document.getElementById('adj-marche')?.value??'';
+  if(!/^\d+$/.test(rawMaison)||!/^\d+$/.test(rawMarche)||!Number.isSafeInteger(Number(rawMaison))||!Number.isSafeInteger(Number(rawMarche))) { showToast('Les deux comptages doivent être des entiers positifs ou nuls.',false); return; }
+  prepareManualStockOperation(()=>window.preparePhysicalStockCount({productId:p.id,maison:Number(rawMaison),marche:Number(rawMarche)}),'Pointage physique');
 }
 
 function openReassortOne(productId) {
-  const p = db.products.find(x=>x.id===productId);
-  openModal(`
-    <div class="modal-title">Réassort → Marché</div>
-    <div style="padding:12px;background:var(--bg);border-radius:8px;margin-bottom:14px;">
-      <div style="font-weight:800;">${p.emoji} ${p.name}</div>
-      <div style="font-size:12px;color:var(--muted);margin-top:4px;">
-        🏠 Maison : <strong style="color:var(--text);">${p.stocks.maison||0}</strong> &nbsp;|&nbsp;
-        🏪 Marché : <strong style="color:var(--success);">${p.stocks.marche||0}</strong>
-      </div>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Quantité à transférer vers le Marché</label>
-      <div class="number-row">
-        <button class="btn btn-secondary btn-sm" onclick="var i=document.getElementById('rq');i.value=Math.max(0,+i.value-1)">−</button>
-        <input type="number" class="form-input" id="rq" value="1" min="0" max="${p.stocks.maison||0}">
-        <button class="btn btn-secondary btn-sm" onclick="var i=document.getElementById('rq');i.value=Math.min(${p.stocks.maison||0},+i.value+1)">+</button>
-      </div>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px;">⚠️ Ce stock sera déduit de la Maison</div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="doReassortOne(${productId})">Transférer</button>
-    </div>
-  `);
+  openSecureIndividualTransfer(productId,'maison','marche');
 }
 
-function doReassortOne(productId) {
-  const p = db.products.find(x=>x.id===productId);
-  const qty = Math.min(+document.getElementById('rq').value, p.stocks.maison||0);
-  if(qty <= 0) { showToast('Quantité invalide !', false); return; }
-  const mBefore = p.stocks.maison||0;
-  const mrBefore = p.stocks.marche||0;
-  p.stocks.maison = mBefore - qty;
-  p.stocks.marche = mrBefore + qty;
-  logStockChange(p.id, p.name, 'maison', mBefore, p.stocks.maison, 'Réassort → Marché');
-  logStockChange(p.id, p.name, 'marche', mrBefore, p.stocks.marche, 'Réassort depuis Maison');
-  logReassort([{name:p.name, emoji:p.emoji, categorie:p.categorie||'', qty, destination:'Marché'}]);
-  saveData(); closeModal(); showToast(`${qty}x ${p.name} → Marché ✅`, true);
-  renderStocks(document.getElementById('content'), document.getElementById('topbar-actions'));
-}
+function doReassortOne(productId) { const raw=document.getElementById('rq')?.value; openSecureIndividualTransfer(productId,'maison','marche'); const input=document.getElementById('secure-transfer-quantity'); if(input&&raw!==undefined)input.value=raw; }
 
 
 // ===================== 🖨️ J'AI IMPRIMÉ (production + traçabilité) =====================
@@ -8397,48 +8564,11 @@ function openStockHistory(filtreProduit) {
 }
 
 function openReassortModal() {
-  // Multi-product reassort
-  const cats = ['all', ...[...new Set(db.products.map(p=>p.categorie).filter(Boolean))].sort((a,b)=>a.localeCompare(b))];
-  const prods = db.products.filter(p=>(p.stocks.maison||0)>0);
-  openModal(`
-    <div class="modal-title">📦 Réassort Maison → Marché</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Saisissez la quantité à transférer pour chaque produit. Le stock Maison sera déduit automatiquement.</div>
-    <div style="max-height:400px;overflow-y:auto;">
-      ${prods.map(p=>`
-        <div style="display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--border);">
-          <div style="flex:1;">
-            <div style="font-weight:700;font-size:13px;">${p.emoji} ${p.name}</div>
-            <div style="font-size:11px;color:var(--muted);">Maison: ${p.stocks.maison} · Marché: ${p.stocks.marche||0}</div>
-          </div>
-          <input type="number" class="form-input" id="rr-${p.id}" value="0" min="0" max="${p.stocks.maison}" style="width:70px;text-align:center;">
-        </div>
-      `).join('')}
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="doReassortMulti()">Transférer tout</button>
-    </div>
-  `);
+  openModal(`<div class="modal-title">Réassort sécurisé</div><p>Les transferts groupés non versionnés sont désactivés. Utilise le bouton de transfert sur chaque ligne produit ; chaque opération affiche son aperçu et demande confirmation.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>`);
 }
 
 function doReassortMulti() {
-  let count = 0;
-  const lines = [];
-  db.products.forEach(p => {
-    const inp = document.getElementById(`rr-${p.id}`);
-    if(!inp) return;
-    const qty = Math.min(+inp.value||0, p.stocks.maison||0);
-    if(qty > 0) {
-      p.stocks.maison = (p.stocks.maison||0) - qty;
-      p.stocks.marche = (p.stocks.marche||0) + qty;
-      lines.push({name:p.name, emoji:p.emoji, categorie:p.categorie||'', qty, destination:'Marché'});
-      count++;
-    }
-  });
-  if(lines.length > 0) logReassort(lines);
-  saveData(); closeModal();
-  showToast(`${count} produit(s) transférés → Marché ✅`, true);
-  renderStocks(document.getElementById('content'), document.getElementById('topbar-actions'));
+  showToast('Transfert groupé désactivé : aucun stock modifié. Utilise les transferts sécurisés par produit.',false);
 }
 
 function openAdjustStock(productId) { openAdjustStockMM(productId); }
@@ -8446,92 +8576,18 @@ function doAdjustStock(productId) { doAdjustStockMM(productId); }
 
 // ===================== RETOUR MARCHÉ → MAISON =====================
 function openRetourModal() {
-  const prods = db.products.filter(p => (p.stocks.marche||0) > 0);
-  if(prods.length === 0) { showToast('Aucun produit en stock Marché', false); return; }
-  openModal(`
-    <div class="modal-title">🏠 Retour Marché → Maison</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Saisissez la quantité à rapatrier pour chaque produit. Le stock Marché sera déduit automatiquement.</div>
-    <div style="max-height:400px;overflow-y:auto;">
-      ${prods.map(p=>`
-        <div style="display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--border);">
-          <div style="flex:1;">
-            <div style="font-weight:700;font-size:13px;">${p.emoji} ${p.name}</div>
-            <div style="font-size:11px;color:var(--muted);">Marché: ${p.stocks.marche} · Maison: ${p.stocks.maison||0}</div>
-          </div>
-          <input type="number" class="form-input" id="ret-${p.id}" value="0" min="0" max="${p.stocks.marche}" style="width:70px;text-align:center;">
-        </div>
-      `).join('')}
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="doRetourMulti()" style="background:#27ae60;border-color:#27ae60;">🏠 Rapatrier</button>
-    </div>
-  `);
+  return openMarketToHomeTransfer();
 }
 
 function doRetourMulti() {
-  let count = 0;
-  const lines = [];
-  db.products.forEach(p => {
-    const inp = document.getElementById(`ret-${p.id}`);
-    if(!inp) return;
-    const qty = Math.min(+inp.value||0, p.stocks.marche||0);
-    if(qty > 0) {
-      const mrBefore = p.stocks.marche;
-      const mBefore = p.stocks.maison;
-      p.stocks.marche = (p.stocks.marche||0) - qty;
-      p.stocks.maison = (p.stocks.maison||0) + qty;
-      logStockChange(p.id, p.name, 'marche', mrBefore, p.stocks.marche, 'Retour → Maison');
-      logStockChange(p.id, p.name, 'maison', mBefore, p.stocks.maison, 'Retour depuis Marché');
-      lines.push({name:p.name, emoji:p.emoji, categorie:p.categorie||'', qty, destination:'Maison'});
-      count++;
-    }
-  });
-  if(lines.length > 0) logReassort(lines);
-  saveData(); closeModal();
-  showToast(`${count} produit(s) rapatrié(s) → Maison ✅`, true);
-  renderStocks(document.getElementById('content'), document.getElementById('topbar-actions'));
+  return openMarketToHomeTransfer();
 }
 
 function openRetourOne(productId) {
-  const p = db.products.find(x => x.id === productId);
-  if(!p) return;
-  const stockMarche = p.stocks.marche || 0;
-  if(stockMarche === 0) { showToast('Stock Marché déjà à 0', false); return; }
-  openModal(`
-    <div class="modal-title">🏠 Retour → Maison</div>
-    <div style="padding:12px;background:var(--bg);border-radius:8px;margin-bottom:14px;">
-      <div style="font-weight:800;font-size:18px;color:var(--text);">${p.emoji} ${p.name}</div>
-      <div style="font-size:12px;color:var(--muted);margin-top:4px;">Stock Marché : <strong style="color:var(--text);">${stockMarche}</strong></div>
-    </div>
-    <div style="margin-bottom:14px;">
-      <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:6px;">Quantité à rapatrier</label>
-      <input type="number" class="form-input" id="retone-qty" value="${stockMarche}" min="0" max="${stockMarche}" style="width:100%;text-align:center;font-size:20px;font-weight:800;">
-      <div style="font-size:12px;color:var(--muted);margin-top:6px;">Stock Marché disponible : <strong style="color:var(--text);">${stockMarche}</strong> — sera déduit automatiquement</div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="doRetourOne(${productId})" style="background:#27ae60;border-color:#27ae60;">🏠 Rapatrier</button>
-    </div>
-  `);
+  openSecureIndividualTransfer(productId,'marche','maison');
 }
 
-function doRetourOne(productId) {
-  const p = db.products.find(x => x.id === productId);
-  if(!p) return;
-  const qty = Math.min(+document.getElementById('retone-qty').value||0, p.stocks.marche||0);
-  if(qty <= 0) { showToast('Quantité invalide', false); return; }
-  const mrBefore = p.stocks.marche;
-  const mBefore = p.stocks.maison;
-  p.stocks.marche = (p.stocks.marche||0) - qty;
-  p.stocks.maison = (p.stocks.maison||0) + qty;
-  logStockChange(p.id, p.name, 'marche', mrBefore, p.stocks.marche, 'Retour → Maison');
-  logStockChange(p.id, p.name, 'maison', mBefore, p.stocks.maison, 'Retour depuis Marché');
-  logReassort([{name:p.name, emoji:p.emoji, categorie:p.categorie||'', qty, destination:'Maison'}]);
-  saveData(); closeModal();
-  showToast(`${qty} × ${p.name} rapatrié(s) → Maison ✅`, true);
-  renderStocks(document.getElementById('content'), document.getElementById('topbar-actions'));
-}
+function doRetourOne(productId) { const raw=document.getElementById('retone-qty')?.value; openSecureIndividualTransfer(productId,'marche','maison'); const input=document.getElementById('secure-transfer-quantity'); if(input&&raw!==undefined)input.value=raw; }
 
 // ===================== STOCK BOUTIQUES =====================
 function renderStocksBoutiques(el, actions) {
@@ -15430,6 +15486,10 @@ function closeModal(e) {
 
 // ===================== TOAST =====================
 function showToast(msg, success=true) {
+  if(success===true && activeCloudSaveCount>0) {
+    deferredSaveSuccessToasts.push({message:msg,success});
+    return;
+  }
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.className = 'toast show' + (success?' success':'');
@@ -15471,6 +15531,10 @@ async function initApp() {
   // À partir de maintenant, les saveData() peuvent pousser vers Firebase
   firebaseDataLoaded = true;
   console.log('[SAVE] Firebase chargé, sauvegardes activées');
+  const persistenceState=window.managerPersistenceState&&window.managerPersistenceState();
+  if(persistenceState&&persistenceState.recoveryCount>0&&window.showToast) {
+    showToast('⚠️ Des modifications locales restent non synchronisées. Vérification nécessaire avant toute nouvelle sauvegarde.',false);
+  }
   
   buildNav();
   navigate('dashboard');
@@ -21575,7 +21639,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     return Array.from(bytes,value=>value.toString(16).padStart(2,'0')).join('');
   }
   function createSession(now=Date.now()){
-    return {id:'j5a-'+secureId(),createdAt:now,lastActivity:now,messages:[],pendingClarification:null,pendingConsultation:null,pendingProposal:null,pendingRuleIntent:null,pendingRuleProposal:null};
+    return {id:'j5a-'+secureId(),createdAt:now,lastActivity:now,messages:[],pendingClarification:null,pendingConsultation:null,pendingProposal:null,pendingRuleIntent:null,pendingRuleProposal:null,pendingStockIntent:null,pendingStockOperation:null};
   }
   function securityCheck(){
     const security=root.JarvisSecurity;
@@ -21651,6 +21715,113 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const newQuantity=mode==='add'?oldQuantity+amount:mode==='remove'?oldQuantity-amount:target;
     if(newQuantity<0) return {kind:'direct',result:{outcome:'refusal',answer:'Cette modification produirait un stock négatif. Aucune proposition n’a été créée.',proposal:null,topic:'stock',missingInformation:[],readAction:null}};
     return {kind:'write_proposal',actionId:'stock.adjust',args:{productId:product.id,location,newQuantity},oldValue:oldQuantity,newValue:newQuantity,answer:`Proposition préparée : ${name}, ${location}, ${oldQuantity} → ${newQuantity}. Confirme explicitement si tu veux poursuivre. Aucune écriture n’est exécutée.`};
+  }
+  function stockOperationDirect(answer,outcome='direct_answer'){
+    return {kind:'direct',result:{outcome,answer,proposal:null,topic:'stock Maison / Marché',missingInformation:[],readAction:null,pending:null}};
+  }
+  function parseStockOperationQuantityAndProduct(text,allowZero=false){
+    const words=String(text||'').trim().split(/\s+/).filter(Boolean);
+    const parser=root.JarvisReplenishment9A3&&root.JarvisReplenishment9A3.parseInteger;
+    for(let count=Math.min(3,words.length-1);count>=1;count--){
+      const phrase=words.slice(0,count).join(' ');
+      const value=typeof parser==='function'?parser(phrase):(/^\d+$/.test(phrase)?Number(phrase):null);
+      const nextWord=words[count];
+      const nextIsNumber=nextWord==='et'||(typeof parser==='function'&&parser(nextWord)!==null)||/^\d+$/.test(nextWord||'');
+      if(!nextIsNumber&&Number.isSafeInteger(value)&&(allowZero?value>=0:value>0))return {quantity:value,productText:words.slice(count).join(' ').trim()};
+    }
+    return null;
+  }
+  function stockIntentFromMessage(message){
+    let q=normalizeIntent(message).replace(/^jarvis[\s,:-]*/,'').replace(/[.!?]+$/,'').replace(/\s+/g,' ').trim();
+    let match=q.match(/^(?:transfere|transferer|deplace|deplacer|remets?|remettre|ramene|ramener|passe|passer)\s+(.+)$/);
+    if(match){
+      let rest=match[1],source=null,destination=null,productAndQty=null;
+      const homeToMarket=rest.match(/^(.+?)\s+de\s+(?:la\s+)?maison\s+(?:vers|a|au)\s+(?:le\s+)?marche$/);
+      const marketToHome=rest.match(/^(.+?)\s+(?:du|de)\s+(?:stock\s+)?marche\s+(?:a|vers)\s+(?:la\s+)?maison$/);
+      if(homeToMarket){source='maison';destination='marche';productAndQty=homeToMarket[1];}
+      else if(marketToHome){source='marche';destination='maison';productAndQty=marketToHome[1];}
+      if(source){const parsed=parseStockOperationQuantityAndProduct(productAndQty,false);return {kind:'transfer',source,destination,quantity:parsed?.quantity??null,productText:parsed?.productText||''};}
+      return {kind:'unrecognized_transfer'};
+    }
+    match=q.match(/^(?:j(?:'| )ai compte|j(?:'| )ai denombre|j(?:'| )ai releve)\s+(.+?)\s+(?:a la maison|dans la maison|maison)$/);
+    if(match){const parsed=parseStockOperationQuantityAndProduct(match[1],true);return {kind:'count',location:'maison',quantity:parsed?.quantity??null,productText:parsed?.productText||''};}
+    match=q.match(/^(?:il me reste|il reste|j(?:'| )ai encore)\s+(.+?)\s+(?:sur le stock (?:du\s+)?marche|au marche|a marche|sur marche)$/);
+    if(match){const parsed=parseStockOperationQuantityAndProduct(match[1],true);return {kind:'count',location:'marche',quantity:parsed?.quantity??null,productText:parsed?.productText||''};}
+    return null;
+  }
+  function resolveStockProduct(currentData,query){
+    const resolver=root.JarvisReadBroker;
+    if(!resolver||typeof resolver.resolveProductFromData!=='function')throw codedError('PRODUCT_RESOLVER_UNAVAILABLE','Le résolveur produit sécurisé est indisponible.');
+    const found=resolver.resolveProductFromData(currentData,query);
+    const products=Array.isArray(currentData?.products)?currentData.products:[];
+    const ids=new Set((found?.matches||[]).map(item=>String(item?.id)));
+    return products.filter(product=>product&&ids.has(String(product.id)));
+  }
+  async function prepareStockOperationForProduct(intent,product,currentData){
+    if(session.pendingProposal||session.pendingRuleProposal)return stockOperationDirect('Une autre proposition attend déjà une décision. Termine-la avant cette opération de stock. Aucune nouvelle opération n’a été créée.','refusal');
+    const methods=window;
+    if(intent.kind==='transfer'&&typeof methods.prepareIndividualStockTransfer!=='function'||intent.kind==='count'&&typeof methods.prepareSinglePhysicalStockCount!=='function')
+      return stockOperationDirect('Le service versionné des stocks n’est pas disponible. Aucune donnée n’a été modifiée.','refusal');
+    const preview=intent.kind==='transfer'
+      ? await methods.prepareIndividualStockTransfer({productId:product.id,quantity:intent.quantity,source:intent.source,destination:intent.destination})
+      : await methods.prepareSinglePhysicalStockCount({productId:product.id,location:intent.location,quantity:intent.quantity});
+    if(!preview?.ok){const detail=(preview?.anomalies||[]).map(item=>item.message||item.code).join(' ');return stockOperationDirect(`Opération bloquée : ${detail||'les données ou la révision ne sont pas valides.'} Aucune écriture n’a été effectuée.`,'refusal');}
+    if(preview.noOp)return stockOperationDirect('Le stock est déjà à cette quantité. Aucune écriture n’a été effectuée.');
+    const item=preview.items[0];
+    const answer=intent.kind==='transfer'
+      ? `Aperçu : ${intent.quantity} ${item.name}, ${intent.source==='maison'?'Maison':'Marché'} ${intent.source==='maison'?item.maisonBefore:item.marcheBefore} → ${intent.source==='maison'?item.homeAfter:item.marketAfter}, puis ${intent.destination==='maison'?'Maison':'Marché'} ${intent.destination==='maison'?item.maisonBefore:item.marcheBefore} → ${intent.destination==='maison'?item.homeAfter:item.marketAfter}. Le total reste inchangé. Réponds « confirme » ou « annule ».`
+      : `Aperçu du comptage : ${item.name}, ${intent.location==='maison'?'Maison':'Marché'} ${intent.location==='maison'?item.maisonBefore:item.marcheBefore} → ${intent.quantity}. C’est une correction de comptage, pas un transfert. Réponds « confirme » ou « annule ».`;
+    session.pendingStockIntent=null;
+    session.pendingStockOperation={proposalId:preview.proposalId,kind:intent.kind,productId:product.id,name:item.name,revision:preview.revision};
+    return stockOperationDirect(answer,'action_proposal');
+  }
+  async function localStockOperationRoute(message,currentData){
+    const activeInventory=root.JarvisInventory8&&typeof root.JarvisInventory8.getState==='function'&&root.JarvisInventory8.getState().active===true;
+    const yes=/^(?:oui|confirme|confirmer|vas[- ]?y|valide|valider)$/i.test(message);
+    const no=/^(?:non|annule|annuler|annule ça|annule ca|non merci)$/i.test(message);
+    if(session.pendingStockOperation){
+      const pending=session.pendingStockOperation;
+      if(yes){
+        if(activeInventory)return stockOperationDirect('Une session Inventory8 est active. Termine-la avant de confirmer cette opération. Aucune écriture n’a été effectuée.','refusal');
+        try{
+          if(typeof window.commitVersionedStockOperation!=='function')throw codedError('STOCK_SERVICE_UNAVAILABLE','Service versionné indisponible.');
+          const committed=await window.commitVersionedStockOperation(pending.proposalId,{explicit:true});
+          if(committed?.status!=='executed'||committed.writePerformed!==true)throw codedError('STOCK_WRITE_NOT_CONFIRMED','Aucune confirmation de sauvegarde reçue; aucun succès n’est annoncé.');
+          for(const item of committed.items||[]){const product=(currentData.products||[]).find(row=>String(row.id)===String(item.id));if(product){product.stocks=product.stocks||{};product.stocks.maison=item.homeAfter;product.stocks.marche=item.marketAfter;}}
+          session.pendingStockOperation=null;
+          return stockOperationDirect(pending.kind==='transfer'?`Transfert enregistré : ${pending.name}. Révision ${committed.revision}.`:`Comptage enregistré : ${pending.name}. Révision ${committed.revision}.`);
+        }catch(error){
+          try{if(typeof window.abortVersionedStockOperation==='function')window.abortVersionedStockOperation(pending.proposalId,{explicit:true});}catch(_){ }
+          session.pendingStockOperation=null;
+          const code=error&&((error.code)||error.message)||'STOCK_OPERATION_FAILED';
+          return stockOperationDirect(`Opération non enregistrée (${code}). Aucune réussite n’est annoncée. Vérifie l’état du stock avant toute nouvelle proposition.`,'refusal');
+        }
+      }
+      if(no){try{window.abortVersionedStockOperation(pending.proposalId,{explicit:true});}catch(_){ }session.pendingStockOperation=null;return stockOperationDirect('Opération annulée. Aucune écriture n’a été effectuée.');}
+      return stockOperationDirect('Une opération de stock attend encore une décision explicite : réponds « confirme » ou « annule ». Aucune écriture n’a été effectuée.','clarification');
+    }
+    const intent=stockIntentFromMessage(message);
+    if(session.pendingStockIntent&&!intent){
+      if(no){session.pendingStockIntent=null;return stockOperationDirect('Demande de précision annulée. Aucune écriture n’a été effectuée.');}
+      const pending=session.pendingStockIntent,choice=normalizeIntent(message).match(/\b(?:(?:le|la)\s+)?(premier|premiere|1|second|deuxieme|2|troisieme|3)\b/);
+      let selected=null;
+      if(choice){const ordinal={premier:0,premiere:0,'1':0,second:1,deuxieme:1,'2':1,troisieme:2,'3':2}[choice[1]];selected=pending.candidates[ordinal]||null;}
+      if(!selected){try{const matches=resolveStockProduct(currentData,message);selected=matches.length===1&&pending.candidates.some(item=>String(item.id)===String(matches[0].id))?matches[0]:null;}catch(_){}}
+      if(!selected)return stockOperationDirect(`Précise le produit parmi : ${pending.candidates.map((item,index)=>`${index+1} — ${item.name||item.id}`).join(' ; ')}. Aucune écriture n’a été effectuée.`,'clarification');
+      return prepareStockOperationForProduct(pending,selected,currentData);
+    }
+    if(!intent)return null;
+    if(activeInventory)return stockOperationDirect('Inventory8 est actif. Termine ou annule l’inventaire avant un transfert ou un pointage séparé. Aucune écriture n’a été effectuée.','refusal');
+    if(intent.kind==='unrecognized_transfer')return stockOperationDirect('Précise la direction du transfert : Maison vers Marché ou Marché vers Maison. Aucune écriture n’a été effectuée.','clarification');
+    if(intent.quantity===null||!intent.productText)return stockOperationDirect('Précise le produit et une quantité entière explicite. Aucune écriture n’a été effectuée.','clarification');
+    let candidates;
+    try{candidates=resolveStockProduct(currentData,intent.productText);}catch(error){return stockOperationDirect(`Résolution produit indisponible (${error.code||error.message}). Aucune écriture n’a été effectuée.`,'refusal');}
+    if(candidates.length!==1){
+      if(!candidates.length)return stockOperationDirect(`Je ne trouve pas « ${intent.productText} ». Reformule avec le nom exact. Aucune écriture n’a été effectuée.`,'clarification');
+      session.pendingStockIntent={...intent,candidates:candidates.map(item=>({id:item.id,name:item.name||item.nom||item.label||String(item.id)}))};
+      return stockOperationDirect(`Plusieurs produits correspondent : ${session.pendingStockIntent.candidates.map((item,index)=>`${index+1} — ${item.name}`).join(' ; ')}. Dis « le premier » ou le nom exact. Aucune écriture n’a été effectuée.`,'clarification');
+    }
+    return prepareStockOperationForProduct(intent,candidates[0],currentData);
   }
   function localMarketWriteRoute(message,currentData){
     const q=normalizeIntent(message);
@@ -21882,7 +22053,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const sharedRuleRuntime=root.JarvisReplenishment9A3Runtime;
     if(sharedRuleRuntime){const sharedPending=sharedRuleRuntime.getPending();session.pendingRuleProposal=sharedPending&&sharedPending.status==='pending'?sharedPending.proposalId:null;}
     if(!root.navigator || root.navigator.onLine===false) throw codedError('OFFLINE',ERROR_MESSAGES.OFFLINE);
-    if(/^(?:oui|confirme|confirmer|vas[- ]?y|valide|valider)$/i.test(message) && !session.pendingProposal && !session.pendingRuleProposal){
+    if(/^(?:oui|confirme|confirmer|vas[- ]?y|valide|valider)$/i.test(message) && !session.pendingProposal && !session.pendingRuleProposal && !session.pendingStockOperation && !session.pendingStockIntent){
       const answer='Il n y a aucune action en attente à confirmer.';
       appendMessage('user',message,'direct_answer',null);
       appendMessage('assistant',answer,'direct_answer',null);
@@ -21890,7 +22061,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       render();
       return {outcome:'direct_answer',answer,proposal:null,topic:null,missingInformation:[],readAction:null};
     }
-    if(/^(?:non|annule|annuler|annule ça|annule ca|non merci)$/i.test(message) && !session.pendingProposal && !session.pendingRuleProposal){
+    if(/^(?:non|annule|annuler|annule ça|annule ca|non merci)$/i.test(message) && !session.pendingProposal && !session.pendingRuleProposal && !session.pendingStockOperation && !session.pendingStockIntent){
       const answer='Il n’y a aucune proposition en attente à annuler.';
       appendMessage('user',message,'direct_answer',null);
       appendMessage('assistant',answer,'direct_answer',null);
@@ -21906,6 +22077,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     try{
       const currentData=(typeof db!=='undefined'&&db)?db:(root.db||{});
       const ruleAPI=root.JarvisReplenishment9A3,ruleRuntime=root.JarvisReplenishment9A3Runtime;
+      const stockCommandDetected=!!stockIntentFromMessage(message);
       let ruleRoute=null,rulePendingIntent=session.pendingRuleIntent,rulePendingProposal=session.pendingRuleProposal;
       const confirmRule=/^(?:oui|confirme|confirmer|vas[- ]?y|valide|valider)$/i.test(message);
       const cancelRule=/^(?:non|annule|annuler|annule ça|annule ca|non merci)$/i.test(message);
@@ -21936,7 +22108,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       }else if(rulePendingIntent&&ruleAPI){
         if(ruleRuntime)ruleRoute=ruleOutputRoute(await ruleRuntime.complete(rulePendingIntent,message,currentData));
         else ruleRoute=ruleDirect('Le runtime de réglage est désactivé. Aucune règle ni donnée n’a été modifiée.','refusal');
-      }else if(ruleAPI&&ruleAPI.isMutationRequest(message,currentData)){
+      }else if(!stockCommandDetected&&ruleAPI&&ruleAPI.isMutationRequest(message,currentData)){
         if(session.pendingProposal)ruleRoute=ruleDirect('Une autre proposition attend déjà une décision. Termine-la avant de modifier un réglage. Aucune nouvelle proposition n’a été créée.','refusal');
         else if(!ruleRuntime)ruleRoute=ruleDirect('La modification des règles de réapprovisionnement n’est pas encore disponible. Aucune règle ni donnée n’a été modifiée.','future_capability');
         else ruleRoute=ruleOutputRoute(await ruleRuntime.prepare(message,currentData));
@@ -21961,12 +22133,14 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         }
         return local;
       };
-      const voiceAction=ruleRoute?null:localVoiceConfirmation(message,currentData);
+      const stockDecisionPending=!!(session.pendingStockOperation||session.pendingStockIntent);
+      const voiceAction=ruleRoute||stockDecisionPending?null:localVoiceConfirmation(message,currentData);
       const voiceCorrection=ruleRoute?null:(voiceAction||localVoiceCorrection(message,currentData));
       const inventoryRoute=!ruleRoute&&root.JarvisInventory8&&typeof root.JarvisInventory8.route==='function'
         ? root.JarvisInventory8.route(message,currentData)
         : null;
-      const localWrite=ruleRoute||inventoryRoute||voiceCorrection||(!ruleRoute&&(localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData)));
+      const stockOperationRoute=!ruleRoute&&!inventoryRoute?await localStockOperationRoute(message,currentData):null;
+      const localWrite=ruleRoute||inventoryRoute||stockOperationRoute||voiceCorrection||(!ruleRoute&&(localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData)));
       const route=localWrite|| (broker?broker.route(message,session.pendingConsultation):{kind:'gateway'});
       let result;
       if(route.kind==='write_proposal'){
