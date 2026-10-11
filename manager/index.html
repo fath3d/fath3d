@@ -21850,7 +21850,10 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const voices=availableVoices();
     const french=voices.filter(voice=>/^fr(?:[-_]|$)/i.test(String(voice&&voice.lang||'')));
     const frenchFrance=french.filter(voice=>/^fr[-_]fr$/i.test(String(voice&&voice.lang||'')));
-    speechVoice=frenchFrance.find(voice=>voice&&voice.default)
+    const googleFrench=frenchFrance.find(voice=>voice.name==='Google français')
+      ||frenchFrance.find(voice=>voice.voiceURI==='Google français');
+    speechVoice=googleFrench
+      ||frenchFrance.find(voice=>voice&&voice.default)
       ||frenchFrance[0]
       ||french.find(voice=>voice&&voice.default)
       ||french[0]
