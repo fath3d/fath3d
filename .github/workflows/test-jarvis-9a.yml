@@ -1,0 +1,169 @@
+name: Jarvis 9A isolated validation
+
+on:
+  push:
+    branches:
+      - test-jarvis-9a
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarvis-9a-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/test-jarvis-9a'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      payload_ready: ${{ steps.payload.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify isolated branch ancestry and production head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/test-jarvis-9a"
+          git fetch origin main
+          expected=04aefebdd6f9029eb575754ece491bc0a40d5672
+          test "$(git rev-parse origin/main)" = "$expected"
+          test "$(git merge-base HEAD origin/main)" = "$expected"
+
+      - name: Wait for the approved test payload
+        id: payload
+        shell: bash
+        run: |
+          if [ -f test-jarvis-9a-payload.zip ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Workflow is installed on the isolated branch; awaiting the test payload. No tests or deployments were run."
+          fi
+
+  isolated-validation:
+    needs: preflight
+    if: github.ref == 'refs/heads/test-jarvis-9a' && needs.preflight.outputs.payload_ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CI: 'true'
+      GCLOUD_PROJECT: demo-jarvis-rules-validation
+      GOOGLE_CLOUD_PROJECT: demo-jarvis-rules-validation
+      FIREBASE_CLI_DISABLE_UPDATE_CHECK: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Extract only the approved synthetic test files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/test-jarvis-9a"
+          expected=$(printf '%s\n' \
+            manager/index.html \
+            work/index.html \
+            work/firestore.rules.proposed \
+            work/test_replenishment_rules_step9a.js \
+            work/test_replenishment_rules_step9a3.js \
+            work/test_replenishment_rules_step9a4.js \
+            work/test_replenishment_rules_step9a5.js \
+            work/firestore-validation/firebase.json \
+            work/firestore-validation/package-lock.json \
+            work/firestore-validation/package.json \
+            work/firestore-validation/playwright-9a-smoke.cjs \
+            work/firestore-validation/prepare-visual-fixture.cjs \
+            work/firestore-validation/replenishment-adapter.test.cjs \
+            work/firestore-validation/rules-under-test.rules \
+            work/firestore-validation/rules.test.cjs | sort)
+          actual=$(unzip -Z1 test-jarvis-9a-payload.zip | sort)
+          test "$actual" = "$expected"
+          if unzip -Z1 test-jarvis-9a-payload.zip | grep -Eq '(^/|(^|/)\.\.(/|$)|^[A-Za-z]:)'; then
+            echo 'Unsafe archive path rejected' >&2
+            exit 1
+          fi
+          unzip -q test-jarvis-9a-payload.zip -d .
+          test -f manager/index.html
+          test -f work/index.html
+          cmp --silent manager/index.html work/index.html
+          test "$(sha256sum work/index.html | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')" = "CBF84EB239FF920305036CDDAA6B1FD6223199751B51C695AD35C405DD1C4D86"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: work/firestore-validation/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install isolated test dependencies
+        working-directory: work/firestore-validation
+        run: npm ci
+
+      - name: Verify staged Firestore Rules match the validated source
+        working-directory: work/firestore-validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp --silent rules-under-test.rules ../firestore.rules.proposed
+          test "$(sha256sum ../firestore.rules.proposed | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')" = "3534A4461CE19DE249C36992CDC3F086DA66E88AABDDA3C0010E798CA7ED17B5"
+
+      - name: Run rules and adapter against Firestore Emulator only
+        working-directory: work/firestore-validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset FIREBASE_TOKEN GOOGLE_APPLICATION_CREDENTIALS FIREBASE_CONFIG
+          export FIRESTORE_EMULATOR_HOST=127.0.0.1:8785
+          ./node_modules/.bin/firebase emulators:exec \
+            --only firestore \
+            --project demo-jarvis-rules-validation \
+            --config firebase.json \
+            --non-interactive \
+            "node rules.test.cjs && node replenishment-adapter.test.cjs"
+
+      - name: Run local 9A engine and integration regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node work/test_replenishment_rules_step9a.js
+          node work/test_replenishment_rules_step9a3.js
+          node work/test_replenishment_rules_step9a4.js
+          node work/test_replenishment_rules_step9a5.js
+
+      - name: Install pinned Playwright and Chromium
+        working-directory: work/firestore-validation
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          npx playwright install --with-deps chromium
+
+      - name: Visual smoke test at desktop, tablet, and phone sizes
+        working-directory: work/firestore-validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node prepare-visual-fixture.cjs
+          node playwright-9a-smoke.cjs
+
+      - name: Upload synthetic UI screenshots and emulator reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-9a-test-evidence
+          if-no-files-found: ignore
+          path: |
+            work/firestore-validation/test-results/*.png
+            work/firestore-validation/results.json
+            work/firestore-validation/adapter-results.json
+
