@@ -90,7 +90,7 @@ jobs:
             echo 'Unsafe archive path rejected' >&2
             exit 1
           fi
-          unzip -q test-jarvis-9a-payload.zip -d .
+          unzip -oq test-jarvis-9a-payload.zip -d .
           test -f manager/index.html
           test -f work/index.html
           cmp --silent manager/index.html work/index.html
