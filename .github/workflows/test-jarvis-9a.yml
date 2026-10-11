@@ -58,7 +58,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Extract approved files and preserve the published regression baseline
+      - name: Extract approved files and the verified pre-9A-3 regression baseline
         shell: bash
         run: |
           set -euo pipefail
@@ -66,6 +66,7 @@ jobs:
           expected=$(printf '%s\n' \
             manager/index.html \
             work/index.html \
+            work/index.html.pre-9a3-backup \
             work/firestore.rules.proposed \
             work/test_replenishment_rules_step9a.js \
             work/test_replenishment_rules_step9a3.js \
@@ -86,8 +87,8 @@ jobs:
             exit 1
           fi
           mkdir -p work
-          cp manager/index.html work/index.html.pre-9a3-backup
           unzip -oq test-jarvis-9a-payload.zip -d .
+          test "$(sha256sum work/index.html.pre-9a3-backup | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')" = "05D7D6BC1DD2281321E1C6BB9869DD05C4B0796BBA2CD959A6B2FAC421FAF809"
           cmp --silent manager/index.html work/index.html
           test "$(sha256sum work/index.html | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')" = "CBF84EB239FF920305036CDDAA6B1FD6223199751B51C695AD35C405DD1C4D86"
 
