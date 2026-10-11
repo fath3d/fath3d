@@ -46,24 +46,19 @@ jobs:
             echo "Workflow is installed on the isolated branch; awaiting the test payload. No tests or deployments were run."
           fi
 
-  isolated-validation:
+  functional-9a:
     needs: preflight
     if: github.ref == 'refs/heads/test-jarvis-9a' && needs.preflight.outputs.payload_ready == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     permissions:
       contents: read
-    env:
-      CI: 'true'
-      GCLOUD_PROJECT: demo-jarvis-rules-validation
-      GOOGLE_CLOUD_PROJECT: demo-jarvis-rules-validation
-      FIREBASE_CLI_DISABLE_UPDATE_CHECK: '1'
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Extract only the approved synthetic test files
+      - name: Extract approved files and preserve the published regression baseline
         shell: bash
         run: |
           set -euo pipefail
@@ -90,10 +85,64 @@ jobs:
             echo 'Unsafe archive path rejected' >&2
             exit 1
           fi
+          mkdir -p work
+          cp manager/index.html work/index.html.pre-9a3-backup
           unzip -oq test-jarvis-9a-payload.zip -d .
-          test -f manager/index.html
-          test -f work/index.html
           cmp --silent manager/index.html work/index.html
+          test "$(sha256sum work/index.html | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')" = "CBF84EB239FF920305036CDDAA6B1FD6223199751B51C695AD35C405DD1C4D86"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run local 9A engine and integration regressions
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p work/firestore-validation/test-results
+          status=0
+          for suite in \
+            work/test_replenishment_rules_step9a.js \
+            work/test_replenishment_rules_step9a3.js \
+            work/test_replenishment_rules_step9a4.js \
+            work/test_replenishment_rules_step9a5.js; do
+            echo "===== $suite ====="
+            node "$suite" 2>&1 | tee -a work/firestore-validation/test-results/functional.log || status=1
+          done
+          exit "$status"
+
+      - name: Upload 9A functional test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-9a-functional-logs
+          if-no-files-found: ignore
+          path: work/firestore-validation/test-results/functional.log
+
+  firestore-emulator:
+    needs: preflight
+    if: github.ref == 'refs/heads/test-jarvis-9a' && needs.preflight.outputs.payload_ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CI: 'true'
+      GCLOUD_PROJECT: demo-jarvis-rules-validation
+      GOOGLE_CLOUD_PROJECT: demo-jarvis-rules-validation
+      FIREBASE_CLI_DISABLE_UPDATE_CHECK: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Extract approved Firestore test files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/test-jarvis-9a"
+          mkdir -p work
+          unzip -oq test-jarvis-9a-payload.zip -d .
           test "$(sha256sum work/index.html | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')" = "CBF84EB239FF920305036CDDAA6B1FD6223199751B51C695AD35C405DD1C4D86"
 
       - uses: actions/setup-node@v4
@@ -119,7 +168,7 @@ jobs:
           cmp --silent rules-under-test.rules ../firestore.rules.proposed
           test "$(sha256sum ../firestore.rules.proposed | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')" = "3534A4461CE19DE249C36992CDC3F086DA66E88AABDDA3C0010E798CA7ED17B5"
 
-      - name: Run rules and adapter against Firestore Emulator only
+      - name: Run Rules and adapter against Firestore Emulator only
         working-directory: work/firestore-validation
         shell: bash
         run: |
@@ -131,16 +180,47 @@ jobs:
             --project demo-jarvis-rules-validation \
             --config firebase.json \
             --non-interactive \
-            "node rules.test.cjs && node replenishment-adapter.test.cjs"
+            "set +e; node rules.test.cjs > rules.log 2>&1; rules_status=\$?; cat rules.log; node replenishment-adapter.test.cjs > adapter.log 2>&1; adapter_status=\$?; cat adapter.log; test \$rules_status -eq 0 -a \$adapter_status -eq 0"
 
-      - name: Run local 9A engine and integration regressions
+      - name: Upload emulator test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-9a-firestore-reports
+          if-no-files-found: ignore
+          path: |
+            work/firestore-validation/results.json
+            work/firestore-validation/adapter-results.json
+            work/firestore-validation/rules.log
+            work/firestore-validation/adapter.log
+
+  playwright-visual:
+    needs: preflight
+    if: github.ref == 'refs/heads/test-jarvis-9a' && needs.preflight.outputs.payload_ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Extract approved Manager UI fixtures
         shell: bash
         run: |
           set -euo pipefail
-          node work/test_replenishment_rules_step9a.js
-          node work/test_replenishment_rules_step9a3.js
-          node work/test_replenishment_rules_step9a4.js
-          node work/test_replenishment_rules_step9a5.js
+          test "$GITHUB_REF" = "refs/heads/test-jarvis-9a"
+          mkdir -p work
+          unzip -oq test-jarvis-9a-payload.zip -d .
+          cmp --silent manager/index.html work/index.html
+          test "$(sha256sum work/index.html | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')" = "CBF84EB239FF920305036CDDAA6B1FD6223199751B51C695AD35C405DD1C4D86"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Install pinned Playwright and Chromium
         working-directory: work/firestore-validation
@@ -148,22 +228,19 @@ jobs:
           npm install --no-save --package-lock=false playwright@1.56.1
           npx playwright install --with-deps chromium
 
-      - name: Visual smoke test at desktop, tablet, and phone sizes
+      - name: Run visual smoke test at desktop, tablet, and phone sizes
         working-directory: work/firestore-validation
         shell: bash
         run: |
           set -euo pipefail
-          node prepare-visual-fixture.cjs
-          node playwright-9a-smoke.cjs
+          { node prepare-visual-fixture.cjs && node playwright-9a-smoke.cjs; } 2>&1 | tee visual.log
 
-      - name: Upload synthetic UI screenshots and emulator reports
+      - name: Upload synthetic UI screenshots and visual results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jarvis-9a-test-evidence
+          name: jarvis-9a-visual-evidence
           if-no-files-found: ignore
           path: |
             work/firestore-validation/test-results/*.png
-            work/firestore-validation/results.json
-            work/firestore-validation/adapter-results.json
-
+            work/firestore-validation/visual.log
