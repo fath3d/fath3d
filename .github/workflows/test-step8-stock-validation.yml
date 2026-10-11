@@ -48,7 +48,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Extract isolated validation payload
-        run: unzip -oq step8-stock-test-payload.zip -d .
+        run: |
+          base64 --decode step8-stock-test-payload.b64 > /tmp/step8-stock-test-payload.zip
+          unzip -oq /tmp/step8-stock-test-payload.zip -d .
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -60,7 +62,7 @@ jobs:
           test -s manager/manager-versioned-persistence.mjs
           test -s work/index.html
           cmp --silent manager/index.html work/index.html
-          grep -Fq 'MANAGER_VERSIONED_WRITES_ENABLED = false' manager/index.html
+          grep -Fq 'MANAGER_STOCK_OPERATIONS_ENABLED = false' manager/index.html
       - name: Run targeted stock, Inventory8, and 9A regressions
         shell: bash
         run: |
@@ -72,6 +74,7 @@ jobs:
             work/test_stock_operations_sendtext.js \
             work/test_stock_versioned_service_mock.js \
             work/test_stock_save_confirmation.js \
+            work/test_manager_versioned_save_conflicts_mock.js \
             work/test_inventory8_sendtext.js \
             work/test_replenishment_rules_step9a3.js; do
             echo "===== $suite ====="
@@ -102,7 +105,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Extract isolated validation payload
-        run: unzip -oq step8-stock-test-payload.zip -d .
+        run: |
+          base64 --decode step8-stock-test-payload.b64 > /tmp/step8-stock-test-payload.zip
+          unzip -oq /tmp/step8-stock-test-payload.zip -d .
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -149,7 +154,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Extract isolated validation payload
-        run: unzip -oq step8-stock-test-payload.zip -d .
+        run: |
+          base64 --decode step8-stock-test-payload.b64 > /tmp/step8-stock-test-payload.zip
+          unzip -oq /tmp/step8-stock-test-payload.zip -d .
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -174,4 +181,5 @@ jobs:
           if-no-files-found: ignore
           path: |
             work/firestore-validation/test-results/*.png
+
 
