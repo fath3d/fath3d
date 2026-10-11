@@ -21646,7 +21646,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
 
   const VERSION='7C.0.0';
   const OWNER='jarvis-voice7';
-  const DEFAULT_COMMAND_WINDOW_MS=10000;
+  const DEFAULT_COMMAND_WINDOW_MS=12000;
   const DEFAULT_RESTART_BASE_MS=250;
   const DEFAULT_MAX_RESTARTS=3;
   const STATES=Object.freeze({
@@ -21766,6 +21766,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(elements.detail){
       if(detailOverride) elements.detail.textContent=detailOverride;
       else if(state===STATES.OFF) elements.detail.textContent='Micro et wake word arrêtés · Wake Lock libéré';
+      else if(state===STATES.ERROR) elements.detail.textContent=desiredOn?'Erreur contrôlée · utilisez OFF puis ON pour reprendre':'Démarrage refusé · corrigez le prérequis puis réessayez';
       else if(!recognitionAdapter) elements.detail.textContent='JARVIS ON · moteur détecté mais non activé avant 7G · Wake Lock : '+wakeLockStatus;
       else elements.detail.textContent='JARVIS ON · reconnaissance '+(recognitionStarted?'active':'en attente')+' · Wake Lock : '+wakeLockStatus;
     }
@@ -21848,8 +21849,13 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function chooseSpeechVoice(){
     const voices=availableVoices();
     const french=voices.filter(voice=>/^fr(?:[-_]|$)/i.test(String(voice&&voice.lang||'')));
-    const female=french.find(voice=>String(voice&&voice.gender||'').toLowerCase()==='female');
-    speechVoice=female||french[0]||voices[0]||null;
+    const frenchFrance=french.filter(voice=>/^fr[-_]fr$/i.test(String(voice&&voice.lang||'')));
+    speechVoice=frenchFrance.find(voice=>voice&&voice.default)
+      ||frenchFrance[0]
+      ||french.find(voice=>voice&&voice.default)
+      ||french[0]
+      ||voices[0]
+      ||null;
     speechVoicesReady=voices.length>0;
     return speechVoice;
   }
@@ -21898,6 +21904,9 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const voice=chooseSpeechVoice();
     if(voice) utterance.voice=voice;
     utterance.lang=(voice&&voice.lang)||'fr-FR';
+    utterance.rate=0.94;
+    utterance.pitch=1.02;
+    utterance.volume=1;
     utterance.onend=()=>finishSpeech(currentGeneration,voiceGeneration);
     utterance.onerror=()=>finishSpeech(currentGeneration,voiceGeneration);
     speechUtterance=utterance;
@@ -22039,6 +22048,19 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     return Object.freeze({final:false,transcript:'',resultIndex:start});
   }
 
+  function extractInterimTranscript(event){
+    const results=event&&event.results;
+    if(!results||!results.length) return '';
+    const start=Math.max(0,Number(event.resultIndex)||0);
+    for(let i=results.length-1;i>=start;i--){
+      const result=results[i];
+      if(!result||result.isFinal!==false) continue;
+      const transcript=result[0]&&result[0].transcript;
+      if(transcript) return String(transcript).trim();
+    }
+    return '';
+  }
+
   async function sendCommandToConversation(command){
     const value=normalizeVoiceBusinessTerms(command);
     if(!value) return Object.freeze({handled:false,reason:'empty',state});
@@ -22086,10 +22108,9 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     return task;
   }
 
-  function openCommandWindow(){
+  function armCommandWindow(){
     clearCommandWindow();
     commandDeadline=Date.now()+commandWindowMs;
-    transition(STATES.LISTENING_COMMAND,{detail:'Wake word détecté · commande attendue pendant 10 secondes'});
     const expectedGeneration=generation;
     commandTimer=root.setTimeout(()=>{
       commandTimer=null;
@@ -22098,6 +22119,17 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         transition(STATES.WAITING_WAKE_WORD,{detail:'Aucune commande reçue · retour à l’attente de « Jarvis »'});
       }
     },commandWindowMs);
+  }
+
+  function openCommandWindow(){
+    transition(STATES.LISTENING_COMMAND,{detail:'Wake word détecté · commande attendue jusqu’à 12 secondes après les derniers mots reconnus'});
+    armCommandWindow();
+  }
+
+  function extendCommandWindow(){
+    if(!desiredOn||state!==STATES.LISTENING_COMMAND) return false;
+    armCommandWindow();
+    return true;
   }
 
   async function handleTranscript(value){
@@ -22123,7 +22155,10 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   async function handleRecognitionResult(event,cycle){
     if(Number(cycle)!==recognitionCycle) return Object.freeze({handled:false,reason:'stale-recognition',state});
     const extracted=extractFinalTranscript(event);
-    if(!extracted.final||!extracted.transcript) return Object.freeze({handled:false,reason:'interim',state});
+    if(!extracted.final||!extracted.transcript){
+      if(extractInterimTranscript(event)) extendCommandWindow();
+      return Object.freeze({handled:false,reason:'interim',state});
+    }
     const signature=String(cycle)+'|'+String(extracted.resultIndex)+'|'+normalizeTranscript(extracted.transcript);
     if(processedFinalResults.has(signature)) return Object.freeze({handled:false,reason:'duplicate-final',state});
     processedFinalResults.add(signature);
@@ -22222,7 +22257,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const activeCycle=recognitionCycle;
     processedFinalResults=new Set();
     instance.lang='fr-FR';
-    instance.interimResults=false;
+    instance.interimResults=true;
     instance.continuous=false;
     instance.maxAlternatives=1;
     instance.onresult=event=>{
@@ -22230,7 +22265,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         handleRecognitionResult(event,activeCycle).catch(error=>{
           if(desiredOn&&state===STATES.PROCESSING){
             lastError=String(error&&error.message||'Erreur de traitement vocal');
-            transition(STATES.ERROR,{test:true,keepError:true,detail:lastError});
+            transition(STATES.ERROR,{keepError:true,detail:lastError});
           }
         });
       }
@@ -22303,10 +22338,17 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
 
   async function turnOn(){
     if(desiredOn && state!==STATES.OFF) return getState();
+    if(state===STATES.ERROR&&desiredOn) return getState();
+    if(state===STATES.ERROR&&!desiredOn){
+      clearRecovery();
+      clearCommandWindow();
+      transition(STATES.OFF,{detail:'Nouvelle tentative · vérification des prérequis'});
+    }
     const checks=runPrechecks();
     if(!checks.criticalPassed){
       lastError='Pré-check 7A refusé : version, handler ou protection attendue absente.';
-      transition(STATES.ERROR,{keepError:true});
+      if(state!==STATES.ERROR) transition(STATES.ERROR,{keepError:true});
+      else render();
       return getState();
     }
     desiredOn=true;
@@ -22493,7 +22535,8 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       if(desiredOn && state!==STATES.OFF) turnOff('manual').catch(()=>forceOff('manual'));
       else turnOn().catch(error=>{
         lastError=String(error&&error.message||'Erreur interne 7A');
-        transition(STATES.ERROR,{test:true,keepError:true});
+        if(state!==STATES.ERROR&&(ALLOWED_TRANSITIONS[state]||[]).includes(STATES.ERROR)) transition(STATES.ERROR,{keepError:true});
+        else render();
       });
     });
   }
