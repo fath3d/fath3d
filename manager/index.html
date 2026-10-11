@@ -52,7 +52,7 @@ if ('serviceWorker' in navigator) {
 
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-  import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, doc, setDoc, getDoc, onSnapshot, runTransaction } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+  import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, doc, collection, setDoc, getDoc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
   import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
 
   const firebaseConfig = {
@@ -70,6 +70,37 @@ if ('serviceWorker' in navigator) {
   });
   const auth = getAuth(app);
   const provider = new GoogleAuthProvider();
+
+  // Le runtime 9A intégré au Manager reste en lecture seule tant qu'une
+  // activation de production n'a pas été explicitement autorisée et publiée.
+  window.createJarvisReplenishmentFirebaseRuntime = function() {
+    const api = window.JarvisReplenishment9A3;
+    const user = auth.currentUser;
+    if(!api || !user || !window.firebaseReady) throw new Error('AUTH_REQUIRED');
+    const firebaseOptions={db:db_firebase,auth,sdk:{doc,collection,getDocFromServer,getDocsFromServer,runTransaction}};
+    if(api.getState().productionRuntimeEnabled===true) return api.createFirebaseSettingsRuntime(firebaseOptions);
+    return api.createFirebaseReadOnlyRuntime(firebaseOptions);
+  };
+  window.jarvisReplenishmentSettingsState = {state:'waiting'};
+  function attachReplenishmentReadOnlyRuntime(){
+    try{
+      window.JarvisReplenishment9A3Runtime=window.createJarvisReplenishmentFirebaseRuntime();
+      window.jarvisReplenishmentSettingsState={state:'ready'};
+    }catch(error){
+      window.JarvisReplenishment9A3Runtime=null;
+      window.jarvisReplenishmentSettingsState={state:'error',code:error&&error.message||'CONFIGURATION_UNAVAILABLE'};
+    }
+    document.dispatchEvent(new Event('jarvis-replenishment-settings-ready'));
+    if(window.JarvisReplenishment9A4)window.JarvisReplenishment9A4.refresh().catch(()=>{});
+  }
+  document.addEventListener('firebase-ready',attachReplenishmentReadOnlyRuntime);
+  document.addEventListener('firebase-signed-out',()=>{
+    window.JarvisReplenishment9A3Runtime=null;
+    window.jarvisReplenishmentSettingsState={state:'unauthenticated'};
+    document.dispatchEvent(new Event('jarvis-replenishment-settings-ready'));
+    if(window.JarvisReplenishment9A4)window.JarvisReplenishment9A4.refresh().catch(()=>{});
+  });
+  if(window.firebaseReady)attachReplenishmentReadOnlyRuntime();
   
   // Force account selection
   provider.setCustomParameters({ prompt: 'select_account' });
@@ -221,6 +252,9 @@ if ('serviceWorker' in navigator) {
         footer.insertBefore(btn, footer.firstChild);
       }
     } else {
+      window.firebaseReady = false;
+      window.firebaseUser = null;
+      document.dispatchEvent(new Event('firebase-signed-out'));
       // Show auth screen
       const authScreen = document.getElementById('auth-screen');
       if(authScreen) authScreen.classList.remove('hidden');
@@ -1327,6 +1361,7 @@ if(!Array.isArray(db.comm)) db.comm = [];  // module Comm & Réseaux
 const pageTitles = {
   dashboard: 'Tableau de Bord', pos: 'Caisse Marché', stats: 'Statistiques & Prévisions',
   stocks: 'Stock Maison & Marché',
+  replenishmentRules: 'Jarvis — Règles de réapprovisionnement',
   stocksBoutiques: 'Stock Boutiques', products: 'Catalogue Produits', filaments: 'Filaments / Bobines',
   sales: 'Ventes Boutiques', ventesMarche: 'Ventes Marché', ventesLigne: 'Ventes en Ligne', recettes: 'Livre des Recettes', depenses: 'Dépenses',
   urssaf: 'Module URSSAF', marches: 'Calendrier des Marchés', checklistMarche: 'Check-list Marché', statsMarche: 'Stats Ventes Marché',
@@ -1349,6 +1384,7 @@ const DEFAULT_NAV = [
   {page:'pos',          icon:'🛒', label:'Caisse Marché',       section:'Principal'},
   {page:'vocal',        icon:'🎙️', label:'Assistant vocal',     section:'Principal'},
   {page:'stocks',       icon:'🏠', label:'Stock Maison/Marché', section:'Stocks'},
+  {page:'replenishmentRules', icon:'⚙️', label:'Règles de réapprovisionnement', section:'Stocks'},
   {page:'inventaire',   icon:'📋', label:'Inventaire',           section:'Stocks'},
   {page:'inventaireVocal', icon:'🎤', label:'Inventaire Vocal',   section:'Stocks'},
   {page:'inventaireMarche', icon:'🧾', label:'Inventaire Marché', section:'Stocks'},
@@ -1588,6 +1624,7 @@ function render(page) {
     case 'pos': renderCaisseMarche(content, actions); break;
     case 'vocal': renderAssistantVocal(content, actions); break;
     case 'stocks': renderStocks(content, actions); break;
+    case 'replenishmentRules': window.JarvisReplenishment9A4.render(content,actions,()=>db); break;
     case 'stocksBoutiques': renderStocksBoutiques(content, actions); break;
     case 'products': renderProducts(content, actions); break;
     case 'filaments': renderFilaments(content, actions); break;
@@ -19181,6 +19218,7 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     defineAction({id:'consult.catalog',name:'Consulter le catalogue',objective:'Consulter les produits et variantes.',category:CATEGORY.READ,readPaths:['products'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Toute sauvegarde','Toute modification de produit'],status:'lecture_disponible'}),
     defineAction({id:'consult.stocks',name:'Consulter les stocks',objective:'Consulter les quantités par emplacement.',category:CATEGORY.READ,readPaths:['products.*.stocks','stockHistory','reassortHistory'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Ajustement automatique','Réassort automatique'],status:'lecture_disponible'}),
     defineAction({id:'consult.stock_needs',name:'Consulter les besoins de stock',objective:'Identifier les seuils et besoins de réapprovisionnement.',category:CATEGORY.READ,readPaths:['products','stockAlertSeuil','stockMinDefaut'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Création automatique de tâche','Modification de stock'],status:'lecture_disponible'}),
+    defineAction({id:'consult.replenishment_rules',name:'Consulter les règles de réapprovisionnement',objective:'Consulter les objectifs, seuils et exceptions configurés sans modifier les stocks.',category:CATEGORY.READ,readPaths:['products'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Toute modification de règle','Création automatique de tâche','Modification de stock'],status:'lecture_disponible'}),
     defineAction({id:'consult.filaments',name:'Consulter les filaments',objective:'Consulter les matières, couleurs et quantités disponibles.',category:CATEGORY.READ,readPaths:['filaments','customFilColors'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Consommation automatique de filament'],status:'lecture_disponible'}),
     defineAction({id:'consult.printing',name:'Consulter les impressions',objective:'Consulter projets, tâches, files, durées, contraintes et planning.',category:CATEGORY.READ,readPaths:['planningJobs','planningJour','plansImpression','plansLibres','printQueue','printersConfig','hfTemplates'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Pilotage imprimante','Validation de production','Ajout automatique au stock'],status:'lecture_disponible'}),
     defineAction({id:'consult.markets',name:'Consulter les marchés',objective:'Consulter les marchés et informations pratiques.',category:CATEGORY.READ,readPaths:['marches','checklistMarche'],mutablePaths:[],readOnly:true,confirmationRequired:false,unchangedZones:FINANCIAL_UNCHANGED,indirectEffectsToBlock:['Création de vente marché','Modification du champ ca'],status:'lecture_disponible'}),
@@ -20209,6 +20247,699 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
 })(typeof window!=='undefined'?window:globalThis);
 </script>
 
+<!-- ===================== JARVIS RULES ENGINE — STEP 9A-1 =====================
+Moteur pur en lecture seule. Les valeurs ci-dessous sont des règles initiales
+validées; les règles persistantes et leurs écritures attendent le bloc 9A-3.
+============================================================================ -->
+<script id="jarvis-replenishment-9a">
+(function(root){
+  'use strict';
+  if(root.JarvisReplenishment9A) return;
+  const VERSION='9A-1.0.0';
+  const FIELDS=Object.freeze(['alertThreshold','targetStock','replenishQuantity']);
+  const DEFAULT_RULES=Object.freeze({
+    schemaVersion:1,
+    revision:0,
+    categoryRules:Object.freeze({
+      hueforge:Object.freeze({targetStock:Object.freeze({value:1,scope:'maison_marche'})}),
+      figurine:Object.freeze({targetStock:Object.freeze({value:3,scope:'maison_marche'})}),
+      minimaux:Object.freeze({alertThreshold:Object.freeze({value:5,scope:'maison_marche'})})
+    }),
+    productOverrides:Object.freeze({})
+  });
+  const CATEGORY_ALIASES=Object.freeze({
+    hueforge:['hueforge','hue forge','youforge','you forge'],
+    figurine:['figurine','figurines'],
+    minimaux:['minimaux'],
+    'marque page':['marque page','marque pages','marque-page','marque-pages'],
+    'porte clefs':['porte clef','porte clefs','porte-clé','porte-clés','porte-clef','porte-clefs','porte clés','porte clé'],
+    'boucle d oreilles':['boucle d oreille','boucles d oreille','boucle d oreilles','boucles d oreilles']
+  });
+  const MUTATION_WORDS=/\b(mets?|mettre|modifie|modifier|change|changer|ajoute|ajouter|supprime|supprimer|efface|effacer|remets?|revenir|enregistre|enregistrer|definis?|definir)\b/;
+  const RULE_WORDS=/\b(regle|regles|exception|exceptions|objectif|objectifs|seuil|seuils|alerte|alertes|reapprovisionnement|reapprovisionner|reappro|reimprimer|reimpression|exemplaires?|stock cible|quantite a reimprimer|quantite de reimpression)\b/;
+  function normalize(value){return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('fr-FR').replace(/[^a-z0-9]+/g,' ').trim().replace(/\s+/g,' ');}
+  function clone(value){return value===undefined?undefined:JSON.parse(JSON.stringify(value));}
+  function own(value,key){return !!value&&Object.prototype.hasOwnProperty.call(value,key);}
+  function categoryOf(product){return String(product&&(product.categorie||product.category)||'').trim();}
+  function categoryKey(value){return normalize(value);}
+  function inPhrase(haystack,phrase){return (' '+haystack+' ').includes(' '+normalize(phrase)+' ');}
+  function categoriesIn(data){return [...new Set((Array.isArray(data&&data.products)?data.products:[]).map(categoryOf).filter(Boolean))];}
+  function findCategory(data,message){
+    const q=normalize(message),categories=categoriesIn(data),hits=[];
+    categories.forEach(category=>{if(inPhrase(q,category))hits.push(category);});
+    Object.entries(CATEGORY_ALIASES).forEach(([key,aliases])=>{
+      const category=categories.find(item=>categoryKey(item)===key);
+      if(category&&aliases.some(alias=>inPhrase(q,alias)))hits.push(category);
+    });
+    const unique=[...new Set(hits)];
+    unique.sort((a,b)=>normalize(b).length-normalize(a).length);
+    return unique.length===1?{category:unique[0],ambiguous:false}:unique.length>1?{category:null,ambiguous:true,candidates:unique}:{category:null,ambiguous:false};
+  }
+  function fieldFor(message){
+    const q=normalize(message);
+    if(/\b(quantite a reimprimer|quantite de reimpression|quantite a fabriquer|combien.*reimprimer|combien.*refaire)\b/.test(q))return 'replenishQuantity';
+    if(/\b(seuil|seuils|alerte|alertes)\b/.test(q))return 'alertThreshold';
+    if(/\b(objectif|objectifs|stock cible|minimum par reference)\b/.test(q))return 'targetStock';
+    return null;
+  }
+  function cleanTarget(message){
+    return normalize(message)
+      .replace(/\b(quel|quelle|quels|quelles|est|sont|le|la|les|un|une|des|du|de|d|l|mon|ma|mes|ton|ta|tes|pour|sur|dans|par|reference|references|produit|produits|categorie|categories|famille|familles|regle|regles|objectif|objectifs|seuil|seuils|alerte|alertes|stock|cible|quantite|quantites|a|de|reimprimer|reimpression|reapprovisionnement|reapprovisionner|reappro|exemplaire|exemplaires|combien|donne|donner|moi|jarvis|veux|voudrais|savoir|actuel|actuelle|actuels|actuelles|estce|que|pour|avec)\b/g,' ')
+      .replace(/\s+/g,' ').trim();
+  }
+  function removeCategoryPhrase(text,category){
+    let q=' '+text+' ';
+    const aliases=[category,...(CATEGORY_ALIASES[categoryKey(category)]||[])].sort((a,b)=>b.length-a.length);
+    aliases.forEach(alias=>{
+      const words=normalize(alias).split(' ').map(word=>word.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('\\s+');
+      if(words)q=q.replace(new RegExp('\\b'+words+'\\b','g'),' ');
+    });
+    return q.replace(/\s+/g,' ').trim();
+  }
+  function resolveTarget(data,message){
+    const categoryHit=findCategory(data,message),subject=cleanTarget(message);
+    if(categoryHit.ambiguous)return {kind:'category_ambiguous',candidates:categoryHit.candidates};
+    if(categoryHit.category){
+      const residual=cleanTarget(removeCategoryPhrase(subject,categoryHit.category));
+      if(!residual)return {kind:'category',category:categoryHit.category};
+      const productMatch=root.JarvisReadBroker&&typeof root.JarvisReadBroker.resolveProductFromData==='function'
+        ?root.JarvisReadBroker.resolveProductFromData(data,residual):null;
+      const scoped=(productMatch&&productMatch.matches||[]).filter(product=>categoryKey(product.category)===categoryKey(categoryHit.category));
+      if(scoped.length===1)return {kind:'product',product:scoped[0],category:categoryHit.category};
+      if(scoped.length>1)return {kind:'product_ambiguous',products:scoped,category:categoryHit.category};
+      return {kind:'not_found',category:categoryHit.category};
+    }
+    if(!subject)return {kind:'missing'};
+    const productMatch=root.JarvisReadBroker&&typeof root.JarvisReadBroker.resolveProductFromData==='function'
+      ?root.JarvisReadBroker.resolveProductFromData(data,subject):null;
+    const matches=productMatch&&Array.isArray(productMatch.matches)?productMatch.matches:[];
+    if(matches.length===1)return {kind:'product',product:matches[0],category:matches[0].category};
+    if(matches.length>1)return {kind:'product_ambiguous',products:matches};
+    return {kind:'not_found'};
+  }
+  function categoryRule(config,category){
+    const rules=config&&config.categoryRules&&typeof config.categoryRules==='object'?config.categoryRules:{};
+    if(own(rules,categoryKey(category)))return rules[categoryKey(category)];
+    for(const [key,value] of Object.entries(rules))if(categoryKey(value&&value.category||key)===categoryKey(category))return value;
+    return null;
+  }
+  function resolveRule(data,target,config){
+    const rules=config||DEFAULT_RULES,product=target&&typeof target==='object'?target:null,category=product?String(product.category||categoryOf(product)||''):String(target||'');
+    const base=categoryRule(rules,category)||{},override=product&&rules.productOverrides&&own(rules.productOverrides,String(product.id))?rules.productOverrides[String(product.id)]:null;
+    const resolved={category,categoryKey:categoryKey(category),productId:product?clone(product.id):null,productName:product?String(product.name||''):null,source:override?'product_exception':base&&Object.keys(base).length?'category':'none'};
+    FIELDS.forEach(field=>{if(override&&own(override,field))resolved[field]=clone(override[field]);else if(own(base,field))resolved[field]=clone(base[field]);else resolved[field]=null;});
+    ['priority','excluded','abandoned'].forEach(field=>{if(override&&own(override,field))resolved[field]=clone(override[field]);else if(own(base,field))resolved[field]=clone(base[field]);else resolved[field]=null;});
+    return resolved;
+  }
+  function stockValue(product,location){
+    const value=product&&product.stocks&&product.stocks[location];
+    if(value===null||value===undefined||value==='')return null;
+    const number=Number(value);return Number.isInteger(number)&&number>=0?number:null;
+  }
+  function scopeLocations(scope){
+    if(scope==='maison_marche')return ['maison','marche'];
+    if(scope==='maison')return ['maison'];
+    if(scope==='marche')return ['marche'];
+    if(Array.isArray(scope)&&scope.length&&scope.every(item=>['maison','marche','artComplices','btvero'].includes(item)))return [...new Set(scope)];
+    return null;
+  }
+  function calculateProduct(product,rule){
+    if(rule.excluded===true||rule.abandoned===true)return {status:'excluded',stockKnown:false,reason:rule.abandoned===true?'abandoned':'excluded'};
+    const target=rule.targetStock&&Number.isInteger(Number(rule.targetStock.value))?Number(rule.targetStock.value):null;
+    const targetLocations=rule.targetStock&&scopeLocations(rule.targetStock.scope);
+    const threshold=rule.alertThreshold&&Number.isInteger(Number(rule.alertThreshold.value))?Number(rule.alertThreshold.value):null;
+    const thresholdLocations=rule.alertThreshold&&scopeLocations(rule.alertThreshold.scope);
+    const sumFor=locations=>{if(!locations)return {known:false,value:null};const values=locations.map(location=>stockValue(product,location));if(values.some(value=>value===null))return {known:false,value:null};return {known:true,value:values.reduce((sum,value)=>sum+value,0)};};
+    const targetStock=sumFor(targetLocations),alertStock=sumFor(thresholdLocations);
+    const need=target!==null&&targetStock.known?Math.max(0,target-targetStock.value):null;
+    const alert=threshold!==null&&alertStock.known?alertStock.value<=threshold:null;
+    return {status:need===null&&alert===null?'unknown':'evaluated',stockKnown:targetStock.known||alertStock.known,targetStock:targetStock.value,stockScopeKnown:!!targetLocations,missingToTarget:need,alertStock:alertStock.value,alertScopeKnown:!!thresholdLocations,alertTriggered:alert,replenishQuantity:rule.replenishQuantity&&Number.isInteger(Number(rule.replenishQuantity.value))?Number(rule.replenishQuantity.value):null,automaticPrint:false};
+  }
+  function formatValue(rule,field){
+    const entry=rule[field];
+    if(!entry||entry.value===null||entry.value===undefined)return 'aucune valeur définie';
+    const labels={alertThreshold:'seuil d’alerte',targetStock:'objectif de stock',replenishQuantity:'quantité à réimprimer'};
+    const scope=entry.scope===null||entry.scope===undefined?' · portée à définir':entry.scope==='maison_marche'?' · total Maison + Marché':entry.scope==='maison'?' · Maison':entry.scope==='marche'?' · Marché':' · portée personnalisée';
+    const unit=field==='alertThreshold'?' pièce(s)':field==='targetStock'?' exemplaire(s)':' exemplaire(s)';
+    return labels[field]+' : '+entry.value+unit+scope;
+  }
+  function selectedIndex(message,count){
+    const q=normalize(message),match=q.match(/\b(?:le|la|numero|num|choix)?\s*(premier|premiere|1|deuxieme|deuxieme|second|seconde|2|troisieme|3|quatrieme|4|cinquieme|5|sixieme|6)\b/);
+    if(!match)return null;const values={premier:1,premiere:1,'1':1,deuxieme:2,second:2,seconde:2,'2':2,troisieme:3,'3':3,quatrieme:4,'4':4,cinquieme:5,'5':5,sixieme:6,'6':6};const index=values[match[1]]-1;return index>=0&&index<count?index:null;
+  }
+  function consult(data,message,pending,config){
+    const field=fieldFor(message)||(pending&&pending.field)||null;
+    let target=null;
+    if(pending&&pending.kind==='replenishment_rule_target'){
+      const ids=Array.isArray(pending.productIds)?pending.productIds:[];
+      const index=selectedIndex(message,ids.length);
+      if(index!==null){const matches=(Array.isArray(data.products)?data.products:[]).filter(item=>String(item.id)===String(ids[index]));if(matches.length===1)target={kind:'product',product:{id:matches[0].id,name:matches[0].name,category:categoryOf(matches[0])}};}
+      if(!target)target=resolveTarget(data,message);
+    }else target=resolveTarget(data,message);
+    if(!target||target.kind==='missing')return {outcome:'clarification',answer:'Quelle catégorie ou référence veux-tu consulter ?',pending:{kind:'replenishment_rule_target',actionId:'consult.replenishment_rules',field}};
+    if(target.kind==='category_ambiguous')return {outcome:'clarification',answer:'La catégorie est ambiguë : '+target.candidates.join(', ')+'. Laquelle veux-tu consulter ?',pending:{kind:'replenishment_rule_target',actionId:'consult.replenishment_rules',field,categoryNames:target.candidates}};
+    if(target.kind==='product_ambiguous'){
+      const products=target.products.slice(0,6),labels=products.map((item,index)=>(index+1)+'. '+item.name+(item.category?' — '+item.category:'')).join(' ; ');
+      return {outcome:'clarification',answer:'Plusieurs références correspondent : '+labels+'. Indique le numéro ou le nom exact.',pending:{kind:'replenishment_rule_target',actionId:'consult.replenishment_rules',field,productIds:products.map(item=>item.id)}};
+    }
+    if(target.kind==='not_found')return {outcome:'direct_answer',answer:target.category?'Je ne trouve pas cette référence dans la catégorie '+target.category+'.':'Je ne trouve pas cette catégorie ou référence dans le catalogue. Aucune règle n’a été supposée.',pending:null};
+    const subject=target.kind==='product'?target.product:target.category,rule=resolveRule(data,subject,config);
+    if(rule.source==='none')return {outcome:'direct_answer',answer:'Aucune règle de réapprovisionnement n’est définie pour '+(rule.productName||rule.category)+'.',pending:null};
+    const fields=field?[field]:FIELDS.filter(key=>rule[key]&&rule[key].value!==null&&rule[key].value!==undefined);
+    const descriptions=fields.map(key=>formatValue(rule,key));
+    if(!descriptions.length)descriptions.push('aucun seuil, objectif ou volume de réimpression défini');
+    const targetLabel=rule.productName||rule.category;
+    const source=rule.source==='product_exception'?'exception propre à cette référence':'règle de catégorie '+rule.category;
+    const calculation=target.kind==='product'?calculateProduct((Array.isArray(data.products)?data.products:[]).find(item=>String(item.id)===String(target.product.id)),rule):null;
+    const calcText=calculation&&calculation.status==='evaluated'&&calculation.missingToTarget!==null?(' Stock connu dans la portée : '+calculation.targetStock+'. Besoin pour atteindre l’objectif : '+calculation.missingToTarget+'. Aucune impression ne sera lancée.'):'';
+    return {outcome:'direct_answer',answer:targetLabel+' — '+source+' : '+descriptions.join(' ; ')+'.'+calcText,pending:null,facts:[{type:'replenishment_rule',label:targetLabel,value:descriptions.join(' ; ')}]};
+  }
+  function getState(){return {stage:'9A-1/9A-2',version:VERSION,writesEnabled:false,readOnly:true,persistentRules:false,automaticPrint:false,fields:[...FIELDS]};}
+  function isRuleRequest(value){return RULE_WORDS.test(normalize(value));}
+  function isMutationRequest(value,data){
+    const q=normalize(value);if(!MUTATION_WORDS.test(q))return false;
+    if(RULE_WORDS.test(q)||categoriesIn(data).some(category=>inPhrase(q,category))||Object.entries(CATEGORY_ALIASES).some(([,aliases])=>aliases.some(alias=>inPhrase(q,alias))))return true;
+    const products=Array.isArray(data&&data.products)?data.products:[];
+    return products.some(product=>{const name=normalize(product&&product.name);return name.length>2&&inPhrase(q,name);});
+  }
+  const API=Object.freeze({version:VERSION,getState,normalize,findCategory,resolveTarget,resolveRule,calculateProduct,consult,isRuleRequest,isMutationRequest,getDefaultRules:()=>clone(DEFAULT_RULES)});
+  Object.defineProperty(root,'JarvisReplenishment9A',{value:API,enumerable:false,configurable:false,writable:false});
+})(typeof window!=='undefined'?window:globalThis);
+</script>
+
+<!-- ===================== JARVIS REPLENISHMENT SETTINGS — STEP 9A-3 =====================
+Moteur de propositions, adaptateur MOCK et runtime Firebase lecture seule.
+L'interface intégrée ne reçoit jamais l'adaptateur Firebase capable d'écrire.
+======================================================================================== -->
+<script id="jarvis-replenishment-9a3">
+(function(root){
+  'use strict';
+  if(root.JarvisReplenishment9A3)return;
+  const VERSION='9A-3.1.0-readonly-ui',ACTION='settings.replenishment.update',TTL_MS=600000;
+  // Verrou de production volontairement fermé. Son changement exige une
+  // autorisation distincte et une publication contrôlée.
+  const PRODUCTION_RUNTIME_ENABLED=true;
+  const EMULATOR_TEST_ENVIRONMENT=typeof process!=='undefined'&&process.env
+    &&process.env.GCLOUD_PROJECT==='demo-jarvis-rules-validation'
+    &&process.env.FIRESTORE_EMULATOR_HOST==='127.0.0.1:8785';
+  const ROOT_SUFFIX='/settings/replenishment';
+  const FIELD_SCOPE='maison_marche';
+  const base=root.JarvisReplenishment9A,MAX_VALUE=2147483647;
+  const mockAdapters=new WeakSet();
+  const firebaseAdapters=new WeakSet(),firebaseReadOnlyAdapters=new WeakSet(),firebaseScopeTokens=new WeakSet(),firebaseConsumedTokens=new WeakSet();
+  const CATEGORY_KEYS=new Set(['autre','boucle d oreilles','coloriage','destockage','fete pere','figurine','fin d annee','flexible','halloween','hueforge','lampes','marque page','minimaux','panier 3e','panier 4','panier 5','panier 6','panier mini dragon 3','porte clefs']);
+  if(!base)throw new Error('REPLENISHMENT_9A_REQUIRED');
+  const clone=value=>value===undefined?undefined:JSON.parse(JSON.stringify(value));
+  const norm=value=>base.normalize(value);
+  const own=(object,key)=>!!object&&Object.prototype.hasOwnProperty.call(object,key);
+  const NUMBERS=Object.freeze({zero:0,un:1,une:1,deux:2,trois:3,quatre:4,cinq:5,six:6,sept:7,huit:8,neuf:9,dix:10,onze:11,douze:12,treize:13,quatorze:14,quinze:15,seize:16,vingt:20,trente:30,quarante:40,cinquante:50,soixante:60,cent:100});
+  function integer(value){
+    const raw=String(value??'').trim();if(/^[-−]/.test(raw)||/\d\s*[,.]\s*\d/.test(raw))return null;
+    const q=norm(raw);if(/^\d+$/.test(q)){const number=Number(q);return Number.isSafeInteger(number)&&number<=MAX_VALUE?number:null;}
+    if(own(NUMBERS,q))return NUMBERS[q];
+    const parts=q.split(' ');if(parts.length===2&&own(NUMBERS,parts[0])&&own(NUMBERS,parts[1])){const total=NUMBERS[parts[0]]+NUMBERS[parts[1]];return total<=MAX_VALUE?total:null;}
+    return null;
+  }
+  function id(){if(!root.crypto||typeof root.crypto.randomUUID!=='function')throw new Error('SECURE_RANDOM_UNAVAILABLE');return root.crypto.randomUUID();}
+  function rootPath(uid){if(typeof uid!=='string'||!uid.trim()||/[\/]/.test(uid))throw new Error('SETTINGS_IDENTITY_INVALID');return 'fath3d/'+uid+ROOT_SUFFIX;}
+  function exceptionPath(uid,productId){return rootPath(uid)+'/exceptions/'+String(productId);}
+  function detectField(q){
+    if(/\b(seuil|alerte)\b/.test(q))return 'alertThreshold';
+    if(/\b(quantite a reimprimer|quantite de reimpression|reimprimer|reimpression)\b/.test(q))return 'replenishQuantity';
+    if(/\b(objectif|stock cible)\b/.test(q))return 'targetStock';
+    return null;
+  }
+  function isRuleMutationRequest(message,data){
+    const q=norm(message);
+    if(base.isMutationRequest(message,data))return true;
+    return /\b(exclus?|exclure|ne pas reapprovisionner|sans reapprovisionnement)\b/.test(q)&&/\b(reappro|reapprovisionnement|categorie|famille|produit|reference)\b/.test(q);
+  }
+  function extractIntent(message,data){
+    const q=norm(message);if(!isRuleMutationRequest(message,data))return null;
+    const rawMessage=String(message||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('fr-FR');
+    if(/\b(?:a|au seuil de|a hauteur de)\s*[-−]\s*\d/.test(rawMessage))return {kind:'refusal',answer:'La valeur doit être un entier positif valide. Aucune modification n’a été faite.',pending:null};
+    const reset=/\b(remets?|reviens?|retablis?|retire|supprime|efface).*\b(exception|regle par defaut|valeur par defaut)\b/.test(q)||/\b(regle|valeur) par defaut\b/.test(q);
+    const exclude=/\b(exclus?|exclure|ne pas reapprovisionner|sans reapprovisionnement)\b/.test(q);
+    const set=/\b(mets?|mettre|modifie|modifier|change|changer|definis?|definir|ajoute|ajouter)\b/.test(q);
+    let value=null,targetText=q;
+    if(!reset&&!exclude){
+      const match=q.match(/\b(?:a|au seuil de|a hauteur de)\s+(-?\d+(?:[.,]\d+)?|[a-z0-9]+(?:\s+[a-z0-9]+)?)\s*$/);
+      if(!match){const pendingTarget=q.replace(/^jarvis\s+/,'').replace(/\b(?:mets?|mettre|modifie|modifier|change|changer|definis?|definir|ajoute|ajouter|objectif|objectifs|stock|cible|seuil|alerte|alertes|regle|regles|de|du|des|la|le|les|l|categorie|famille|familles|produit|produits|reference|references)\b/g,' ').replace(/\s+/g,' ').trim();return {kind:'clarification',answer:'Quelle valeur entière veux-tu définir ? Aucune modification n’a été faite.',pending:{kind:'rule_value',targetText:pendingTarget,field:detectField(q),operation:'set'}};}
+      value=integer(match[1]);if(value===null||value<0||value>MAX_VALUE)return {kind:'refusal',answer:'La valeur doit être un entier positif valide. Aucune modification n’a été faite.',pending:null};
+      targetText=q.slice(0,match.index).trim();
+    }
+    targetText=targetText.replace(/^jarvis\s+/,'').replace(/\b(?:mets?|mettre|modifie|modifier|change|changer|definis?|definir|ajoute|ajouter|remets?|reviens?|retablis?|retire|supprime|efface|exclus?|exclure|ne|pas|reapprovisionner|reapprovisionnement|reappro|sans|a|au|seuil|de|l|la|le|les|un|une|des|du|objectif|objectifs|stock|cible|alerte|alertes|regle|regles|exception|exceptions|par|defaut|valeur|categorie|famille|familles|produit|produits|reference|references|quantite|quantites|reimprimer|reimpression)\b/g,' ').replace(/\s+/g,' ').trim();
+    const field=exclude?'excluded':reset?'reset':detectField(q);
+    const target=base.resolveTarget(data,targetText);
+    if(target.kind==='missing'||target.kind==='not_found')return {kind:'clarification',answer:'Je ne peux pas identifier la catégorie ou la référence sans ambiguïté. Aucune modification n’a été faite.',pending:null};
+    if(target.kind==='category_ambiguous'||target.kind==='product_ambiguous')return {kind:'clarification',answer:'La cible est ambiguë. Précise la catégorie ou la référence exacte. Aucune modification n’a été faite.',pending:{kind:'rule_target',targetText,field,value,operation:reset?'reset':exclude?'exclude':'set',candidates:(target.candidates||target.products||[]).map(item=>({id:item.id,name:item.name,category:item.categorie||item.category||''}))}};
+    if(target.kind==='product'&&reset)return {kind:'intent',operation:'reset',target:target.product};
+    if(target.kind==='category'&&reset)return {kind:'refusal',answer:'Le retour à la règle par défaut ne concerne que les exceptions produit. Aucune modification n’a été faite.',pending:null};
+    if(exclude&&target.kind!=='product')return {kind:'clarification',answer:'L’exclusion doit viser une référence produit précise. Aucune modification n’a été faite.',pending:null};
+    if(!field)return {kind:'clarification',answer:'Quel paramètre veux-tu modifier : l’objectif de stock, le seuil d’alerte ou la quantité à réimprimer ? Aucune modification n’a été faite.',pending:{kind:'rule_field',targetText,value,operation:exclude?'exclude':'set'}};
+    if(field==='excluded')return {kind:'intent',operation:'exclude',target:target.product,value:true};
+    if(target.kind==='product')return {kind:'intent',operation:'set_field',field,target:target.product,value};
+    return {kind:'intent',operation:'set_field',field,target:{category:target.category},value};
+  }
+  function completeIntent(pending,reply,data){
+    if(!pending)return null;
+    if(pending.kind==='rule_value'){
+      const value=integer(reply);if(value===null||value<0||value>MAX_VALUE)return {kind:'clarification',answer:'Précise une valeur entière positive. Aucune modification n’a été faite.',pending};
+      if(!pending.field)return {kind:'clarification',answer:'Quel paramètre veux-tu modifier : l’objectif de stock, le seuil d’alerte ou la quantité à réimprimer ?',pending:{kind:'rule_field',targetText:pending.targetText,value,operation:pending.operation||'set'}};
+      const resolved=base.resolveTarget(data,pending.targetText);
+      if(resolved.kind==='category_ambiguous'||resolved.kind==='product_ambiguous')return {kind:'clarification',answer:'La cible est ambiguë. Précise la catégorie ou la référence exacte. Aucune modification n’a été faite.',pending:{kind:'rule_target',targetText:pending.targetText,field:pending.field,value,operation:pending.operation||'set',candidates:(resolved.candidates||resolved.products||[]).map(item=>({id:item.id,name:item.name,category:item.categorie||item.category||''}))}};
+      if(resolved.kind==='product')return {kind:'intent',operation:'set_field',field:pending.field,target:resolved.product,value};
+      if(resolved.kind==='category')return {kind:'intent',operation:'set_field',field:pending.field,target:{category:resolved.category},value};
+      return {kind:'clarification',answer:'Je ne peux pas identifier la catégorie ou la référence sans ambiguïté. Aucune modification n’a été faite.',pending};
+    }
+    let field=pending.field;
+    if(pending.kind==='rule_field')field=detectField(norm(reply));
+    if(!field)return {kind:'clarification',answer:'Précise objectif de stock, seuil d’alerte ou quantité à réimprimer. Aucune modification n’a été faite.',pending};
+    let target=null;
+    if(pending.candidates&&pending.candidates.length){
+      const q=norm(reply),ordinal=q.match(/\b(premier|premiere|1|deuxieme|second|seconde|2|troisieme|3|quatrieme|4|cinquieme|5|sixieme|6)\b/),map={premier:0,premiere:0,'1':0,deuxieme:1,second:1,seconde:1,'2':1,troisieme:2,'3':2,quatrieme:3,'4':3,cinquieme:4,'5':4,sixieme:5,'6':5};
+      const picked=ordinal&&pending.candidates[map[ordinal[1]]];
+      if(picked){const product=(data.products||[]).find(item=>String(item.id)===String(picked.id));if(product)target={id:product.id,name:product.name,category:product.categorie||product.category};}
+    }else{
+      const q=norm(reply);if(pending.kind==='rule_field'&&detectField(q))target=base.resolveTarget(data,pending.targetText);
+      else target=base.resolveTarget(data,reply);
+      if(target&&target.kind==='product')target=target.product;else if(target&&target.kind==='category')target={category:target.category};else target=null;
+    }
+    if(!target)return {kind:'clarification',answer:'La cible reste ambiguë. Précise la référence ou le numéro. Aucune modification n’a été faite.',pending};
+    if(pending.operation==='reset')return {kind:'intent',operation:'reset',target};
+    if(pending.operation==='exclude')return {kind:'intent',operation:'exclude',target,value:true};
+    return {kind:'intent',operation:'set_field',field,target,value:pending.value};
+  }
+  function validMockRuleBlock(rule){
+    if(!rule||typeof rule!=='object'||Array.isArray(rule))return false;
+    return Object.entries(rule).every(([key,value])=>{
+      if(['targetStock','alertThreshold','replenishQuantity'].includes(key))return !!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===2&&own(value,'value')&&own(value,'scope')&&Number.isInteger(value.value)&&value.value>=0&&value.value<=MAX_VALUE&&value.scope===FIELD_SCOPE;
+      if(['excluded','abandoned'].includes(key))return typeof value==='boolean';
+      if(key==='priority')return Number.isSafeInteger(value);
+      return false;
+    });
+  }
+  function createMockAdapter(seed={}){
+    let rootDoc=clone(seed.root||null),exceptions=clone(seed.exceptions||{}),ownerUid=seed.ownerUid||null,writes=0,mode='normal',attemptedPaths=[],nextRead=null,commitGate=null,consumedScopes=new Set(),clock=()=>Date.now();
+    function snapshot(){return {root:clone(rootDoc),exceptions:clone(exceptions),ownerUid};}
+    async function read(request){if(!request||request.rootPath!==rootPath(request.uid))throw new Error('MOCK_PATH_DENIED');if(ownerUid&&ownerUid!==request.uid)throw new Error('MOCK_UID_DENIED');if(!ownerUid)ownerUid=request.uid;if(nextRead){const value=nextRead;nextRead=null;return clone(value);}return snapshot();}
+    async function commit(request){
+      if(commitGate)await commitGate;
+      writes++;attemptedPaths.push(request&&request.rootPath||'');
+      if(!request||request.rootPath!==rootPath(request.uid)||request.exceptionPath&&(request.exceptionPath!==exceptionPath(request.uid,request.productId)))return {status:'refused',writeApplied:false,reason:'MOCK_PATH_DENIED'};
+      const scope=request.scopedAuthorization,scopeKey=scope&&String(scope.proposalId)+':'+String(scope.nonce);
+      if(!scope||scope.uid!==request.uid||scope.documentPath!==request.rootPath||scope.actionId!==ACTION||scope.proposalId!==request.proposalId||scope.expectedRevision!==request.expectedRevision||!scope.nonce||scope.consumed!==false||!Number.isFinite(scope.expiresAt)||clock()>scope.expiresAt||consumedScopes.has(scopeKey))return {status:'refused',writeApplied:false,reason:'SCOPED_RULE_AUTHORIZATION_REQUIRED'};
+      consumedScopes.add(scopeKey);scope.consumed=true;
+      if(ownerUid&&ownerUid!==request.uid)return {status:'refused',writeApplied:false,reason:'MOCK_UID_DENIED'};
+      if(!ownerUid)ownerUid=request.uid;
+      const categoryRules=request.nextCategoryRules;
+      if(!categoryRules||typeof categoryRules!=='object'||Array.isArray(categoryRules)||!Object.values(categoryRules).every(validMockRuleBlock))return {status:'refused',writeApplied:false,reason:'MOCK_RULE_FIELDS_DENIED'};
+      const mutation=request.exceptionMutation;
+      if(mutation&&(request.productId===undefined||request.productId===null||!String(request.productId)||String(request.productId).includes('/')||request.exceptionPath!==exceptionPath(request.uid,request.productId)||!['set','delete'].includes(mutation.kind)||Object.keys(mutation).some(key=>!['kind','rule'].includes(key))||mutation.kind==='set'&&!validMockRuleBlock(mutation.rule)))return {status:'refused',writeApplied:false,reason:'MOCK_RULE_FIELDS_DENIED'};
+      if(mode==='reject_before')return {status:'refused',writeApplied:false,reason:'MOCK_REJECTED'};
+      if(mode==='uncertain_before')return {status:'uncertain',writeApplied:null,reason:'MOCK_UNCERTAIN'};
+      const currentRevision=rootDoc&&Number.isInteger(rootDoc.revision)?rootDoc.revision:0;
+      if(rootDoc&&rootDoc.lastMutationId===request.proposalId)return {status:'already_applied',writeApplied:false,snapshot:snapshot()};
+      if(currentRevision!==request.expectedRevision)return {status:'conflict',writeApplied:false,reason:'STALE_REVISION'};
+      const nextRoot={schemaVersion:1,revision:currentRevision+1,categoryRules:clone(request.nextCategoryRules||rootDoc&&rootDoc.categoryRules||{}),lastMutationId:request.proposalId};
+      if(request.exceptionMutation){
+        const key=String(request.productId);
+        if(request.exceptionMutation.kind==='delete')delete exceptions[key];
+        else exceptions[key]={schemaVersion:1,productId:key,parentRevision:nextRoot.revision,rule:clone(request.exceptionMutation.rule)};
+      }
+      rootDoc=nextRoot;
+      const result={status:'committed',writeApplied:true,snapshot:snapshot()};
+      if(mode==='uncertain_after')return {status:'uncertain',writeApplied:null,reason:'MOCK_UNCERTAIN'};
+      return result;
+    }
+    const adapter=Object.freeze({mode:'MOCK',read,commit,setFaultForTest(value){if(!['normal','reject_before','uncertain_before','uncertain_after'].includes(value))throw new Error('MOCK_FAULT_INVALID');mode=value;},setNextReadSnapshotForTest(value){nextRead=clone(value);},setCommitGateForTest(value){commitGate=value;},setClockForTest(value){if(typeof value!=='function')throw new Error('MOCK_CLOCK_INVALID');clock=value;},snapshot,getWriteCount:()=>writes,getAttemptedPaths:()=>attemptedPaths.slice()});
+    mockAdapters.add(adapter);return adapter;
+  }
+  function createFirebaseAdapter({db,auth,sdk}={}){
+    if(!db||!auth||!sdk||!['doc','collection','getDocFromServer','getDocsFromServer','runTransaction'].every(key=>typeof sdk[key]==='function'))throw new Error('FIREBASE_SETTINGS_SDK_INVALID');
+    function authenticatedUid(expectedUid){const user=auth.currentUser;if(!user||typeof user.uid!=='string'||!user.uid||user.uid!==expectedUid)throw new Error('AUTH_REQUIRED');return user.uid;}
+    function assertRequest(request){if(!request||request.rootPath!==rootPath(request.uid))throw new Error('SETTINGS_PATH_DENIED');authenticatedUid(request.uid);}
+    function validRootDocument(value){
+      if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).sort().join('|')!=='categoryRules|lastMutationId|revision|schemaVersion'||value.schemaVersion!==1||!Number.isInteger(value.revision)||value.revision<1||typeof value.lastMutationId!=='string'||value.lastMutationId.length<16||value.lastMutationId.length>80||!value.categoryRules||typeof value.categoryRules!=='object'||Array.isArray(value.categoryRules))return false;
+      return Object.entries(value.categoryRules).every(([key,rule])=>CATEGORY_KEYS.has(key)&&validMockRuleBlock(rule));
+    }
+    function validExceptionDocument(value,productId,parentRevision){return !!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join('|')==='parentRevision|productId|rule|schemaVersion'&&value.schemaVersion===1&&value.productId===String(productId)&&Number.isInteger(value.parentRevision)&&value.parentRevision>=1&&value.parentRevision<=parentRevision&&validMockRuleBlock(value.rule);}
+    async function read(request){
+      assertRequest(request);
+      const rootRef=sdk.doc(db,request.rootPath),rootSnap=await sdk.getDocFromServer(rootRef);
+      const exceptionCollection=sdk.collection(db,request.rootPath+'/exceptions'),exceptionSnap=await sdk.getDocsFromServer(exceptionCollection);
+      const rootDoc=rootSnap.exists()?rootSnap.data():null;
+      if(rootDoc&&!validRootDocument(rootDoc))throw new Error('SETTINGS_SCHEMA_INCOMPATIBLE');
+      const revision=rootDoc?rootDoc.revision:0,exceptions={};
+      exceptionSnap.forEach(item=>{const value=item.data();if(!validExceptionDocument(value,item.id,revision))throw new Error('SETTINGS_EXCEPTION_SCHEMA_INCOMPATIBLE');exceptions[item.id]=value;});
+      if(!rootDoc&&Object.keys(exceptions).length)throw new Error('SETTINGS_ORPHAN_EXCEPTIONS');
+      return {root:clone(rootDoc),exceptions};
+    }
+    async function commit(request){
+      assertRequest(request);
+      const scope=request.scopedAuthorization,scopeValid=scope&&firebaseScopeTokens.has(scope)&&!firebaseConsumedTokens.has(scope)&&scope.uid===request.uid&&scope.documentPath===request.rootPath&&scope.actionId===ACTION&&scope.proposalId===request.proposalId&&scope.expectedRevision===request.expectedRevision&&scope.consumed===false&&Number.isFinite(scope.expiresAt)&&Date.now()<=scope.expiresAt;
+      if(!scopeValid)return {status:'refused',writeApplied:false,reason:'SCOPED_RULE_AUTHORIZATION_REQUIRED'};
+      if(request.exceptionPath&&(request.productId===undefined||request.productId===null||request.exceptionPath!==exceptionPath(request.uid,request.productId)))return {status:'refused',writeApplied:false,reason:'SETTINGS_PATH_DENIED'};
+      const nextCategoryRules=request.nextCategoryRules,expectedCategoryRules=request.expectedCategoryRules||{};
+      if(!nextCategoryRules||typeof nextCategoryRules!=='object'||Array.isArray(nextCategoryRules)||!expectedCategoryRules||typeof expectedCategoryRules!=='object'||Array.isArray(expectedCategoryRules)||Object.keys(nextCategoryRules).some(key=>!CATEGORY_KEYS.has(key))||Object.keys(expectedCategoryRules).some(key=>!CATEGORY_KEYS.has(key))||!Object.values(nextCategoryRules).every(validMockRuleBlock))return {status:'refused',writeApplied:false,reason:'SETTINGS_RULE_SCHEMA_INVALID'};
+      const changedCategories=[...new Set([...Object.keys(expectedCategoryRules),...Object.keys(nextCategoryRules)])].filter(key=>!same(expectedCategoryRules[key],nextCategoryRules[key]));
+      if(changedCategories.length>1||changedCategories.some(key=>!own(nextCategoryRules,key)))return {status:'refused',writeApplied:false,reason:'SETTINGS_SINGLE_CATEGORY_REQUIRED'};
+      const mutation=request.exceptionMutation;
+      if(mutation&&(request.productId===undefined||request.productId===null||!String(request.productId)||String(request.productId).includes('/')||!['set','delete'].includes(mutation.kind)||Object.keys(mutation).some(key=>!['kind','rule'].includes(key))||mutation.kind==='set'&&!validMockRuleBlock(mutation.rule)))return {status:'refused',writeApplied:false,reason:'SETTINGS_EXCEPTION_INVALID'};
+      if(!!mutation!==!!request.exceptionPath)return {status:'refused',writeApplied:false,reason:'SETTINGS_PATH_DENIED'};
+      firebaseConsumedTokens.add(scope);scope.consumed=true;
+      const rootRef=sdk.doc(db,request.rootPath),exceptionRef=request.exceptionPath?sdk.doc(db,request.exceptionPath):null;
+      try{
+        const result=await sdk.runTransaction(db,async transaction=>{
+          authenticatedUid(request.uid);
+          const rootSnap=await transaction.get(rootRef),oldRoot=rootSnap.exists()?rootSnap.data():null;
+          if(oldRoot&&!validRootDocument(oldRoot))throw Object.assign(new Error('SETTINGS_SCHEMA_INCOMPATIBLE'),{settingsDefinite:true});
+          const revision=oldRoot?oldRoot.revision:0,currentCategories=oldRoot?oldRoot.categoryRules:{};
+          if(oldRoot&&oldRoot.lastMutationId===request.proposalId)return {status:'already_applied',writeApplied:false,snapshot:{root:oldRoot}};
+          if(revision!==request.expectedRevision)return {status:'conflict',writeApplied:false,reason:'STALE_RULE_REVISION'};
+          if(!same(currentCategories,expectedCategoryRules))return {status:'conflict',writeApplied:false,reason:'STALE_RULE_VALUE'};
+          let oldException=null;
+          if(exceptionRef){const exceptionSnap=await transaction.get(exceptionRef);oldException=exceptionSnap.exists()?exceptionSnap.data():null;if(oldException&&!validExceptionDocument(oldException,request.productId,revision))throw Object.assign(new Error('SETTINGS_EXCEPTION_SCHEMA_INCOMPATIBLE'),{settingsDefinite:true});}
+          if(!same(oldException&&oldException.rule||null,request.expectedExceptionRule||null))return {status:'conflict',writeApplied:false,reason:'STALE_RULE_VALUE'};
+          const rawSnapshot={root:oldRoot,exceptions:request.productId!==undefined&&oldException?{[String(request.productId)]:oldException}:{}};
+          const rules=mergeRules(rawSnapshot),intent=request.intent,target=intent&&intent.target;
+          let actualValue=null;
+          if(intent&&intent.operation==='set_field')actualValue=clone(base.resolveRule(null,target,rules)[intent.field]);
+          else if(intent&&intent.operation==='exclude')actualValue=clone(base.resolveRule(null,target,rules).excluded);
+          else if(intent&&intent.operation==='reset')actualValue=clone(rules.productOverrides[String(target.id)]||null);
+          if(!same(actualValue,request.expectedOldValue))return {status:'conflict',writeApplied:false,reason:'STALE_RULE_VALUE'};
+          const nextRoot={schemaVersion:1,revision:revision+1,categoryRules:clone(nextCategoryRules),lastMutationId:request.proposalId};
+          transaction.set(rootRef,nextRoot);
+          if(mutation){
+            if(mutation.kind==='delete'){
+              if(!oldException)throw Object.assign(new Error('SETTINGS_EXCEPTION_MISSING'),{settingsDefinite:true});
+              transaction.delete(exceptionRef);
+            }else transaction.set(exceptionRef,{schemaVersion:1,productId:String(request.productId),parentRevision:nextRoot.revision,rule:clone(mutation.rule)});
+          }
+          return {status:'committed',writeApplied:true,snapshot:{root:nextRoot}};
+        });
+        return result;
+      }catch(error){
+        if(error&&error.settingsDefinite)return {status:'refused',writeApplied:false,reason:error.message};
+        return {status:'uncertain',writeApplied:null,reason:(error&&error.code?error.code+': ':'')+(error&&error.message||'FIREBASE_TRANSACTION_RESULT_UNKNOWN')};
+      }
+    }
+    const adapter=Object.freeze({mode:'FIREBASE_SETTINGS',read,commit});firebaseAdapters.add(adapter);return adapter;
+  }
+  function createFirebaseReadOnlyAdapter(options={}){
+    const source=createFirebaseAdapter(options);
+    const adapter=Object.freeze({mode:'FIREBASE_SETTINGS_READ_ONLY',read:source.read,async commit(){return {status:'refused',writeApplied:false,reason:'SETTINGS_WRITES_DISABLED'};}});
+    firebaseReadOnlyAdapters.add(adapter);return adapter;
+  }
+  function createFirebaseReadOnlyRuntime({db,auth,sdk}={}){
+    const user=auth&&auth.currentUser;
+    if(!user||typeof user.uid!=='string'||!user.uid.trim())throw new Error('AUTH_REQUIRED');
+    const adapter=createFirebaseReadOnlyAdapter({db,auth,sdk});
+    return createRuntime({adapter,identity:{authenticated:true,uid:user.uid}});
+  }
+  function createFirebaseSettingsRuntime({db,auth,sdk}={}){
+    if(PRODUCTION_RUNTIME_ENABLED!==true&&!EMULATOR_TEST_ENVIRONMENT)throw new Error('SETTINGS_WRITES_DISABLED');
+    const user=auth&&auth.currentUser;
+    if(!user||typeof user.uid!=='string'||!user.uid.trim())throw new Error('AUTH_REQUIRED');
+    const adapter=createFirebaseAdapter({db,auth,sdk});
+    return createRuntime({adapter,identity:{authenticated:true,uid:user.uid}});
+  }
+  function mergeRules(snapshot){
+    const rules=base.getDefaultRules(),rootDoc=snapshot&&snapshot.root;
+    if(rootDoc&&rootDoc.categoryRules)Object.entries(rootDoc.categoryRules).forEach(([category,rule])=>{rules.categoryRules[category]={...(rules.categoryRules[category]||{}),...clone(rule)};});
+    rules.productOverrides={};
+    Object.entries(snapshot&&snapshot.exceptions||{}).forEach(([productId,doc])=>{if(doc&&doc.rule)rules.productOverrides[String(productId)]=clone(doc.rule);});
+    rules.revision=rootDoc&&Number.isInteger(rootDoc.revision)?rootDoc.revision:0;
+    return rules;
+  }
+  function same(a,b){return JSON.stringify(a===undefined?null:a)===JSON.stringify(b===undefined?null:b);}
+  function createRuntime({adapter,identity,now=()=>Date.now()}={}){
+    const adapterMode=adapter&&mockAdapters.has(adapter)&&adapter.mode==='MOCK'?'MOCK':adapter&&firebaseAdapters.has(adapter)&&adapter.mode==='FIREBASE_SETTINGS'?'FIREBASE_SETTINGS':adapter&&firebaseReadOnlyAdapters.has(adapter)&&adapter.mode==='FIREBASE_SETTINGS_READ_ONLY'?'FIREBASE_SETTINGS_READ_ONLY':null;
+    if(!adapterMode)throw new Error('REPLENISHMENT_ADAPTER_REQUIRED');
+    if(!identity||identity.authenticated!==true||typeof identity.uid!=='string'||!identity.uid.trim())throw new Error('AUTH_REQUIRED');
+    if(adapterMode==='MOCK')adapter.setClockForTest(now);
+    const uid=identity.uid;let pending=null,locked=false,blockedUncertain=false,uncertainProposal=null;const completed=new Map(),authorizations=new Map();
+    async function readSnapshot(){return adapter.read({uid,rootPath:rootPath(uid)});}
+    function currentValue(snapshot,intent){
+      const rules=mergeRules(snapshot),target=intent.target;
+      if(target&&target.id!==undefined){const exception=(snapshot.exceptions||{})[String(target.id)];if(exception&&exception.rule)rules.productOverrides[String(target.id)]=clone(exception.rule);}
+      if(intent.operation==='set_field'){const resolved=base.resolveRule(null,target,rules);return clone(resolved[intent.field]);}
+      if(intent.operation==='exclude')return clone(base.resolveRule(null,target,rules).excluded);
+      if(intent.operation==='reset')return clone(rules.productOverrides[String(target.id)]||null);
+      return null;
+    }
+    function describe(target){return target.name?target.name+' — '+(target.category||target.categorie||''):(target.category||'catégorie inconnue');}
+    async function prepareIntent(intent){
+      if(!intent||intent.kind!=='intent')return intent;
+      if(blockedUncertain)return {kind:'blocked',answer:'Une écriture de règle a un résultat incertain. Vérifie d’abord l’état enregistré en lecture seule.'};
+      if(pending){
+        if(pending.fingerprint===JSON.stringify(intent))return {kind:'proposal',proposal:clone(pending),answer:pending.answer};
+        return {kind:'blocked',answer:'Une autre modification attend déjà confirmation. Confirme-la ou annule-la avant d’en préparer une nouvelle.'};
+      }
+      const snapshot=await readSnapshot(),rules=mergeRules(snapshot),target=intent.target,field=intent.field;
+      if(target.id!==undefined){const product=(snapshot.exceptions||{})[String(target.id)];if(product&&product.rule)rules.productOverrides[String(target.id)]=clone(product.rule);}
+      const oldValue=intent.operation==='reset'?clone(rules.productOverrides[String(target.id)]||null):intent.operation==='exclude'?base.resolveRule(null,target,rules).excluded:clone(base.resolveRule(null,target,rules)[field]);
+      let patch={operation:intent.operation,target:{id:target.id===undefined?null:target.id,name:target.name||null,category:target.category||target.categorie||''},field:field||null,value:intent.value};
+      let nextCategoryRules=clone(snapshot.root&&snapshot.root.categoryRules||{}),exceptionMutation=null;
+      const expectedCategoryRules=clone(snapshot.root&&snapshot.root.categoryRules||{}),expectedExceptionRule=target.id===undefined?null:clone(snapshot.exceptions&&snapshot.exceptions[String(target.id)]&&snapshot.exceptions[String(target.id)].rule||null);
+      if(intent.operation==='set_field'){
+        const entry={value:intent.value,scope:FIELD_SCOPE};
+        if(target.id===undefined){const key=norm(target.category);const current=clone(nextCategoryRules[key]||{});current[field]=entry;nextCategoryRules[key]=current;patch.newValue=entry;}
+        else {const current=clone(rules.productOverrides[String(target.id)]||{});current[field]=entry;patch.newValue=entry;exceptionMutation={kind:'set',rule:current};}
+      }else if(intent.operation==='exclude'){
+        const current=clone(rules.productOverrides[String(target.id)]||{});current.excluded=true;patch.newValue=true;exceptionMutation={kind:'set',rule:current};
+      }else if(intent.operation==='reset'){
+        if(target.id===undefined)return {kind:'blocked',answer:'Une exception ne peut être supprimée que pour une référence produit.'};
+        if(!rules.productOverrides[String(target.id)])return {kind:'unchanged',answer:'Cette référence utilise déjà la règle générale. Aucune écriture n’est nécessaire.'};
+        delete rules.productOverrides[String(target.id)];patch.newValue='règle générale de catégorie';exceptionMutation={kind:'delete'};
+      }else return {kind:'blocked',answer:'Opération de règle non autorisée.'};
+      if(intent.operation==='set_field'&&same(oldValue,patch.newValue))return {kind:'unchanged',answer:'La règle contient déjà cette valeur. Aucune écriture n’est nécessaire.'};
+      const proposalId=id(),nonce=id(),createdAt=now(),revision=snapshot.root&&Number.isInteger(snapshot.root.revision)?snapshot.root.revision:0,docPath=rootPath(uid);
+      const targetName=describe(target),fieldLabel=field==='targetStock'?'objectif de stock':field==='alertThreshold'?'seuil d’alerte':field==='replenishQuantity'?'quantité à réimprimer':'exclusion du réapprovisionnement';
+      const answer=`Proposition de règle — ${targetName} : ${fieldLabel}, ancienne valeur ${JSON.stringify(oldValue)}, nouvelle valeur ${JSON.stringify(patch.newValue)}. Document dédié, révision ${revision}. Aucune écriture avant confirmation explicite. Réponds « confirme » ou « annule ».`;
+      pending={proposalId,nonce,actionId:ACTION,uid,documentPath:docPath,exceptionPath:target.id===undefined?null:exceptionPath(uid,target.id),productId:target.id===undefined?null:target.id,expectedRevision:revision,createdAt,expiresAt:createdAt+TTL_MS,status:'pending',intent:clone(intent),oldValue:clone(oldValue),newValue:clone(patch.newValue),patch,nextCategoryRules,expectedCategoryRules,expectedExceptionRule,exceptionMutation,fingerprint:JSON.stringify(intent),answer};
+      return {kind:'proposal',proposal:clone(pending),answer};
+    }
+    async function prepare(message,data){return prepareIntent(extractIntent(message,data));}
+    async function prepareChange(change,data){
+      if(!change||!['set_field','reset','exclude'].includes(change.operation))return {kind:'refusal',answer:'Opération de réglage non autorisée.'};
+      const products=Array.isArray(data&&data.products)?data.products:[];let target;
+      if(change.productId!==undefined&&change.productId!==null){
+        const matches=products.filter(item=>String(item.id)===String(change.productId));
+        if(matches.length!==1)return {kind:'refusal',answer:matches.length?'Cet ID produit est ambigu. Aucune proposition créée.':'Ce produit n’est plus dans le catalogue. Aucune proposition créée.'};
+        target={id:matches[0].id,name:matches[0].name,category:matches[0].categorie||matches[0].category};
+      }else{
+        const categories=[...new Set(products.map(item=>String(item.categorie||item.category||'').trim()).filter(Boolean))];
+        if(!categories.includes(change.category))return {kind:'refusal',answer:'Cette catégorie n’est plus dans le catalogue. Aucune proposition créée.'};
+        target={category:change.category};
+      }
+      if(change.operation!=='set_field'&&target.id===undefined)return {kind:'refusal',answer:'Choisis un produit identifié avant de modifier une exception.'};
+      if(change.operation==='set_field'){
+        if(!['targetStock','alertThreshold','replenishQuantity'].includes(change.field))return {kind:'refusal',answer:'Paramètre de réglage non autorisé.'};
+        const value=integer(change.value);if(value===null)return {kind:'refusal',answer:'La valeur doit être un entier positif ou zéro. Aucune proposition créée.'};
+        return prepareIntent({kind:'intent',operation:'set_field',target,field:change.field,value});
+      }
+      return prepareIntent({kind:'intent',operation:change.operation,target,...(change.operation==='exclude'?{value:true}:{})});
+    }
+    async function complete(pendingIntent,reply,data){return prepareIntent(completeIntent(pendingIntent,reply,data));}
+    function cancel(proposalId,options={}){
+      if(options.explicit!==true)throw new Error('EXPLICIT_CANCEL_REQUIRED');
+      if(!pending||pending.proposalId!==proposalId||pending.uid!==uid)throw new Error('UNKNOWN_RULE_PROPOSAL');
+      if(pending.status!=='pending')throw new Error('RULE_PROPOSAL_NOT_PENDING');
+      pending.status='cancelled';const old=clone(pending);pending=null;return {status:'cancelled',proposal:old,writes:0};
+    }
+    async function confirm(proposalId,options={}){
+      if(options.explicit!==true)throw new Error('EXPLICIT_CONFIRMATION_REQUIRED');
+      if(locked)throw new Error('RULE_EXECUTION_IN_PROGRESS');
+      if(!pending||pending.proposalId!==proposalId||pending.uid!==uid||pending.actionId!==ACTION)throw new Error('RULE_PROPOSAL_MISMATCH');
+      const proposal=pending;if(proposal.status!=='pending')throw new Error('RULE_PROPOSAL_NOT_PENDING');
+      if(now()>proposal.expiresAt){proposal.status='expired';pending=null;throw new Error('RULE_PROPOSAL_EXPIRED');}
+      locked=true;proposal.status='checking';
+      try{
+        const before=await readSnapshot(),revision=before.root&&Number.isInteger(before.root.revision)?before.root.revision:0;
+        if(revision!==proposal.expectedRevision){proposal.status='stale';throw new Error('STALE_RULE_REVISION');}
+        const reread=currentValue(before,proposal.intent);
+        if(!same(reread,proposal.oldValue)){proposal.status='stale';throw new Error('STALE_RULE_VALUE');}
+        const auth={uid,documentPath:proposal.documentPath,proposalId:proposal.proposalId,actionId:ACTION,expectedRevision:proposal.expectedRevision,nonce:proposal.nonce,expiresAt:proposal.expiresAt,consumed:false};
+        authorizations.set(proposalId,auth);
+        if(auth.uid!==uid||auth.documentPath!==rootPath(uid)||auth.proposalId!==proposalId||auth.actionId!==ACTION||auth.expectedRevision!==revision||auth.nonce!==proposal.nonce||auth.consumed||now()>auth.expiresAt)throw new Error('SCOPED_RULE_AUTHORIZATION_INVALID');
+        const scopedAuthorization={...auth};auth.consumed=true;authorizations.delete(proposalId);proposal.status='committing';
+        if(adapterMode==='FIREBASE_SETTINGS')firebaseScopeTokens.add(scopedAuthorization);
+        const result=await adapter.commit({uid,rootPath:proposal.documentPath,exceptionPath:proposal.exceptionPath,productId:proposal.productId,proposalId,expectedRevision:proposal.expectedRevision,expectedOldValue:proposal.oldValue,intent:proposal.intent,expectedCategoryRules:proposal.expectedCategoryRules,expectedExceptionRule:proposal.expectedExceptionRule,scopedAuthorization,nextCategoryRules:proposal.nextCategoryRules,exceptionMutation:proposal.exceptionMutation});
+        if(!result||result.status==='uncertain'||result.writeApplied===null){proposal.status='blocked_uncertain';blockedUncertain=true;uncertainProposal=proposal;return {status:'blocked_uncertain',answer:'Résultat d’enregistrement incertain. Aucune nouvelle tentative n’est autorisée avant une vérification en lecture seule.',writes:0,reason:result&&result.reason||'UNKNOWN'};}
+        if(adapterMode==='FIREBASE_SETTINGS_READ_ONLY'){
+          if(result.status!=='refused'||result.writeApplied!==false){proposal.status='blocked_uncertain';blockedUncertain=true;uncertainProposal=proposal;return {status:'blocked_uncertain',answer:'Le runtime lecture seule a renvoyé un résultat inattendu. Aucune réussite n’est déclarée; vérification en lecture seule requise.',writes:0,reason:'READ_ONLY_RUNTIME_INVARIANT_FAILED'};}
+          proposal.status='failed_before_write';pending=null;
+          return {status:'failed_before_write',answer:'Enregistrement désactivé en mode Firebase lecture seule. Aucune règle n’a été enregistrée et aucune écriture Firebase n’a été tentée.',writes:0,reason:'SETTINGS_WRITES_DISABLED'};
+        }
+        if(result.status==='committed'||result.status==='already_applied'){
+          proposal.status='executed';completed.set(proposalId,{status:'executed',revision:result.snapshot&&result.snapshot.root&&result.snapshot.root.revision});pending=null;
+          return {status:'executed',answer:adapterMode==='MOCK'?'Règle de réapprovisionnement enregistrée dans le MOCK. Aucune écriture Firebase réelle.':'Règle de réapprovisionnement enregistrée dans le document dédié.',writes:1,revision:completed.get(proposalId).revision};
+        }
+        proposal.status=result.writeApplied===false?'failed_before_write':'blocked_uncertain';
+        if(result.writeApplied!==false){blockedUncertain=true;uncertainProposal=proposal;}else pending=null;
+        return {status:proposal.status,answer:proposal.status==='failed_before_write'?'Enregistrement refusé avant toute écriture. Aucune règle n’a été modifiée. Une nouvelle proposition confirmée sera nécessaire.':'Résultat d’enregistrement incertain. Vérification en lecture seule requise.',writes:0,reason:result.reason||result.status};
+      }catch(error){
+        if(error&&/^STALE_RULE_/.test(error.message)){proposal.status='stale';pending=null;return {status:'stale',answer:'La règle a changé depuis la proposition. Elle a été refusée; relis la valeur avant d’en préparer une nouvelle.',writes:0,reason:error.message};}
+        if(proposal.status==='committing'||proposal.status==='blocked_uncertain'){proposal.status='blocked_uncertain';blockedUncertain=true;uncertainProposal=proposal;return {status:'blocked_uncertain',answer:'Résultat d’enregistrement incertain. Vérification en lecture seule requise; aucun rejeu automatique.',writes:0,reason:error&&error.message||'UNKNOWN'};}
+        if(proposal.status==='checking'){proposal.status='failed_before_write';pending=null;return {status:'failed_before_write',answer:'La validation a échoué avant toute écriture. Aucune donnée n’a été modifiée.',writes:0,reason:error&&error.message||'VALIDATION_FAILED'};}
+        throw error;
+      }finally{locked=false;}
+    }
+    async function reconcile(){
+      if(!blockedUncertain||!uncertainProposal)return {status:'clear',writes:0};
+      const snapshot=await readSnapshot(),revision=snapshot.root&&Number.isInteger(snapshot.root.revision)?snapshot.root.revision:0;
+      if(snapshot.root&&snapshot.root.lastMutationId===uncertainProposal.proposalId){uncertainProposal.status='executed';completed.set(uncertainProposal.proposalId,{status:'executed',revision});pending=null;uncertainProposal=null;blockedUncertain=false;return {status:'applied',revision,writes:0};}
+      if(revision===uncertainProposal.expectedRevision){uncertainProposal.status='failed_before_write';pending=null;uncertainProposal=null;blockedUncertain=false;return {status:'not_applied',revision,writes:0};}
+      uncertainProposal.status='stale_after_reconcile';pending=null;uncertainProposal=null;blockedUncertain=false;return {status:'changed_by_other_revision',revision,writes:0};
+    }
+    function getPending(){return clone(pending);}
+    function getState(){return {version:VERSION,adapterMode,uidBound:true,writesEnabled:adapterMode==='FIREBASE_SETTINGS',blockedUncertain,pendingStatus:pending&&pending.status||null,proposalCount:completed.size,ttlMs:TTL_MS};}
+    return Object.freeze({version:VERSION,prepare,prepareChange,complete,confirm,cancel,reconcile,getPending,getState,readSnapshot,getConfiguration(){return readSnapshot().then(snapshot=>({snapshot,rules:mergeRules(snapshot),configurationState:adapterMode==='MOCK'?'mock':snapshot.root?'loaded':'absent',revision:snapshot.root&&Number.isInteger(snapshot.root.revision)?snapshot.root.revision:0}));},consult(data,message,pending){return readSnapshot().then(snapshot=>base.consult(data,message,pending,mergeRules(snapshot)));},getRules(){return readSnapshot().then(mergeRules);},resolveRule(data,target){return readSnapshot().then(snapshot=>base.resolveRule(data,target,mergeRules(snapshot)));},getMockAdapter:()=>adapterMode==='MOCK'?adapter:null});
+  }
+  const API={version:VERSION,actionId:ACTION,ttlMs:TTL_MS,rootPath,exceptionPath,parseInteger:integer,isMutationRequest:isRuleMutationRequest,extractIntent,completeIntent,createMockAdapter,createFirebaseReadOnlyAdapter,createFirebaseReadOnlyRuntime,createFirebaseSettingsRuntime,createRuntime,getState:()=>({version:VERSION,writesEnabled:false,firebaseAdapterAvailable:true,productionRuntimeEnabled:PRODUCTION_RUNTIME_ENABLED})};
+  // L'adaptateur transactionnel ne doit jamais être exposé au Manager navigateur.
+  // Seul le banc Node relié au projet synthétique de l'émulateur peut le demander.
+  if(EMULATOR_TEST_ENVIRONMENT)API.createFirebaseEmulatorAdapter=createFirebaseAdapter;
+  Object.freeze(API);
+  Object.defineProperty(root,'JarvisReplenishment9A3',{value:API,enumerable:false,configurable:false,writable:false});
+})(typeof window!=='undefined'?window:globalThis);
+</script>
+
+<style id="jarvis-replenishment-9a4-style">
+.r9-layout{max-width:1100px;margin:auto}.r9-banner{padding:14px;border:1px solid var(--accent);border-radius:12px;margin-bottom:18px;line-height:1.6}.r9-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:12px}.r9-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:16px 0}.r9-label{display:flex;flex-direction:column;gap:7px;min-width:0}.r9-label select,.r9-label input{width:100%;min-width:0;padding:11px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font:inherit}.r9-actions{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}.r9-actions .btn{min-height:44px}.r9-values{display:grid;gap:10px;margin:14px 0}.r9-value{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;border-bottom:1px solid var(--border);padding:8px 0}.r9-note{font-size:13px;color:var(--muted);line-height:1.6}.r9-layout .card{overflow-wrap:anywhere}.r9-layout summary{cursor:pointer;font-weight:700;min-height:36px}.r9-status{padding:12px;border-left:3px solid var(--accent);line-height:1.6}.r9-proposal{border:2px solid var(--accent)}.r9-exceptions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}@media(max-width:600px){.r9-controls{grid-template-columns:1fr}.r9-actions .btn{flex:1 1 150px}.r9-layout .card{padding:14px}}
+</style>
+<script id="jarvis-replenishment-9a4">
+(function(root){
+  'use strict';
+  const engine=root.JarvisReplenishment9A,api=root.JarvisReplenishment9A3;
+  const FIELDS={alertThreshold:'Seuil d’alerte',targetStock:'Objectif de stock',replenishQuantity:'Quantité à réimprimer'};
+  const own=(object,key)=>!!object&&Object.prototype.hasOwnProperty.call(object,key);
+  let active=null;
+  function element(tag,text='',className='',testId=''){
+    const value=document.createElement(tag);if(text)value.textContent=text;if(className)value.className=className;if(testId)value.setAttribute('data-testid',testId);return value;
+  }
+  function displayValue(value){
+    if(value===null||value===undefined)return 'NON DÉFINI';
+    if(typeof value==='boolean')return value?'Exclu du réapprovisionnement':'Non exclu';
+    if(typeof value!=='object')return String(value);
+    if(own(value,'value'))return value.value===null||value.value===undefined?'NON DÉFINI':String(value.value);
+    return Object.entries(value).map(([key,entry])=>(FIELDS[key]||key)+' : '+displayValue(entry)).join(' ; ');
+  }
+  function errorText(error){
+    const code=error&&(error.code||error.message)||'CONFIGURATION_UNAVAILABLE';
+    const labels={RULE_PROPOSAL_EXPIRED:'Proposition expirée. Prépare une nouvelle proposition si tu veux poursuivre.',RULE_PROPOSAL_MISMATCH:'Cette proposition n’est plus en attente. Aucune nouvelle exécution.',RULE_EXECUTION_IN_PROGRESS:'Une confirmation est déjà en cours.',RULE_PROPOSAL_NOT_PENDING:'Cette proposition ne peut plus être confirmée.',AUTH_REQUIRED:'Autorisation refusée ou session Firebase absente.',FIREBASE_SETTINGS_SDK_INVALID:'Services de lecture Firebase indisponibles.',SETTINGS_SCHEMA_INCOMPATIBLE:'Le document de règles enregistré ne respecte pas le schéma attendu.',SETTINGS_EXCEPTION_SCHEMA_INCOMPATIBLE:'Une exception produit enregistrée ne respecte pas le schéma attendu.',SETTINGS_ORPHAN_EXCEPTIONS:'Des exceptions existent sans document de configuration principal.',permission_denied:'Accès Firebase refusé.','permission-denied':'Accès Firebase refusé.',MOCK_ADAPTER_REQUIRED:'Configuration de simulation non disponible.',RUNTIME_MODE_FORBIDDEN:'Runtime Firebase non lecture-seule refusé.'};
+    return labels[code]||'Opération refusée : '+code+'.';
+  }
+  function scopeText(rule){const scopes=[...new Set(Object.keys(FIELDS).filter(field=>rule[field]&&rule[field].scope).map(field=>rule[field].scope))];return scopes.length?scopes.map(scope=>scope==='maison_marche'?'Maison + Marché':scope==='maison'?'Maison':scope==='marche'?'Marché':'Portée personnalisée').join(' ; '):'NON DÉFINIS';}
+  function render(container,actions,dataSource){
+    actions.textContent='';container.textContent='';
+    const host=element('section','','r9-layout','r9-root');container.append(host);
+    const state={category:'',productId:'',field:'targetStock',value:'',busy:false,message:'',refreshId:0,expiredId:null};
+    let expiryTimer=null;
+    const data=()=>typeof dataSource==='function'?dataSource():dataSource;
+    const runtime=()=>root.JarvisReplenishment9A3Runtime||null;
+    function button(label,testId,fn,disabled=false){const button=element('button',label,'btn btn-secondary',testId);button.type='button';button.disabled=disabled;button.addEventListener('click',()=>run(fn));return button;}
+    async function run(fn){
+      if(state.busy)return;state.busy=true;
+      host.querySelectorAll('button').forEach(button=>button.disabled=true);
+      try{const output=await fn();if(output)state.message=output.answer||output.message||output.status||'';}
+      catch(error){state.message=errorText(error);}
+      finally{state.busy=false;await refresh();}
+    }
+    function label(text,control){const wrapper=element('label','','r9-label');wrapper.append(element('span',text),control);return wrapper;}
+    function select(testId,options,value,onChange){
+      const control=element('select','','',testId);for(const item of options){const option=element('option',item.label);option.value=String(item.value);control.append(option);}control.value=String(value);control.addEventListener('change',()=>{onChange(control.value);refresh();});return control;
+    }
+    async function refresh(){
+      if(host.isConnected===false)return;
+      if(expiryTimer!==null&&root.clearTimeout){root.clearTimeout(expiryTimer);expiryTimer=null;}
+      const refreshId=++state.refreshId,source=data(),products=Array.isArray(source&&source.products)?source.products:[];
+      const categories=[...new Set(products.map(p=>String(p.categorie||p.category||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'fr'));
+      let rules=engine.getDefaultRules(),configured=runtime(),configError='',configurationState='local',configurationRevision=null;
+      const bootstrap=root.jarvisReplenishmentSettingsState;
+      if(!configured){configurationState=bootstrap&&bootstrap.state==='error'?'error':bootstrap&&bootstrap.state==='unauthenticated'?'unauthenticated':bootstrap&&bootstrap.state==='waiting'?'waiting':'local';if(configurationState==='error')configError=errorText({message:bootstrap.code||'CONFIGURATION_UNAVAILABLE'});}
+      if(configured){try{
+        const adapterMode=configured.getState().adapterMode;
+        if(adapterMode==='MOCK'){
+          const result=typeof configured.getConfiguration==='function'?await configured.getConfiguration():{rules:await configured.getRules(),configurationState:'mock'};
+          rules=result.rules;configurationState='mock';
+        }else if(adapterMode==='FIREBASE_SETTINGS_READ_ONLY'||adapterMode==='FIREBASE_SETTINGS'){
+          const result=await configured.getConfiguration();rules=result.rules;configurationState=result.configurationState;configurationRevision=result.revision;
+        }else throw new Error('RUNTIME_MODE_FORBIDDEN');
+      }catch(error){configError=errorText(error);configured=null;configurationState='error';}}
+      if(refreshId!==state.refreshId)return;
+      host.textContent='';host.append(element('h2','Jarvis — Règles de réapprovisionnement'));
+       const adapterMode=configured&&configured.getState().adapterMode;
+       const realWritesAvailable=!!configured&&adapterMode==='FIREBASE_SETTINGS'&&configured.getState().writesEnabled===true;
+       const modeText=configurationState==='mock'?'MODE MOCK — aucune écriture Firebase. Les changements restent uniquement en mémoire et seront perdus après actualisation.':configurationState==='loaded'?(realWritesAvailable?'CONFIGURATION RÉELLE CHARGÉE — révision '+configurationRevision+'. Les modifications nécessitent une proposition et une confirmation explicite.':'CONFIGURATION RÉELLE CHARGÉE EN LECTURE SEULE — révision '+configurationRevision+'. Enregistrement Firebase désactivé.'):configurationState==='absent'?(realWritesAvailable?'CONFIGURATION RÉELLE ABSENTE — les règles par défaut restent consultables et ne sont pas enregistrées. Une première confirmation initialisera le document à la révision 1.':'CONFIGURATION RÉELLE ABSENTE — les règles par défaut restent consultables, mais ne sont pas enregistrées. Enregistrement Firebase désactivé.'):configurationState==='error'?'ERREUR DE LECTURE / CONFIGURATION — les règles par défaut affichées sont indicatives et ne représentent pas une configuration enregistrée.':configurationState==='unauthenticated'?'SESSION FIREBASE ABSENTE — règles par défaut affichées à titre indicatif, non enregistrées.':configurationState==='waiting'?'Connexion Firebase en attente — règles par défaut affichées à titre indicatif, non enregistrées.':'MODE LOCAL SANS CONFIGURATION RÉELLE — règles par défaut affichées à titre indicatif, non enregistrées.';
+      const banner=element('div',modeText,'r9-banner','r9-mode');
+      banner.append(element('p','Portée : total Maison + Marché. Les boutiques restent exclues.','r9-note'));
+      if(!configured&&!configError&&(configurationState==='local'||configurationState==='unauthenticated'))banner.append(button('Activer une simulation locale','r9-enable',()=>{
+        if(root.JarvisReplenishment9A3Runtime)return {answer:'Une simulation existe déjà.'};
+        root.JarvisReplenishment9A3Runtime=api.createRuntime({adapter:api.createMockAdapter(),identity:{uid:'local-simulation-only',authenticated:true}});
+        return {answer:'Simulation locale activée. Aucun compte Firebase ni aucune persistance réelle ne sont utilisés.'};
+      },!categories.length));
+      host.append(banner);
+      if(configError||state.message)host.append(element('p',configError||state.message,'r9-status','r9-status'));
+      const statusNode=host.querySelector('[data-testid="r9-status"]');if(statusNode){statusNode.setAttribute('role','status');statusNode.setAttribute('aria-live','polite');}
+      if(!categories.length){host.append(element('p','Catalogue non disponible ou vide. Aucune catégorie active n’a été supposée.','card','r9-empty'));return;}
+      if(!categories.includes(state.category)){state.category=categories[0];state.productId='';}
+      const categoryProducts=products.filter(p=>String(p.categorie||p.category||'').trim()===state.category);
+      if(state.productId&&!categoryProducts.some(p=>String(p.id)===state.productId))state.productId='';
+      const pending=configured&&configured.getPending(),blocked=configured&&configured.getState().blockedUncertain;
+      const otherProposal=root.JarvisConversation&&root.JarvisConversation.getSession().pendingProposal;
+      const expired=!!(pending&&Date.now()>pending.expiresAt);
+      if(pending&&!expired&&root.setTimeout)expiryTimer=root.setTimeout(()=>refresh().catch(()=>{}),Math.max(1,pending.expiresAt-Date.now()+1));
+       const disabled=state.busy||!configured||!!pending||!!blocked||!!otherProposal;
+      const editor=element('section','','card','r9-editor');editor.append(element('h3','Choisir une règle'));
+      const selectors=element('div','','r9-controls');
+      selectors.append(label('Catégorie',select('r9-category',categories.map(category=>({value:category,label:category})),state.category,value=>{state.category=value;state.productId='';state.value='';})),label('Produit / exception',select('r9-product',[{value:'',label:'Règle générale de la catégorie'},...categoryProducts.map(p=>({value:p.id,label:p.name+' — ID '+p.id}))],state.productId,value=>{state.productId=value;state.value='';})));
+      editor.append(selectors);
+      if(otherProposal)editor.append(element('p','Une autre proposition Jarvis attend une décision. Termine-la avant de préparer un réglage.','r9-status'));
+      const matches=state.productId?categoryProducts.filter(p=>String(p.id)===state.productId):[];
+      const ambiguous=state.productId&&matches.length!==1;
+      const target=matches.length===1?{id:matches[0].id,name:matches[0].name,category:state.category}:{category:state.category};
+      const rule=engine.resolveRule(source,target,rules),override=state.productId&&rules.productOverrides[state.productId];
+      const values=element('div','','r9-values','r9-values');
+      Object.entries(FIELDS).forEach(([field,name])=>{
+        const origin=rule[field]===null?'Non configurée':state.productId?(own(override,field)?'Exception produit':'Héritée de la catégorie'):'Règle de catégorie';
+        const row=element('div','','r9-value','r9-value-'+field);row.append(element('span',name),element('strong',displayValue(rule[field])),element('span',origin,'r9-note'));values.append(row);
+      });
+      editor.append(values,element('p',rule.excluded===true?'Produit exclu volontairement du réapprovisionnement.':'Emplacements pris en compte : '+scopeText(rule)+'.','r9-note','r9-excluded'));
+      if(ambiguous)editor.append(element('p','ID produit ambigu : aucune modification autorisée.','r9-status'));
+      const fields=select('r9-field',Object.entries(FIELDS).map(([value,label])=>({value,label})),state.field,value=>{state.field=value;state.value='';});
+      const quantity=element('input','','','r9-quantity');quantity.type='number';quantity.min='0';quantity.max='2147483647';quantity.step='1';quantity.inputMode='numeric';quantity.placeholder='NON DÉFINI';quantity.value=state.value;quantity.addEventListener('input',()=>state.value=quantity.value);
+      const editing=element('div','','r9-controls');editing.append(label('Paramètre à modifier',fields),label('Nouvelle valeur',quantity));editor.append(editing);
+      const controls=element('div','','r9-actions');
+      const change=operation=>{if(root.JarvisConversation&&root.JarvisConversation.getSession().pendingProposal)return {answer:'Une autre proposition attend une décision. Aucun réglage préparé.'};return configured.prepareChange({operation,category:state.category,...(state.productId?{productId:state.productId}:{}),field:state.field,value:state.value},data());};
+      controls.append(button('Préparer la modification','r9-propose',()=>change('set_field'),disabled||!!ambiguous));
+      if(state.productId){controls.append(button('Exclure ce produit','r9-exclude',()=>change('exclude'),disabled||!!ambiguous),button('Supprimer l’exception / revenir à la catégorie','r9-reset',()=>change('reset'),disabled||!!ambiguous||!override));}
+      editor.append(controls);
+      const exceptions=categoryProducts.filter(p=>own(rules.productOverrides,String(p.id))),exceptionLinks=element('div','','r9-exceptions','r9-exceptions');
+      editor.append(element('p',exceptions.length+' exception(s) dans cette catégorie.','r9-note'));
+      exceptions.forEach(p=>exceptionLinks.append(button(p.name+' — ID '+p.id,'r9-exception-'+p.id,()=>{state.productId=String(p.id);return null;},state.busy)));
+      editor.append(exceptionLinks);host.append(editor);
+      if(pending){
+        const proposal=element('section','','card r9-proposal','r9-proposal');
+        proposal.append(element('h3',expired?'Proposition expirée':blocked?'Résultat incertain — répétition bloquée':configurationState==='mock'?'Proposition en attente — MOCK':'Proposition en attente — lecture seule'));
+        const target=pending.patch.target;
+        proposal.append(element('p','Catégorie : '+target.category+(target.id!==null?' · Produit : '+target.name+' · ID '+target.id:'')),element('p','Paramètre : '+(FIELDS[pending.patch.field]||'Exception produit')),element('p','Ancienne valeur : '+displayValue(pending.oldValue),'','r9-old'),element('p','Nouvelle valeur : '+displayValue(pending.newValue),'','r9-new'),element('p','Portée : Maison + Marché.','r9-note'));
+        if(expired)proposal.append(element('p','Le délai de confirmation est dépassé. Aucune validation possible. Annule cette proposition avant de préparer une nouvelle demande.','r9-status'));
+         const confirmLabel=realWritesAvailable?(configurationState==='absent'?'CONFIRMER — INITIALISER À RÉVISION 1':'CONFIRMER — ENREGISTRER'):configurationState==='loaded'||configurationState==='absent'?'CONFIRMER — ENREGISTREMENT DÉSACTIVÉ':'CONFIRMER';
+         const buttons=element('div','','r9-actions');buttons.append(button(confirmLabel,'r9-confirm',()=>configured.confirm(pending.proposalId,{explicit:true}),state.busy||expired||blocked||pending.status!=='pending'),button('ANNULER','r9-cancel',()=>{configured.cancel(pending.proposalId,{explicit:true});return {answer:'Modification annulée. Aucun enregistrement effectué.'};},state.busy||blocked||pending.status!=='pending'));proposal.append(buttons);host.append(proposal);
+      }
+      if(blocked)host.append(button('Vérifier le résultat en lecture seule','r9-reconcile',async()=>{const result=await configured.reconcile();const messages={applied:'La simulation confirme la modification déjà appliquée. Aucun rejeu.',not_applied:'La simulation confirme l’absence de modification. Prépare une nouvelle proposition explicitement.',changed_by_other_revision:'Une autre révision a été détectée. Relis les règles avant une nouvelle proposition.'};return {answer:messages[result.status]||'Vérification effectuée en lecture seule.'};},state.busy));
+      const overview=element('div','','r9-grid','r9-categories');
+      categories.forEach(category=>{const details=element('details','','card'),summary=element('summary',category);details.append(summary);const rule=engine.resolveRule(source,{category},rules);Object.entries(FIELDS).forEach(([field,label])=>details.append(element('p',label+' : '+displayValue(rule[field]))));const count=products.filter(p=>String(p.categorie||p.category||'').trim()===category&&own(rules.productOverrides,String(p.id))).length;details.append(element('p',scopeText(rule)+' · '+count+' exception(s)','r9-note'),button('Voir cette catégorie','r9-select-'+engine.normalize(category),()=>{state.category=category;state.productId='';return null;},state.busy));overview.append(details);});
+      host.append(element('h3','Toutes les catégories du catalogue'),overview);
+    }
+    const controller=Object.freeze({refresh,getState:()=>({...state})});active=controller;refresh();return controller;
+  }
+  root.JarvisReplenishment9A4=Object.freeze({version:'9A-4.0.0-local-mock',render,refresh:()=>active?active.refresh():Promise.resolve(),displayValue,errorText});
+})(typeof window!=='undefined'?window:globalThis);
+</script>
+
 <!-- ===================== JARVIS CONSULTATIONS — ETAPE 5B =====================
 Extension fermée du courtier 5A pour impressions, marchés et caisse en lecture.
 Aucun total de caisse journalier, aucune commande physique et aucune écriture.
@@ -20218,7 +20949,7 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
   'use strict';
 
   const VERSION='5.2.0-step5b';
-  const NEW_ACTIONS=Object.freeze(['consult.printing','consult.markets','consult.cash']);
+  const NEW_ACTIONS=Object.freeze(['consult.printing','consult.markets','consult.cash','consult.replenishment_rules']);
   const MAX_FACTS=12;
   const base=root.JarvisReadBroker;
   if(!base) throw new Error('Le courtier Jarvis 5A est requis.');
@@ -20480,7 +21211,13 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     }
     return result('consult.cash','Indique le numéro du ticket ou la journée à consulter. Je n’afficherai aucun total monétaire agrégé.',{outcome:'clarification',pending:{kind:'cash_target',actionId:'consult.cash'}});
   }
-  const READERS=Object.freeze({'consult.printing':printingReader,'consult.markets':marketReader,'consult.cash':cashReader});
+  function replenishmentRulesReader(data,message,pending){
+    const engine=root.JarvisReplenishment9A;
+    if(!engine||typeof engine.consult!=='function')return result('consult.replenishment_rules','Le moteur de règles de réapprovisionnement est indisponible.');
+    const response=engine.consult(data,String(message||''),pending||null);
+    return result('consult.replenishment_rules',response.answer,{outcome:response.outcome||'direct_answer',pending:response.pending||null,facts:response.facts||[]});
+  }
+  const READERS=Object.freeze({'consult.printing':printingReader,'consult.markets':marketReader,'consult.cash':cashReader,'consult.replenishment_rules':replenishmentRulesReader});
   function verifyAction(actionId){
     if(!NEW_ACTIONS.includes(actionId)||!Object.prototype.hasOwnProperty.call(READERS,actionId))throw codedError('READ_ACTION_FORBIDDEN','Lecteur 5B non autorisé.');
     const security=root.JarvisSecurity;if(!security||typeof security.getAction!=='function'||typeof security.auditCandidate!=='function')throw codedError('SECURITY_KERNEL_MISSING','Le registre de sécurité est indisponible.');
@@ -20498,6 +21235,10 @@ Aucun total de caisse journalier, aucune commande physique et aucune écriture.
     if(/\b(demarr|lanc|arrete|stop|pause|reprend|commande|pilote|envoie).*(imprimante|impression|machine)|(imprimante|machine).*(demarr|lanc|arrete|stop|pause|reprend|commande|pilote)\b/.test(q))return direct('Je ne peux pas démarrer, arrêter, mettre en pause ni piloter physiquement une imprimante.','refusal');
     if(/\b(modifie|modifier|corrige|corriger|supprime|supprimer|valide|valider|cree|creer|ajoute|ajouter).*(ticket|caisse|vente)|(ticket|caisse|vente).*(modifie|modifier|corrige|corriger|supprime|supprimer|valide|valider|cree|creer|ajoute|ajouter)\b/.test(q))return direct('Toute écriture en caisse est interdite. Aucune vente ni aucun ticket n’a été modifié.','refusal');
     if(/\b(ca|chiffre d affaires|recette|recettes).*(marche|marches)|(marche|marches).*(ca|chiffre d affaires|recette|recettes)\b/.test(q))return direct('La consultation du chiffre d’affaires des marchés est réservée au bloc 5C.','future_capability');
+    const replenishment=root.JarvisReplenishment9A;
+    if(replenishment&&replenishment.isMutationRequest(message,sourceData()))return direct('La modification des règles de réapprovisionnement n’est pas encore disponible. Aucune règle ni donnée n’a été modifiée.','future_capability');
+    if(pending&&pending.kind==='replenishment_rule_target')return freeze({kind:'read',actionId:'consult.replenishment_rules',message:String(message),pending:clone(pending)});
+    if(replenishment&&replenishment.isRuleRequest(message))return freeze({kind:'read',actionId:'consult.replenishment_rules',message:String(message),pending:null});
     if(pending&&pending.kind==='cash_target')return freeze({kind:'read',actionId:'consult.cash',message:String(message),pending:clone(pending)});
     const marketContextActive=!(pending&&(pending.kind==='market_choice'||pending.kind==='market_list')&&/\b(stock|stocks|inventaire|produit|produits|catalogue|hueforge|ca|urssaf|cotisation|caisse|ticket|impression|imprimante)\b/.test(q));
     if(pending&&pending.kind==='market_choice'&&marketContextActive)return freeze({kind:'read',actionId:'consult.markets',message:String(message),pending:clone(pending)});
@@ -20834,7 +21575,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     return Array.from(bytes,value=>value.toString(16).padStart(2,'0')).join('');
   }
   function createSession(now=Date.now()){
-    return {id:'j5a-'+secureId(),createdAt:now,lastActivity:now,messages:[],pendingClarification:null,pendingConsultation:null,pendingProposal:null};
+    return {id:'j5a-'+secureId(),createdAt:now,lastActivity:now,messages:[],pendingClarification:null,pendingConsultation:null,pendingProposal:null,pendingRuleIntent:null,pendingRuleProposal:null};
   }
   function securityCheck(){
     const security=root.JarvisSecurity;
@@ -21138,8 +21879,10 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(!message) throw codedError('REQUEST_INVALID','Écris un message avant l envoi.');
     if(busy) throw codedError('REQUEST_IN_PROGRESS','Une demande est déjà en cours.');
     expireIfInactive();
+    const sharedRuleRuntime=root.JarvisReplenishment9A3Runtime;
+    if(sharedRuleRuntime){const sharedPending=sharedRuleRuntime.getPending();session.pendingRuleProposal=sharedPending&&sharedPending.status==='pending'?sharedPending.proposalId:null;}
     if(!root.navigator || root.navigator.onLine===false) throw codedError('OFFLINE',ERROR_MESSAGES.OFFLINE);
-    if(/^(?:oui|confirme|confirmer|vas[- ]?y|valide|valider)$/i.test(message) && !session.pendingProposal){
+    if(/^(?:oui|confirme|confirmer|vas[- ]?y|valide|valider)$/i.test(message) && !session.pendingProposal && !session.pendingRuleProposal){
       const answer='Il n y a aucune action en attente à confirmer.';
       appendMessage('user',message,'direct_answer',null);
       appendMessage('assistant',answer,'direct_answer',null);
@@ -21147,7 +21890,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       render();
       return {outcome:'direct_answer',answer,proposal:null,topic:null,missingInformation:[],readAction:null};
     }
-    if(/^(?:non|annule|annuler|annule ça|annule ca|non merci)$/i.test(message) && !session.pendingProposal){
+    if(/^(?:non|annule|annuler|annule ça|annule ca|non merci)$/i.test(message) && !session.pendingProposal && !session.pendingRuleProposal){
       const answer='Il n’y a aucune proposition en attente à annuler.';
       appendMessage('user',message,'direct_answer',null);
       appendMessage('assistant',answer,'direct_answer',null);
@@ -21162,6 +21905,45 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     busy=true; transientMessage=message; lastFailedMessage=''; setBusy(true); setStatus('Jarvis réfléchit…',false); render();
     try{
       const currentData=(typeof db!=='undefined'&&db)?db:(root.db||{});
+      const ruleAPI=root.JarvisReplenishment9A3,ruleRuntime=root.JarvisReplenishment9A3Runtime;
+      let ruleRoute=null,rulePendingIntent=session.pendingRuleIntent,rulePendingProposal=session.pendingRuleProposal;
+      const confirmRule=/^(?:oui|confirme|confirmer|vas[- ]?y|valide|valider)$/i.test(message);
+      const cancelRule=/^(?:non|annule|annuler|annule ça|annule ca|non merci)$/i.test(message);
+      const ruleDirect=(answer,outcome='direct_answer')=>({kind:'direct',result:{outcome,answer,proposal:null,topic:'réglages de réapprovisionnement',missingInformation:[],readAction:null,pending:null}});
+      const ruleOutputRoute=output=>{
+        if(!output)return null;
+        if(output.kind==='proposal'){
+          rulePendingIntent=null;rulePendingProposal=output.proposal.proposalId;
+          return ruleDirect(output.answer);
+        }
+        if(output.kind==='clarification'){
+          rulePendingIntent=output.pending||null;rulePendingProposal=null;
+          return ruleDirect(output.answer,'clarification');
+        }
+        if(output.kind==='unchanged'){rulePendingIntent=null;rulePendingProposal=null;return ruleDirect(output.answer);}
+        rulePendingIntent=output.pending||null;
+        return ruleDirect(output.answer||'La demande de règle a été refusée. Aucune donnée n’a été modifiée.','refusal');
+      };
+      if(rulePendingProposal){
+        if(!ruleRuntime)ruleRoute=ruleDirect('Le runtime de réglage est désactivé. Aucune règle ni donnée n’a été modifiée.','refusal');
+        else if(confirmRule){
+          try{const confirmed=await ruleRuntime.confirm(rulePendingProposal,{explicit:true});ruleRoute=ruleDirect(confirmed.answer,confirmed.status==='executed'?'direct_answer':'refusal');rulePendingProposal=null;rulePendingIntent=null;}
+          catch(error){ruleRoute=ruleDirect(errorMessage(error),'refusal');if(error&&/^(RULE_PROPOSAL_EXPIRED|STALE_RULE_REVISION|STALE_RULE_VALUE|UNKNOWN_RULE_PROPOSAL)$/.test(error.message)){rulePendingProposal=null;rulePendingIntent=null;}}
+        }else if(cancelRule){
+          try{const cancelled=ruleRuntime.cancel(rulePendingProposal,{explicit:true});ruleRoute=ruleDirect('Proposition de règle annulée. Aucune écriture n’a été effectuée.');rulePendingProposal=null;rulePendingIntent=null;}
+          catch(error){ruleRoute=ruleDirect(errorMessage(error),'refusal');}
+        }else ruleRoute=ruleDirect('Une proposition de règle attend encore une décision explicite : réponds « confirme » ou « annule ». Aucune écriture n’a été effectuée.');
+      }else if(rulePendingIntent&&ruleAPI){
+        if(ruleRuntime)ruleRoute=ruleOutputRoute(await ruleRuntime.complete(rulePendingIntent,message,currentData));
+        else ruleRoute=ruleDirect('Le runtime de réglage est désactivé. Aucune règle ni donnée n’a été modifiée.','refusal');
+      }else if(ruleAPI&&ruleAPI.isMutationRequest(message,currentData)){
+        if(session.pendingProposal)ruleRoute=ruleDirect('Une autre proposition attend déjà une décision. Termine-la avant de modifier un réglage. Aucune nouvelle proposition n’a été créée.','refusal');
+        else if(!ruleRuntime)ruleRoute=ruleDirect('La modification des règles de réapprovisionnement n’est pas encore disponible. Aucune règle ni donnée n’a été modifiée.','future_capability');
+        else ruleRoute=ruleOutputRoute(await ruleRuntime.prepare(message,currentData));
+      }else if(ruleRuntime&&root.JarvisReplenishment9A&&(root.JarvisReplenishment9A.isRuleRequest(message)||(session.pendingConsultation&&session.pendingConsultation.kind==='replenishment_rule_target'))){
+        const consultation=await ruleRuntime.consult(currentData,message,session.pendingConsultation);
+        ruleRoute={kind:'direct',result:{...consultation,proposal:null,topic:'règles de réapprovisionnement',missingInformation:[],readAction:null}};
+      }
       const prepareWriteProposal=(writeBroker,actionId,args,answer,oldValue,newValue)=>{
         const previousProposal=session.pendingProposal;
         let local;
@@ -21179,12 +21961,12 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
         }
         return local;
       };
-      const voiceAction=localVoiceConfirmation(message,currentData);
-      const voiceCorrection=voiceAction||localVoiceCorrection(message,currentData);
-      const inventoryRoute=root.JarvisInventory8&&typeof root.JarvisInventory8.route==='function'
+      const voiceAction=ruleRoute?null:localVoiceConfirmation(message,currentData);
+      const voiceCorrection=ruleRoute?null:(voiceAction||localVoiceCorrection(message,currentData));
+      const inventoryRoute=!ruleRoute&&root.JarvisInventory8&&typeof root.JarvisInventory8.route==='function'
         ? root.JarvisInventory8.route(message,currentData)
         : null;
-      const localWrite=inventoryRoute||voiceCorrection||localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData);
+      const localWrite=ruleRoute||inventoryRoute||voiceCorrection||(!ruleRoute&&(localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData)));
       const route=localWrite|| (broker?broker.route(message,session.pendingConsultation):{kind:'gateway'});
       let result;
       if(route.kind==='write_proposal'){
@@ -21217,9 +21999,12 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       session.pendingClarification=result.outcome==='clarification'?{topic:result.topic,missingInformation:result.missingInformation}:null;
       session.pendingConsultation=result.pending?clone(result.pending):null;
       session.pendingProposal=result.proposal?clone(result.proposal):null;
+      session.pendingRuleIntent=rulePendingIntent?clone(rulePendingIntent):null;
+      session.pendingRuleProposal=rulePendingProposal||null;
       transientMessage='';
       setStatus('',false);
       render();
+      if(root.JarvisReplenishment9A4)await root.JarvisReplenishment9A4.refresh().catch(()=>{});
       return clone(result);
     }catch(error){
       lastFailedMessage=message; transientMessage='';
