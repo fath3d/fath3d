@@ -9081,6 +9081,7 @@ function buildProductsTableHTML() {
               </div>
             </td>
             <td style="display:flex;gap:4px;" onclick="event.stopPropagation()">
+              <button class="btn btn-secondary btn-sm" onclick="openProductTechnicalSheet(${p.id})" title="Consulter la fiche technique" aria-label="Consulter la fiche technique">🔧</button>
               <button class="btn btn-secondary btn-sm" onclick="openEditProduct(${p.id})" title="Modifier">✏️</button>
               <button class="btn btn-secondary btn-sm" onclick="duplicateProduct(${p.id})" title="Dupliquer" style="border-color:#9b59b6;color:#9b59b6;">📋</button>
               <button class="btn btn-danger btn-sm" onclick="deleteProduct(${p.id})" title="Supprimer">🗑️</button>
@@ -21430,6 +21431,120 @@ Le CA global délègue au calcul partagé du tableau de bord.
 Interface conversationnelle temporaire. Aucun stockage persistant, aucune donnée
 métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
 ==================================================================== -->
+<script id="jarvis-technical-sheet-9b">
+(function(root){
+  'use strict';
+  const ACTION='consult.catalog';
+  const normalize=value=>root.JarvisReadBroker.normalize(value);
+  const clone=value=>JSON.parse(JSON.stringify(value));
+  const escape=value=>String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  function freeze(value){if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value);}return value;}
+  function number(value,{integer=false,min=0,max=Infinity}={}){
+    return typeof value==='number'&&Number.isFinite(value)&&(!integer||Number.isInteger(value))&&value>=min&&value<=max?value:null;
+  }
+  function projection(product){
+    const f=product.fiche&&typeof product.fiche==='object'&&!Array.isArray(product.fiche)?product.fiche:{};
+    const hours=number(f.tempsHeures,{integer:true}),minutes=number(f.tempsMinutes,{integer:true,max:59});
+    let duration=null;
+    if(hours!==null&&minutes!==null)duration=hours?' '+hours+' h'+(minutes?' '+minutes+' min':''):minutes+' min';
+    else if(hours!==null)duration=hours+' h (minutes non renseignées)';
+    else if(minutes!==null)duration=minutes+' min (heures non renseignées)';
+    const row=(key,label,value,unit='')=>({key,label,value:value===null?null:String(value)+(unit?' '+unit:'')});
+    return freeze({productId:clone(product.id),name:String(product.name||''),category:String(product.categorie||product.category||''),rows:[
+      row('duration','Durée d’impression',duration===null?null:duration.trim()),
+      row('plateau','Pièces par plateau',number(f.plateau,{integer:true,min:1})),
+      row('colors','Nombre de couleurs',number(f.nbCouleurs,{integer:true,min:1})),
+      row('swaps','Nombre de changements de filament',number(f.nbSwaps,{integer:true})),
+      row('height','Hauteur',number(f.dimH,{min:Number.MIN_VALUE}),'cm'),
+      row('width','Largeur',number(f.dimL,{min:Number.MIN_VALUE}),'cm'),
+      row('depth','Profondeur',number(f.dimP,{min:Number.MIN_VALUE}),'cm'),
+      row('weight','Poids enregistré',number(f.poids,{min:Number.MIN_VALUE}),'g')
+    ]});
+  }
+  function read(data,productId){
+    const matches=(Array.isArray(data.products)?data.products:[]).filter(p=>String(p.id)===String(productId));
+    if(matches.length!==1)throw new Error(matches.length?'PRODUCT_AMBIGUOUS':'PRODUCT_NOT_FOUND');
+    return projection(matches[0]);
+  }
+  function fieldFor(q){
+    if(/\bfiche\b|\binformations? d impression\b|\binfos? d impression\b/.test(q))return 'all';
+    if(/\b(temps|duree)\b/.test(q))return 'duration';
+    if(/\bplateau\b/.test(q))return 'plateau';
+    if(/\b(couleur|couleurs)\b/.test(q))return 'colors';
+    if(/\b(swaps?|changements?)\b/.test(q))return 'swaps';
+    if(/\bpoids\b/.test(q))return 'weight';
+    if(/\b(dimensions?|hauteur|largeur|profondeur)\b/.test(q))return 'dimensions';
+    return 'all';
+  }
+  function isRequest(q){
+    return /\bfiche (technique|d impression|impression)\b|\b(informations?|infos?) d impression\b/.test(q)
+      || /\b(temps|duree)\b/.test(q)&&/\b(imprimer|impression|produit)\b/.test(q)
+      || /\b(par plateau|swaps?|changements? de filament)\b/.test(q)
+      || /\b(dimensions?|hauteur|largeur|profondeur|poids|couleurs?)\b/.test(q)&&/\b(pour|produit|fiche|imprimer|impression)\b/.test(q);
+  }
+  function subject(message){
+    return normalize(message)
+      .replace(/\b(jarvis|donne|donner|moi|montre|affiche|consulte|consulter|fiche|technique|informations?|infos?|impression|imprimer|combien|temps|duree|faut|fautil|il|faut il|pieces?|exemplaires?|quantite|par|plateau|nombre|nb|couleurs?|swaps?|changements?|filament|dimensions?|hauteur|largeur|profondeur|poids|enregistre|est|sont|quel|quelle|quels|quelles|le|la|les|l|de|d|du|des|pour|sur|a)\b/g,' ')
+      .replace(/\s+/g,' ').trim();
+  }
+  function answerFor(sheet,field){
+    const rows=sheet.rows.filter(r=>field==='all'||r.key===field||field==='dimensions'&&['height','width','depth'].includes(r.key));
+    const none=sheet.rows.every(r=>r.value===null);
+    return {answer:sheet.name+' — '+(none?'aucune information technique n’est renseignée. ':'')+rows.map(r=>r.label+' : '+(r.value===null?'non renseigné':r.value)).join(' ; ')+'.',
+      missingInformation:rows.filter(r=>r.value===null).map(r=>r.label)};
+  }
+  function response(answer,options={}){
+    return {kind:'direct',result:freeze({outcome:options.outcome||'direct_answer',answer,proposal:null,topic:'fiche technique',readAction:ACTION,missingInformation:options.missingInformation||[],pending:options.pending||null})};
+  }
+  function route(message,data,pending){
+    const q=normalize(message),requested=isRequest(q),choice=pending&&pending.kind==='technical_sheet_choice';
+    const sensitive=/\b(couts? de revient|prix de revient|marges?)\b/.test(q)||requested&&/\b(prix|couts?|finances?|euros?|chiffre d affaires)\b/.test(q);
+    if(!requested&&!choice&&!sensitive)return null;
+    if(!requested&&choice&&/\b(stock|inventaire|objectif|seuil|regle|caisse|ticket|marche|urssaf)\b/.test(q))return null;
+    const security=root.JarvisSecurity;
+    if(!security||security.getAction(ACTION).readOnly!==true)throw new Error('READ_ACTION_FORBIDDEN');
+    const before=clone(data);
+    let output;
+    if(sensitive)output=response('Les coûts de revient, marges et données financières ne sont pas communiqués par la consultation des fiches techniques.',{outcome:'refusal'});
+    else if(/\b(modifie|modifier|change|changer|mets|mettre|corrige|corriger|cree|creer|ajoute|ajouter|supprime|supprimer|enregistre|enregistrer)\b/.test(q)){
+      output=response('Cette consultation est en lecture seule. La fiche technique n’a pas été modifiée.',{outcome:'refusal'});
+    }else{
+      const field=requested?fieldFor(q):pending.field,query=subject(message);
+      let matches=[];
+      if(!requested&&choice){
+        const numbered=q.match(/^(?:le\s+)?(?:#\s*)?(\d+)$/);
+        const reply=root.JarvisReadBroker.route(numbered?'numéro '+numbered[1]:message,{kind:'entity',actionId:ACTION,candidates:pending.candidates});
+        const candidates=reply.pending&&reply.pending.candidates||pending.candidates;
+        if(candidates.length===1)matches=(data.products||[]).filter(p=>String(p.id)===String(candidates[0]));
+        else matches=root.JarvisReadBroker.resolveProduct({products:(data.products||[]).filter(p=>!pending.candidates.length||pending.candidates.some(id=>String(id)===String(p.id)))},query).matches;
+      }else if((requested&&!query)||/^(ce produit|cet article|celui ci|ce modele|le meme produit)$/.test(query)){
+        if(pending&&pending.kind==='technical_sheet_context')matches=(data.products||[]).filter(p=>String(p.id)===String(pending.productId));
+      }else if(query)matches=root.JarvisReadBroker.resolveProduct(data,query).matches;
+      if(!matches.length){
+        output=response(query&&!/^(ce produit|cet article|celui ci|ce modele|le meme produit)$/.test(query)?'Je ne trouve pas ce produit. Précise son nom ou sa catégorie pour consulter sa fiche technique.':'Quel produit veux-tu consulter ? Précise son nom.',{outcome:'clarification',missingInformation:['produit'],pending:{kind:'technical_sheet_choice',candidates:choice?pending.candidates:[],field}});
+      }else if(matches.length>1){
+        output=response('Quel produit veux-tu consulter ? '+matches.map((p,i)=>(i+1)+'. '+p.name+' — '+(p.category||p.categorie||'catégorie non renseignée')+' (#'+p.id+')').join(' ; ')+'.',{outcome:'clarification',missingInformation:['produit'],pending:{kind:'technical_sheet_choice',candidates:matches.map(p=>p.id),field}});
+      }else{
+        const sheet=read(data,matches[0].id),answer=answerFor(sheet,field);
+        output=response(answer.answer,{missingInformation:answer.missingInformation,pending:{kind:'technical_sheet_context',productId:sheet.productId,field}});
+      }
+    }
+    const audit=security.auditCandidate(ACTION,before,clone(data));
+    if(!audit.ok||audit.changes.length||audit.protectedFinancialDataUnchanged!==true)throw new Error('READ_AUDIT_FAILED');
+    return output;
+  }
+  function open(productId){
+    const data=typeof db!=='undefined'?db:root.db;
+    let sheet;
+    try{sheet=read(data,productId);}catch(error){openModal('<div class="modal-title">Fiche indisponible</div><p>Le produit est absent ou son identifiant est ambigu.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');return;}
+    const fields=sheet.rows.map(r=>'<div><dt style="color:var(--muted);font-size:12px">'+escape(r.label)+'</dt><dd style="margin:4px 0 12px;font-weight:700">'+escape(r.value===null?'Non renseigné':r.value)+'</dd></div>').join('');
+    openModal('<div class="modal-title">Fiche technique — '+escape(sheet.name)+'</div><p>'+escape(sheet.category)+' · Référence #'+escape(sheet.productId)+'</p><dl style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:8px 16px">'+fields+'</dl><p style="color:var(--muted);font-size:12px">Consultation des informations enregistrées. Le poids n’indique pas nécessairement la consommation de filament.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');
+  }
+  root.JarvisTechnicalSheet9B=Object.freeze({version:'9B-read-only-1',read,route,isRequest:message=>isRequest(normalize(message)),getState:()=>({readOnly:true,writesEnabled:false})});
+  root.openProductTechnicalSheet=open;
+})(typeof window!=='undefined'?window:globalThis);
+</script>
+
 <style id="jarvis-text-step4-style">
   .j4-launcher{position:fixed;right:18px;bottom:18px;z-index:2147482000;border:0;border-radius:999px;padding:12px 18px;background:#162235;color:#fff;font:700 15px/1 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.28);cursor:pointer}
   .j4-launcher:focus-visible,.j4-panel button:focus-visible,.j4-panel textarea:focus-visible{outline:3px solid #60a5fa;outline-offset:2px}
@@ -21936,7 +22051,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       }else if(rulePendingIntent&&ruleAPI){
         if(ruleRuntime)ruleRoute=ruleOutputRoute(await ruleRuntime.complete(rulePendingIntent,message,currentData));
         else ruleRoute=ruleDirect('Le runtime de réglage est désactivé. Aucune règle ni donnée n’a été modifiée.','refusal');
-      }else if(ruleAPI&&ruleAPI.isMutationRequest(message,currentData)){
+      }else if(ruleAPI&&ruleAPI.isMutationRequest(message,currentData)&&!(root.JarvisTechnicalSheet9B&&root.JarvisTechnicalSheet9B.isRequest(message))){
         if(session.pendingProposal)ruleRoute=ruleDirect('Une autre proposition attend déjà une décision. Termine-la avant de modifier un réglage. Aucune nouvelle proposition n’a été créée.','refusal');
         else if(!ruleRuntime)ruleRoute=ruleDirect('La modification des règles de réapprovisionnement n’est pas encore disponible. Aucune règle ni donnée n’a été modifiée.','future_capability');
         else ruleRoute=ruleOutputRoute(await ruleRuntime.prepare(message,currentData));
@@ -21966,7 +22081,9 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
       const inventoryRoute=!ruleRoute&&root.JarvisInventory8&&typeof root.JarvisInventory8.route==='function'
         ? root.JarvisInventory8.route(message,currentData)
         : null;
-      const localWrite=ruleRoute||inventoryRoute||voiceCorrection||(!ruleRoute&&(localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData)));
+      const technicalRoute=!ruleRoute&&!inventoryRoute&&!voiceCorrection&&root.JarvisTechnicalSheet9B
+        ? root.JarvisTechnicalSheet9B.route(message,currentData,session.pendingConsultation) : null;
+      const localWrite=ruleRoute||inventoryRoute||voiceCorrection||technicalRoute||(!ruleRoute&&(localCashWriteRoute(message,currentData)||localPrintingWriteRoute(message,currentData)||localMarketWriteRoute(message,currentData)||localStockWriteRoute(message,currentData)));
       const route=localWrite|| (broker?broker.route(message,session.pendingConsultation):{kind:'gateway'});
       let result;
       if(route.kind==='write_proposal'){
