@@ -12056,12 +12056,7 @@ function renderPlanningJour(el, actions) {
       const css = typeof filSwatchCSS === 'function' ? filSwatchCSS(c) : `background:${c.hex||'#888'};`;
       return `<div title="${c.name||''}" style="width:14px;height:14px;border-radius:50%;border:1px solid #444;${css}"></div>`;
     }).join('');
-    const nmSwap = (hex) => { const f=(PLANNING_PALETTE||[]).find(c=>c.hex===hex); return f?f.name:''; };
-    const dotSwap = (hex) => `<span style="width:11px;height:11px;border-radius:50%;display:inline-block;border:1px solid #444;background:${hex||'#888'};"></span>`;
-    const swapsArr = (imp.swaps||[]).filter(s => s && (s.from || s.to || s.heure));
-    const swapsHtml = swapsArr.length
-      ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">${swapsArr.map(s=>`<span title="${nmSwap(s.from)}→${nmSwap(s.to)}" style="display:inline-flex;align-items:center;gap:3px;background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:2px 8px;font-size:10px;color:var(--muted);">🔁 ${dotSwap(s.from)}→${dotSwap(s.to)}${s.heure?` <b style="color:var(--accent);">${s.heure}</b>`:''}</span>`).join('')}</div>`
-      : '';
+    const swapsHtml = planningSwapBadgesHtml(imp.swaps||[]);
     const prod = (imp.productId!=null) ? db.products.find(x=>x.id===imp.productId) : null;
     const projColor = (imp.productId!=null) ? pjProjColor(imp.productId) : 'var(--accent)';
     const titleHTML = prod
@@ -15649,6 +15644,25 @@ const PLANNING_PALETTE = [
   // Violets
   {hex:'#6c3483',name:'Violet foncé'},{hex:'#9b59b6',name:'Violet'},
 ];
+
+// Rendu partagé des swaps Planning Jour / consultation des modèles HueForge.
+function planningColorInfo(value){
+  const raw=value&&typeof value==='object'?String(value.hex||value.name||''):String(value||'');
+  const key=raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const found=PLANNING_PALETTE.find(c=>String(c.hex||'').toLowerCase()===raw.toLowerCase()||String(c.name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()===key);
+  const hex=found?String(found.hex):/^#[\da-f]{3}(?:[\da-f]{3})?(?:[\da-f]{2})?$/i.test(raw)?raw:'';
+  const label=value&&typeof value==='object'&&value.name?String(value.name):found?String(found.name):raw;
+  return {label,hex};
+}
+function planningSwapBadgesHtml(swaps,{showLabels=false}={}){
+  const safe=value=>String(value||'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const dot=value=>{const color=planningColorInfo(value);return color.hex?`<span style="width:11px;height:11px;border-radius:50%;display:inline-block;border:1px solid #444;background:${color.hex};"></span>`:showLabels?'':`<span style="width:11px;height:11px;border-radius:50%;display:inline-block;border:1px solid #444;background:#888;"></span>`;};
+  const list=(Array.isArray(swaps)?swaps:[]).filter(s=>s&&(s.from||s.to||s.heure||s.time));
+  return list.length?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">${list.map((s,i)=>{
+    const from=planningColorInfo(s.from),to=planningColorInfo(s.to),time=s.heure||s.time||'';
+    return `<span ${showLabels?`data-hf-swap="${i+1}"`:''} title="${safe(from.label)}→${safe(to.label)}" style="display:inline-flex;align-items:center;gap:3px;background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:2px 8px;font-size:${showLabels?'11':'10'}px;color:var(--muted);">🔁 ${dot(s.from)}${showLabels?from.label?` ${safe(from.label)}`:' départ non renseigné':''}→${dot(s.to)}${showLabels?to.label?` ${safe(to.label)}`:' arrivée non renseignée':''}${time?` <b style="color:var(--accent);">${safe(time)}</b>`:showLabels?` <b style="color:var(--muted);">horaire non renseigné</b>`:''}</span>`;
+  }).join('')}</div>`:'';
+}
 
 let _planningSelColors = [];
 
@@ -21442,6 +21456,9 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   function number(value,{integer=false,min=0,max=Infinity}={}){return typeof value==='number'&&Number.isFinite(value)&&(!integer||Number.isInteger(value))&&value>=min&&value<=max?value:null;}
   function color(value){return typeof value==='string'?value: value&&typeof value==='object'?String(value.name||value.hex||''):'';}
   function colors(value){return Array.isArray(value)?value.map(color).filter(Boolean):[];}
+  function colorVisual(value){
+    return planningColorInfo(value);
+  }
   function minutes(value,hours=false){
     if(typeof value==='number'){const n=number(value);return n===null?null:n*(hours?60:1);}
     if(typeof value!=='string'||!/^(\d+\s*h(\s*\d{1,2})?|\d+\s*min|\d{1,4}|\d{1,3}:\d{2})$/i.test(value.trim())||typeof planParseDur!=='function')return null;
@@ -21472,9 +21489,9 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     }):[];
   }
   function modelProjection(model){
-    return {id:clone(model.id),name:String(model.name||''),minutes:minutes(model.dur,true),colors:colors(model.colors),swaps:Array.isArray(model.swaps)?model.swaps.map(s=>{
+    return {id:clone(model.id),name:String(model.name||''),minutes:minutes(model.dur,true),colors:colors(model.colors),colorVisuals:Array.isArray(model.colors)?model.colors.map(colorVisual):[],swaps:Array.isArray(model.swaps)?model.swaps.map(s=>{
       const v=s&&typeof s==='object'?s:{heure:typeof s==='string'?s:''},layer=v.couche??v.layer;
-      return {from:color(v.from),to:color(v.to),time:typeof v.heure==='string'||typeof v.heure==='number'?String(v.heure):'',layer:typeof layer==='string'||typeof layer==='number'?String(layer):''};
+      return {from:color(v.from),to:color(v.to),fromVisual:colorVisual(v.from),toVisual:colorVisual(v.to),time:typeof v.heure==='string'||typeof v.heure==='number'?String(v.heure):'',layer:typeof layer==='string'||typeof layer==='number'?String(layer):''};
     }):null};
   }
   function read(data,productId){
@@ -21497,6 +21514,12 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
   }
   function modelText(m){const swaps=m.swaps===null?'Swaps non renseignés':m.swaps.length===0?'0 swap enregistré':m.swaps.map((s,i)=>'Swap '+(i+1)+' : '+(s.from||'couleur de départ non renseignée')+' → '+(s.to||'couleur d’arrivée non renseignée')+' ; heure '+(s.time||'non renseignée')+' ; couche '+(s.layer||'non renseignée')).join(' ; ');
     return 'Modèle HueForge sélectionné — '+m.name+' (#'+m.id+') : '+duration(m.minutes)+' ; couleurs : '+(m.colors.join(', ')||'non renseignées')+' ; '+swaps+'. Sélection temporaire pour cette page, aucune liaison enregistrée.';}
+  function modelVisualHtml(m){
+    const dot=c=>c.hex?'<span aria-label="'+escape(c.label)+'" title="'+escape(c.label)+'" style="width:14px;height:14px;border-radius:50%;border:1px solid #444;background:'+c.hex+';display:inline-block;flex:0 0 14px"></span>':'';
+    const colorList=m.colorVisuals.length?m.colorVisuals.map(c=>'<span style="display:inline-flex;align-items:center;gap:5px;margin:0 8px 5px 0">'+dot(c)+'<span>'+escape(c.label)+'</span></span>').join(''):'<span style="color:var(--muted)">Aucune couleur enregistrée</span>';
+    const swaps=m.swaps===null?'<p style="margin:6px 0;color:var(--muted)">Swaps non renseignés dans ce modèle.</p>':m.swaps.length?planningSwapBadgesHtml(m.swaps.map(s=>({...s,from:s.fromVisual,to:s.toVisual,heure:s.time})),{showLabels:true}):'<p style="margin:6px 0;color:var(--muted)">Aucun swap enregistré.</p>';
+    return '<div data-hf-model-card="'+escape(String(m.id))+'" style="margin:10px 0;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:9px"><div style="font-weight:800;font-size:15px">'+escape(m.name)+' — modèle #'+escape(String(m.id))+'</div><div style="margin:5px 0 9px;color:var(--accent);font-weight:750">'+escape(duration(m.minutes))+'</div><div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;margin-bottom:4px"><strong style="margin-right:5px">Couleurs :</strong>'+colorList+'</div><strong>Swaps :</strong>'+swaps+'</div>';
+  }
   function plateText(p){return p.label+' : '+duration(p.minutes)+' ; couleurs : '+(p.colors.join(', ')||'non renseignées')+' ; '+(p.state==='done'?'fait':p.state==='todo'?'reste à imprimer':'statut non renseigné');}
   function sourceLabel(source){return source==='plaques'?'Suivi plaques de la fiche (distinct du plan)':'Plan d’impression — « Quel plateau ? »';}
   function listText(sheet,source){const list=sheet[source];return sourceLabel(source)+' : '+(list.length?list.map(plateText).join(' ; '):'aucun plateau enregistré')+'.';}
@@ -21598,18 +21621,22 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     const data=typeof db!=='undefined'?db:root.db;let sheet;
     const previousScroll=preserveScroll?(document.getElementById('modal-content')?.scrollTop||0):0;
     try{sheet=read(data,productId);}catch(error){openModal('<div class="modal-title">Fiche indisponible</div><p>Le produit est absent ou son identifiant est ambigu.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');return;}
-    const fields=sheet.rows.map(r=>'<div><dt style="color:var(--muted);font-size:12px">'+escape(r.label)+'</dt><dd style="margin:4px 0 12px;font-weight:700">'+escape(r.value===null?'Non renseigné':r.value)+'</dd></div>').join('');
+    const fields=sheet.rows.filter(r=>!sheet.hueforge.eligible||r.value!==null).map(r=>'<div><dt style="color:var(--muted);font-size:12px">'+escape(r.label)+'</dt><dd style="margin:4px 0 12px;font-weight:700">'+escape(r.value===null?'Non renseigné':r.value)+'</dd></div>').join('');
     const section=(label,text)=>'<section style="margin:14px 0"><h3>'+escape(label)+'</h3><p style="white-space:pre-wrap">'+escape(text)+'</p></section>';
     let extra='';
+    if(sheet.hueforge.eligible){
+      if(sheet.hueforge.selected)extra+='<section style="margin:14px 0"><h3>Modèle HueForge sélectionné</h3>'+modelVisualHtml(sheet.hueforge.selected)+'<p style="color:var(--muted);font-size:12px">Sélection temporaire pour cette page. Aucun lien permanent n’est créé.</p></section>';
+      else extra+='<section style="margin:14px 0"><h3>Modèle HueForge</h3><p>Choisis explicitement un modèle pour afficher ses couleurs, sa durée et ses swaps. Aucun modèle n’est sélectionné automatiquement.</p></section>';
+    }
+    if(fields)extra+='<h3>Fiche produit — informations renseignées</h3><dl style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:8px 16px">'+fields+'</dl>';
     if(sheet.plans.length)extra+=section(sourceLabel('plans'),sheet.plans.map(plateText).join('\n'));
     if(sheet.plaques.length)extra+=section(sourceLabel('plaques'),sheet.plaques.map(plateText).join('\n')+'\nCe suivi est distinct du plan; les travaux ne sont pas additionnés.');
     if(sheet.hueforge.eligible){
-      if(sheet.hueforge.selected)extra+=section('HueForge',modelText(sheet.hueforge.selected));
       const buttons=sheet.hueforge.candidates.map(m=>'<button class="btn btn-secondary btn-sm" onclick="selectProductTechnicalModel('+escape(JSON.stringify(String(sheet.productId)))+','+escape(JSON.stringify(String(m.id)))+')">'+escape(m.name)+' — modèle #'+escape(m.id)+'</button>').join(' ');
       extra+='<section><h3>Modèle HueForge existant</h3><p>Sélection pour cette page uniquement. Aucun lien permanent n’est créé.</p>'+buttons+'</section>';
     }
-    if(sheet.jobs.length)extra+=section('Impressions ponctuelles liées par ID',sheet.jobs.map(j=>j.source+(j.date?' '+j.date:'')+' — '+j.name+' : '+duration(j.minutes)+' ; '+j.state).join('\n')+'\nCes valeurs ne remplacent pas les données permanentes.');
-    openModal('<div class="modal-title">Fiche technique — '+escape(sheet.name)+'</div><p>'+escape(sheet.category)+' · Référence #'+escape(sheet.productId)+'</p><h3>Fiche produit</h3><dl style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:8px 16px">'+fields+'</dl>'+extra+'<p style="color:var(--muted);font-size:12px">Consultation des informations enregistrées. Le poids n’indique pas nécessairement la consommation de filament.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');
+    if(sheet.jobs.length&&!sheet.hueforge.eligible)extra+=section('Impressions ponctuelles liées par ID',sheet.jobs.map(j=>j.source+(j.date?' '+j.date:'')+' — '+j.name+' : '+duration(j.minutes)+' ; '+j.state).join('\n')+'\nCes valeurs ne remplacent pas les données permanentes.');
+    openModal('<div class="modal-title">Fiche technique — '+escape(sheet.name)+'</div><p>'+escape(sheet.category)+' · Référence #'+escape(sheet.productId)+'</p>'+extra+'<p style="color:var(--muted);font-size:12px">Consultation des informations enregistrées. Le poids n’indique pas nécessairement la consommation de filament.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');
     const modal=document.getElementById('modal-content');if(modal)modal.scrollTop=previousScroll;
   }
   root.JarvisTechnicalSheet9B=Object.freeze({version:'9B-read-only-2-connections',read,route,isRequest:message=>isRequest(normalize(message)),getState:()=>({readOnly:true,writesEnabled:false})});
