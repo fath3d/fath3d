@@ -1,0 +1,208 @@
+// PROPOSITION 9A — COMPILEE ET TESTEE EN EMULATEUR LOCAL, NON DEPLOYEE.
+// Une seule categorie peut etre modifiee par revision, comme les propositions 9A.
+// Initialisation : blocs vides ou une seule categorie configuree.
+// Tout document preexistant doit etre verifie conforme avant de deployer ces Rules.
+// Le match /fath3d/{userId} du document Manager racine est remplacé par des
+// écritures transactionnelles à révision obligatoire afin de bloquer les onglets obsolètes.
+// Le chemin proposé est : /fath3d/{uid}/settings/replenishment
+// puis /exceptions/{productId}. Aucun code client Firebase n'est activé par 9A-3.
+// Limites connues : ces règles ne prouvent pas une confirmation utilisateur,
+// ne peuvent pas garantir un nonce cryptographiquement aléatoire et ne peuvent
+// pas confirmer qu'un productId existe dans le payload JSON du document Manager.
+// Ces garanties restent côté client tant qu'aucun service de confiance n'est prévu.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function rootPath(uid) {
+      return /databases/$(database)/documents/fath3d/$(uid)/settings/replenishment;
+    }
+
+    function validRuleEntry(entry) {
+      return entry is map
+        && entry.keys().hasOnly(['value', 'scope'])
+        && entry.keys().hasAll(['value', 'scope'])
+        && entry.value is int && entry.value >= 0 && entry.value <= 2147483647
+        && entry.scope == 'maison_marche';
+    }
+
+    function validRuleBlock(rule) {
+      return rule is map
+        && rule.keys().hasOnly(['targetStock', 'alertThreshold', 'replenishQuantity', 'excluded', 'abandoned', 'priority'])
+        && (!('targetStock' in rule) || validRuleEntry(rule.targetStock))
+        && (!('alertThreshold' in rule) || validRuleEntry(rule.alertThreshold))
+        && (!('replenishQuantity' in rule) || validRuleEntry(rule.replenishQuantity))
+        && (!('excluded' in rule) || rule.excluded is bool)
+        && (!('abandoned' in rule) || rule.abandoned is bool)
+        && (!('priority' in rule) || rule.priority is int);
+    }
+
+    // Les créations sont valides; chaque update garde les blocs inchangés et
+    // valide le seul bloc modifié. Cela préserve l'invariant de schéma sans
+    // dépasser 1000 expressions quand les 19 catégories sont configurées.
+    function validCategoryRules(categoryRules, previous, initializing) {
+      let changed = categoryRules.diff(previous).affectedKeys();
+      return categoryRules is map
+        && categoryRules.keys().hasOnly([
+          'hueforge', 'figurine', 'minimaux', 'lampes', 'boucle d oreilles',
+          'marque page', 'porte clefs', 'flexible', 'autre', 'coloriage',
+          'destockage', 'fete pere', 'fin d annee', 'halloween', 'panier 3e',
+          'panier 4', 'panier 5', 'panier 6', 'panier mini dragon 3'
+        ])
+        && ((initializing && categoryRules.values().hasOnly([{}])) || (
+          changed.size() <= 1
+        && (!changed.hasAny(['hueforge']) || !('hueforge' in categoryRules) || validRuleBlock(categoryRules.hueforge))
+        && (!changed.hasAny(['figurine']) || !('figurine' in categoryRules) || validRuleBlock(categoryRules.figurine))
+        && (!changed.hasAny(['minimaux']) || !('minimaux' in categoryRules) || validRuleBlock(categoryRules.minimaux))
+        && (!changed.hasAny(['lampes']) || !('lampes' in categoryRules) || validRuleBlock(categoryRules.lampes))
+        && (!changed.hasAny(['boucle d oreilles']) || !('boucle d oreilles' in categoryRules) || validRuleBlock(categoryRules['boucle d oreilles']))
+        && (!changed.hasAny(['marque page']) || !('marque page' in categoryRules) || validRuleBlock(categoryRules['marque page']))
+        && (!changed.hasAny(['porte clefs']) || !('porte clefs' in categoryRules) || validRuleBlock(categoryRules['porte clefs']))
+        && (!changed.hasAny(['flexible']) || !('flexible' in categoryRules) || validRuleBlock(categoryRules.flexible))
+        && (!changed.hasAny(['autre']) || !('autre' in categoryRules) || validRuleBlock(categoryRules.autre))
+        && (!changed.hasAny(['coloriage']) || !('coloriage' in categoryRules) || validRuleBlock(categoryRules.coloriage))
+        && (!changed.hasAny(['destockage']) || !('destockage' in categoryRules) || validRuleBlock(categoryRules.destockage))
+        && (!changed.hasAny(['fete pere']) || !('fete pere' in categoryRules) || validRuleBlock(categoryRules['fete pere']))
+        && (!changed.hasAny(['fin d annee']) || !('fin d annee' in categoryRules) || validRuleBlock(categoryRules['fin d annee']))
+        && (!changed.hasAny(['halloween']) || !('halloween' in categoryRules) || validRuleBlock(categoryRules.halloween))
+        && (!changed.hasAny(['panier 3e']) || !('panier 3e' in categoryRules) || validRuleBlock(categoryRules['panier 3e']))
+        && (!changed.hasAny(['panier 4']) || !('panier 4' in categoryRules) || validRuleBlock(categoryRules['panier 4']))
+        && (!changed.hasAny(['panier 5']) || !('panier 5' in categoryRules) || validRuleBlock(categoryRules['panier 5']))
+        && (!changed.hasAny(['panier 6']) || !('panier 6' in categoryRules) || validRuleBlock(categoryRules['panier 6']))
+        && (!changed.hasAny(['panier mini dragon 3']) || !('panier mini dragon 3' in categoryRules) || validRuleBlock(categoryRules['panier mini dragon 3']))));
+    }
+
+    function validRoot(data, previousCategories, initializing) {
+      return data is map
+        && data.keys().hasOnly(['schemaVersion', 'revision', 'categoryRules', 'lastMutationId'])
+        && data.keys().hasAll(['schemaVersion', 'revision', 'categoryRules', 'lastMutationId'])
+        && data.schemaVersion is int
+        && data.schemaVersion == 1
+        && data.revision is int
+        && data.revision >= 1
+        && validCategoryRules(data.categoryRules, previousCategories, initializing)
+        && data.lastMutationId is string
+        && data.lastMutationId.size() >= 16
+        && data.lastMutationId.size() <= 80;
+    }
+
+    // Le document Manager racine conserve la lecture propriétaire, mais toute
+    // écriture est désormais versionnée. Cette règle remplace la permission
+    // owner read/write historique, qui permettrait aux anciens onglets de
+    // contourner le contrôle de révision (les permissions Firestore sont OR).
+    match /fath3d/{userId} {
+      function isManagerOwner() {
+        return request.auth != null && request.auth.uid == userId;
+      }
+      function validManagerEnvelope(data) {
+        return data is map
+          && data.keys().hasOnly(['payload', 'updated', 'revision'])
+          && data.keys().hasAll(['payload', 'updated', 'revision'])
+          && data.payload is string
+          && data.updated is string
+          && data.revision is int
+          && data.revision >= 1;
+      }
+      function legacyRevisionInitialization() {
+        return !('revision' in resource.data)
+          && request.resource.data.revision == 1
+          && request.resource.data.payload == resource.data.payload
+          && request.resource.data.updated == resource.data.updated
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revision']);
+      }
+      allow read: if isManagerOwner();
+      allow create: if isManagerOwner()
+        && validManagerEnvelope(request.resource.data)
+        && request.resource.data.revision == 1;
+      allow update: if isManagerOwner()
+        && validManagerEnvelope(request.resource.data)
+        && (legacyRevisionInitialization()
+          || (resource.data.revision is int
+            && request.resource.data.revision == resource.data.revision + 1));
+      allow delete: if false;
+    }
+
+    match /fath3d/{userId}/settings/replenishment {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId)
+        && request.resource.data.revision == 1
+        && validRoot(request.resource.data, {}, true);
+      allow update: if isOwner(userId)
+        && request.resource.data.revision == resource.data.revision + 1
+        && request.resource.data.lastMutationId != resource.data.lastMutationId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revision', 'categoryRules', 'lastMutationId'])
+        && validRoot(request.resource.data, resource.data.categoryRules, false);
+      allow delete: if false;
+    }
+
+    match /fath3d/{userId}/settings/replenishment/exceptions/{productId} {
+      function parentAdvanced() {
+        return existsAfter(rootPath(userId))
+          && getAfter(rootPath(userId)).data.revision
+            == (exists(rootPath(userId)) ? get(rootPath(userId)).data.revision : 0) + 1;
+      }
+
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && parentAdvanced()
+        && request.resource.data.keys().hasOnly(['schemaVersion', 'productId', 'parentRevision', 'rule'])
+        && request.resource.data.keys().hasAll(['schemaVersion', 'productId', 'parentRevision', 'rule'])
+        && request.resource.data.schemaVersion is int
+        && request.resource.data.schemaVersion == 1
+        && request.resource.data.productId is string
+        && request.resource.data.productId.size() > 0
+        && request.resource.data.productId == productId
+        && request.resource.data.parentRevision is int
+        && request.resource.data.parentRevision >= 1
+        && request.resource.data.parentRevision == getAfter(rootPath(userId)).data.revision
+        && validRuleBlock(request.resource.data.rule);
+      allow delete: if isOwner(userId)
+        && parentAdvanced()
+        && !existsAfter(/databases/$(database)/documents/fath3d/$(userId)/settings/replenishment/exceptions/$(productId));
+    }
+
+    // Décisions 9C indépendantes des règles 9A : une révision par ID produit.
+    // Les états sont des décisions utilisateur seulement; aucun stock/planning.
+    // Le retour à « undecided » est une mise à jour, pas une suppression.
+    match /fath3d/{userId}/replenishmentDecisions/{productId} {
+      function validDecisionDocument(data) {
+        return data is map
+          && data.keys().hasOnly(['schemaVersion', 'productId', 'decision', 'reminderDate', 'revision', 'lastMutationId'])
+          && data.keys().hasAll(['schemaVersion', 'productId', 'decision', 'revision', 'lastMutationId'])
+          && data.schemaVersion is int
+          && data.schemaVersion == 1
+          && data.productId is string
+          && data.productId.size() > 0
+          && data.productId.size() <= 128
+          && data.productId == productId
+          && data.decision in ['undecided', 'reprint', 'deferred', 'stopped']
+          && data.revision is int
+          && data.revision >= 1
+          && data.lastMutationId is string
+          && data.lastMutationId.size() >= 16
+          && data.lastMutationId.size() <= 80
+          && (data.decision == 'deferred'
+            ? (!('reminderDate' in data) || (data.reminderDate is string
+              && data.reminderDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')))
+            : !('reminderDate' in data));
+      }
+
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId)
+        && validDecisionDocument(request.resource.data)
+        && request.resource.data.revision == 1;
+      allow update: if isOwner(userId)
+        && validDecisionDocument(request.resource.data)
+        && validDecisionDocument(resource.data)
+        && request.resource.data.productId == resource.data.productId
+        && request.resource.data.revision == resource.data.revision + 1
+        && request.resource.data.lastMutationId != resource.data.lastMutationId;
+      allow delete: if false;
+    }
+  }
+}
+

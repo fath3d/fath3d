@@ -1,0 +1,11 @@
+{
+  "name": "jarvis-9c-emulator-validation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Isolated emulator-only 9C validation; no production credentials",
+  "dependencies": {
+    "firebase-tools": "15.33.0",
+    "@firebase/rules-unit-testing": "6.0.0",
+    "firebase": "13.0.0"
+  }
+}

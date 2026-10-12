@@ -1,0 +1,47 @@
+name: Jarvis 9C Firestore isolated validation
+on:
+  push:
+    branches:
+      - "work/9c-firestore-validation"
+    paths:
+      - ".github/workflows/validate-9c-firestore.yml"
+      - "validation/9c/**"
+permissions:
+  contents: read
+concurrency:
+  group: jarvis-9c-firestore-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  firestore-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout test branch only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install pinned test dependencies
+        run: npm install --no-audit --no-fund --package-lock=false
+        working-directory: validation/9c
+      - name: Run Firestore Rules and persistence tests in emulator
+        run: >-
+          npx firebase-tools emulators:exec
+          --only firestore
+          --project demo-jarvis-replenishment-9c
+          --config firebase.json
+          "node firestore-validation/replenishment-decisions-9c.test.cjs"
+        working-directory: validation/9c
+        env:
+          FIREBASE_CLI_DISABLE_UPDATE_CHECK: "true"
+          FIRESTORE_EMULATOR_HOST: "127.0.0.1:8785"
+          GCLOUD_PROJECT: "demo-jarvis-replenishment-9c"
+          GOOGLE_CLOUD_PROJECT: "demo-jarvis-replenishment-9c"
