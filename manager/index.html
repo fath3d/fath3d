@@ -21434,114 +21434,187 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
 <script id="jarvis-technical-sheet-9b">
 (function(root){
   'use strict';
-  const ACTION='consult.catalog';
+  const ACTION='consult.catalog', selections=new Map();
   const normalize=value=>root.JarvisReadBroker.normalize(value);
   const clone=value=>JSON.parse(JSON.stringify(value));
   const escape=value=>String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   function freeze(value){if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value);}return value;}
-  function number(value,{integer=false,min=0,max=Infinity}={}){
-    return typeof value==='number'&&Number.isFinite(value)&&(!integer||Number.isInteger(value))&&value>=min&&value<=max?value:null;
+  function number(value,{integer=false,min=0,max=Infinity}={}){return typeof value==='number'&&Number.isFinite(value)&&(!integer||Number.isInteger(value))&&value>=min&&value<=max?value:null;}
+  function color(value){return typeof value==='string'?value: value&&typeof value==='object'?String(value.name||value.hex||''):'';}
+  function colors(value){return Array.isArray(value)?value.map(color).filter(Boolean):[];}
+  function minutes(value,hours=false){
+    if(typeof value==='number'){const n=number(value);return n===null?null:n*(hours?60:1);}
+    if(typeof value!=='string'||!/^(\d+\s*h(\s*\d{1,2})?|\d+\s*min|\d{1,4}|\d{1,3}:\d{2})$/i.test(value.trim())||typeof planParseDur!=='function')return null;
+    return number(planParseDur(value));
   }
+  function duration(value){if(value===null)return 'durée non renseignée';return typeof fmtDur==='function'?fmtDur(value/60):value+' min';}
   function projection(product){
     const f=product.fiche&&typeof product.fiche==='object'&&!Array.isArray(product.fiche)?product.fiche:{};
-    const hours=number(f.tempsHeures,{integer:true}),minutes=number(f.tempsMinutes,{integer:true,max:59});
-    let duration=null;
-    if(hours!==null&&minutes!==null)duration=hours?' '+hours+' h'+(minutes?' '+minutes+' min':''):minutes+' min';
-    else if(hours!==null)duration=hours+' h (minutes non renseignées)';
-    else if(minutes!==null)duration=minutes+' min (heures non renseignées)';
+    const hours=number(f.tempsHeures,{integer:true}),mins=number(f.tempsMinutes,{integer:true,max:59});
+    let dur=null;
+    if(hours!==null&&mins!==null)dur=hours?hours+' h'+(mins?' '+mins+' min':''):mins+' min';
+    else if(hours!==null)dur=hours+' h (minutes non renseignées)';
+    else if(mins!==null)dur=mins+' min (heures non renseignées)';
     const row=(key,label,value,unit='')=>({key,label,value:value===null?null:String(value)+(unit?' '+unit:'')});
-    return freeze({productId:clone(product.id),name:String(product.name||''),category:String(product.categorie||product.category||''),rows:[
-      row('duration','Durée d’impression',duration===null?null:duration.trim()),
-      row('plateau','Pièces par plateau',number(f.plateau,{integer:true,min:1})),
-      row('colors','Nombre de couleurs',number(f.nbCouleurs,{integer:true,min:1})),
-      row('swaps','Nombre de changements de filament',number(f.nbSwaps,{integer:true})),
-      row('height','Hauteur',number(f.dimH,{min:Number.MIN_VALUE}),'cm'),
-      row('width','Largeur',number(f.dimL,{min:Number.MIN_VALUE}),'cm'),
-      row('depth','Profondeur',number(f.dimP,{min:Number.MIN_VALUE}),'cm'),
-      row('weight','Poids enregistré',number(f.poids,{min:Number.MIN_VALUE}),'g')
-    ]});
+    return {productId:clone(product.id),name:String(product.name||''),category:String(product.categorie||product.category||''),rows:[
+      row('duration','Durée d’impression',dur),row('plateau','Pièces par plateau',number(f.plateau,{integer:true,min:1})),
+      row('colors','Nombre de couleurs',number(f.nbCouleurs,{integer:true,min:1})),row('swaps','Nombre de changements de filament',number(f.nbSwaps,{integer:true})),
+      row('height','Hauteur',number(f.dimH,{min:Number.MIN_VALUE}),'cm'),row('width','Largeur',number(f.dimL,{min:Number.MIN_VALUE}),'cm'),
+      row('depth','Profondeur',number(f.dimP,{min:Number.MIN_VALUE}),'cm'),row('weight','Poids enregistré',number(f.poids,{min:Number.MIN_VALUE}),'g')
+    ]};
+  }
+  function plates(value,source){
+    return Array.isArray(value)?value.map((item,index)=>{
+      const p=item&&typeof item==='object'?item:{},done=source==='plans'?p.done:p.fait;
+      return {index,label:String(source==='plans'?p.part||'Plateau '+(index+1):p.label||'Plaque '+(index+1)),minutes:source==='plans'?minutes(p.dur):number(p.min),
+        colors:source==='plans'?colors(p.colors):typeof plaqueCouls==='function'?plaqueCouls(p).map(String):colors(p.couleurs),
+        state:done===true?'done':done===false?'todo':'unknown'};
+    }):[];
+  }
+  function modelProjection(model){
+    return {id:clone(model.id),name:String(model.name||''),minutes:minutes(model.dur,true),colors:colors(model.colors),swaps:Array.isArray(model.swaps)?model.swaps.map(s=>{
+      const v=s&&typeof s==='object'?s:{heure:typeof s==='string'?s:''},layer=v.couche??v.layer;
+      return {from:color(v.from),to:color(v.to),time:typeof v.heure==='string'||typeof v.heure==='number'?String(v.heure):'',layer:typeof layer==='string'||typeof layer==='number'?String(layer):''};
+    }):null};
   }
   function read(data,productId){
-    const matches=(Array.isArray(data.products)?data.products:[]).filter(p=>String(p.id)===String(productId));
+    const products=Array.isArray(data.products)?data.products:[],matches=products.filter(p=>String(p.id)===String(productId));
     if(matches.length!==1)throw new Error(matches.length?'PRODUCT_AMBIGUOUS':'PRODUCT_NOT_FOUND');
-    return projection(matches[0]);
+    const product=matches[0],sheet=projection(product),f=product.fiche||{},store=data.plansImpression;
+    const plan=store&&Object.prototype.hasOwnProperty.call(store,product.id)?store[product.id]:null;
+    const hf=/^(hueforge|hue forge|youforge|you forge)$/.test(normalize(sheet.category));
+    const models=hf&&Array.isArray(data.hfTemplates)?data.hfTemplates.filter(m=>m&&m.id!==undefined):[];
+    const sameName=models.filter(m=>normalize(m.name)===normalize(product.name)),candidates=sameName.length?sameName:models;
+    const chosen=selections.get(String(product.id)),selected=models.filter(m=>String(m.id)===String(chosen));
+    const jobs=[];
+    const addJob=(item,source,date='')=>{if(!item||item.productId===undefined||String(item.productId)!==String(product.id))return;
+      jobs.push({source,date,name:String(item.nom||item.name||item.title||''),printer:String(item.printer||''),minutes:typeof item.dureeMinutes==='number'?number(item.dureeMinutes):minutes(item.dur,true),colors:colors(item.couleurs||item.colors),state:item.done===true?'fait':item.done===false?'non fait':typeof item.status==='string'?item.status:'statut non renseigné'});};
+    Object.entries(data.planningJour||{}).forEach(([date,day])=>{if(Array.isArray(day&&day.impressions))day.impressions.forEach(it=>addJob(it,'Planning Jour',date));});
+    if(Array.isArray(data.planningJobs))data.planningJobs.forEach(it=>addJob(it,'Jobs',String(it.date||'')));
+    if(Array.isArray(data.printQueue))data.printQueue.forEach(it=>addJob(it,'Liste d’impression'));
+    return freeze({...sheet,plans:plates(plan&&plan.plateaux,'plans'),plaques:plates(f.plaques,'plaques'),jobs,
+      hueforge:{eligible:hf,candidates:candidates.map(m=>({id:clone(m.id),name:String(m.name||'')})),selected:selected.length===1?modelProjection(selected[0]):null}});
   }
-  function fieldFor(q){
-    if(/\bfiche\b|\binformations? d impression\b|\binfos? d impression\b/.test(q))return 'all';
-    if(/\b(temps|duree)\b/.test(q))return 'duration';
-    if(/\bplateau\b/.test(q))return 'plateau';
-    if(/\b(couleur|couleurs)\b/.test(q))return 'colors';
-    if(/\b(swaps?|changements?)\b/.test(q))return 'swaps';
-    if(/\bpoids\b/.test(q))return 'weight';
-    if(/\b(dimensions?|hauteur|largeur|profondeur)\b/.test(q))return 'dimensions';
-    return 'all';
+  function modelText(m){const swaps=m.swaps===null?'Swaps non renseignés':m.swaps.length===0?'0 swap enregistré':m.swaps.map((s,i)=>'Swap '+(i+1)+' : '+(s.from||'couleur de départ non renseignée')+' → '+(s.to||'couleur d’arrivée non renseignée')+' ; heure '+(s.time||'non renseignée')+' ; couche '+(s.layer||'non renseignée')).join(' ; ');
+    return 'Modèle HueForge sélectionné — '+m.name+' (#'+m.id+') : '+duration(m.minutes)+' ; couleurs : '+(m.colors.join(', ')||'non renseignées')+' ; '+swaps+'. Sélection temporaire pour cette page, aucune liaison enregistrée.';}
+  function plateText(p){return p.label+' : '+duration(p.minutes)+' ; couleurs : '+(p.colors.join(', ')||'non renseignées')+' ; '+(p.state==='done'?'fait':p.state==='todo'?'reste à imprimer':'statut non renseigné');}
+  function sourceLabel(source){return source==='plaques'?'Suivi plaques de la fiche (distinct du plan)':'Plan d’impression — « Quel plateau ? »';}
+  function listText(sheet,source){const list=sheet[source];return sourceLabel(source)+' : '+(list.length?list.map(plateText).join(' ; '):'aucun plateau enregistré')+'.';}
+  function rowAnswer(sheet,field){const rows=sheet.rows.filter(r=>field==='all'||r.key===field||field==='dimensions'&&['height','width','depth'].includes(r.key));
+    return {answer:sheet.name+' — '+(sheet.rows.every(r=>r.value===null)?'aucune information technique n’est renseignée dans la fiche. ':'Fiche produit : ')+rows.map(r=>r.label+' : '+(r.value===null?'non renseigné':r.value)).join(' ; ')+'.',missingInformation:rows.filter(r=>r.value===null).map(r=>r.label)};}
+  function isRequest(q){return /\bfiche\b|\b(informations?|infos?) d impression\b|\bplateaux?\b|\bplaques\b|\b(par plateau|swaps?|changements? de filament)\b/.test(q)
+    || /\b(temps|duree)\b/.test(q)&&/\b(imprimer|impression|produit|plateau|plaque)\b/.test(q)
+    || /\b(dimensions?|hauteur|largeur|profondeur|poids|couleurs?)\b/.test(q)&&/\b(pour|produit|fiche|imprimer|impression|plateau|plaque)\b/.test(q)
+    || /\bmodele (hueforge|youforge|hf)\b.*\b(de|du|pour)\b/.test(q)||/\bplanning\b.*\b(ce produit|cet article)\b/.test(q);}
+  function details(message){
+    const q=normalize(message),source=/\bplaque(s)?\b/.test(q)?'plaques':'plans';
+    let field=/\bfiche\b|\b(informations?|infos?) d impression\b/.test(q)?'all':/\bplanning\b/.test(q)?'jobs':/\bmodele (hueforge|youforge|hf)\b/.test(q)?'hf':
+      /\b(restent|reste|restants|restantes)\b/.test(q)&&/\b(plateaux|plaques)\b/.test(q)?'remaining':/\b(temps|duree)\b/.test(q)?'duration':
+      /\bpar plateau\b/.test(q)?'plateau':/\b(swaps?|changements?)\b/.test(q)?'swaps':/\b(couleur|couleurs)\b/.test(q)?'colors':
+      /\bpoids\b/.test(q)?'weight':/\b(dimensions?|hauteur|largeur|profondeur)\b/.test(q)?'dimensions':'list';
+    const child=q.match(/\b(plateau|plaque)\s+(?!(?:de|du|pour|d)\b)(.+?)(?=\s+(?:de|du|pour)\s+|$)/);
+    const childQuery=child&&!/\bpar plateau\b/.test(q)?child[2].replace(/\b(numero|n)\b/g,'').trim():null;
+    const raw=childQuery?q.replace(child[0],' '):q;
+    const query=(field==='hf'?raw.replace(/\bmodele\b/,' '):raw).replace(/\b(jarvis|donne|donner|moi|montre|affiche|consulte|consulter|fiche|technique|informations?|infos?|impression|imprimer|combien|temps|duree|faut|fautil|il|pieces?|exemplaires?|quantite|par|plateaux?|plaques?|nombre|nb|couleurs?|swaps?|changements?|filament|dimensions?|hauteur|largeur|profondeur|poids|enregistre|est|sont|quel|quelle|quels|quelles|le|la|les|l|de|d|du|des|pour|sur|a|prend|prennent|reste|restent|restants|restantes|planning)\b/g,' ').replace(/\s+/g,' ').trim();
+    return {field,source,childQuery,query};
   }
-  function isRequest(q){
-    return /\bfiche (technique|d impression|impression)\b|\b(informations?|infos?) d impression\b/.test(q)
-      || /\b(temps|duree)\b/.test(q)&&/\b(imprimer|impression|produit)\b/.test(q)
-      || /\b(par plateau|swaps?|changements? de filament)\b/.test(q)
-      || /\b(dimensions?|hauteur|largeur|profondeur|poids|couleurs?)\b/.test(q)&&/\b(pour|produit|fiche|imprimer|impression)\b/.test(q);
+  function response(answer,options={}){return {kind:'direct',result:freeze({outcome:options.outcome||'direct_answer',answer,proposal:null,topic:'fiche technique',readAction:options.printing?'consult.printing':ACTION,missingInformation:options.missingInformation||[],pending:options.pending||null})};}
+  function context(sheet,op){return {kind:'technical_sheet_context',productId:sheet.productId,field:op.field,source:op.source};}
+  function modelChoices(sheet,op,prefix=''){
+    const list=sheet.hueforge.candidates.slice(0,12);
+    return response(prefix+(list.length?' Quel modèle HueForge veux-tu consulter pour '+sheet.name+' ? '+list.map((m,i)=>(i+1)+'. '+m.name+' (#modèle '+m.id+')').join(' ; ')+'.':' Aucun modèle HueForge n’est enregistré pour sélection.'),{outcome:list.length?'clarification':'direct_answer',printing:true,pending:list.length?{kind:'technical_model_choice',productId:sheet.productId,field:op.field,source:op.source,modelIds:list.map(m=>m.id)}:context(sheet,op)});
   }
-  function subject(message){
-    return normalize(message)
-      .replace(/\b(jarvis|donne|donner|moi|montre|affiche|consulte|consulter|fiche|technique|informations?|infos?|impression|imprimer|combien|temps|duree|faut|fautil|il|faut il|pieces?|exemplaires?|quantite|par|plateau|nombre|nb|couleurs?|swaps?|changements?|filament|dimensions?|hauteur|largeur|profondeur|poids|enregistre|est|sont|quel|quelle|quels|quelles|le|la|les|l|de|d|du|des|pour|sur|a)\b/g,' ')
-      .replace(/\s+/g,' ').trim();
+  function output(sheet,op){
+    const ctx=context(sheet,op);
+    if(op.field==='remaining'){const list=sheet[op.source],todo=list.filter(p=>p.state==='todo').length,unknown=list.filter(p=>p.state==='unknown').length;
+      return response(sheet.name+' — '+sourceLabel(op.source)+' : '+(list.length?todo+' plateau(x) enregistré(s) comme restant à imprimer'+(unknown?' ; '+unknown+' statut(s) non renseigné(s), décompte incomplet':''):'aucun plateau enregistré')+'.',{pending:ctx,printing:true});}
+    if(op.field==='list')return response(sheet.name+' — '+listText(sheet,op.source),{pending:ctx,printing:true});
+    if(op.field==='jobs')return response(sheet.name+' — Impressions ponctuelles liées par ID : '+(sheet.jobs.length?sheet.jobs.map(j=>j.source+(j.date?' '+j.date:'')+' — '+j.name+' : '+duration(j.minutes)+' ; '+j.state).join(' ; '):'aucune')+'. Ces données ne remplacent pas la fiche ni le modèle.',{pending:ctx,printing:true});
+    if(op.field==='hf'||op.field==='swaps'&&sheet.hueforge.eligible){return sheet.hueforge.selected?response(sheet.name+' — '+modelText(sheet.hueforge.selected),{pending:ctx,printing:true}):modelChoices(sheet,op);}
+    const rows=rowAnswer(sheet,op.field);
+    let text=rows.answer;
+    if(op.field==='all'){if(sheet.plans.length)text+=' '+listText(sheet,'plans');if(sheet.plaques.length)text+=' '+listText(sheet,'plaques');
+      if(sheet.jobs.length)text+=' Impressions ponctuelles liées par ID : '+sheet.jobs.map(j=>j.source+(j.date?' '+j.date:'')+' — '+duration(j.minutes)).join(' ; ')+'.';
+    }else if(['duration','colors'].includes(op.field)&&sheet.plans.length)text+=' '+listText(sheet,'plans');
+    if(sheet.hueforge.eligible&&['all','duration','colors'].includes(op.field)){
+      if(sheet.hueforge.selected)text+=' '+modelText(sheet.hueforge.selected);
+      else {const choice=modelChoices(sheet,op,text);return {...choice,result:freeze({...choice.result,missingInformation:rows.missingInformation})};}
+    }
+    return response(text,{pending:ctx,missingInformation:rows.missingInformation});
   }
-  function answerFor(sheet,field){
-    const rows=sheet.rows.filter(r=>field==='all'||r.key===field||field==='dimensions'&&['height','width','depth'].includes(r.key));
-    const none=sheet.rows.every(r=>r.value===null);
-    return {answer:sheet.name+' — '+(none?'aucune information technique n’est renseignée. ':'')+rows.map(r=>r.label+' : '+(r.value===null?'non renseigné':r.value)).join(' ; ')+'.',
-      missingInformation:rows.filter(r=>r.value===null).map(r=>r.label)};
+  function chooseNumber(q,list,key){
+    const id=q.match(/^(?:le\s+)?(?:numero|reference|modele|#)\s*(\d+)$/),bare=q.match(/^(?:le\s+)?(\d+)$/),ordinal=q.match(/^(?:le|la)?\s*(premier|premiere|deuxieme|second|seconde|troisieme)$/);
+    if(id)return list.filter(it=>String(it[key])===id[1]);
+    if(ordinal){const i=/prem/.test(ordinal[1])?0:/deux|second/.test(ordinal[1])?1:2;return list[i]?[list[i]]:[];}
+    if(bare){const same=list.filter(it=>String(it[key])===bare[1]),rank=list[Number(bare[1])-1];if(same.length&&rank&&same[0]!==rank)return [];return same.length?same:rank?[rank]:[];}
+    return null;
   }
-  function response(answer,options={}){
-    return {kind:'direct',result:freeze({outcome:options.outcome||'direct_answer',answer,proposal:null,topic:'fiche technique',readAction:ACTION,missingInformation:options.missingInformation||[],pending:options.pending||null})};
+  function plateauResult(sheet,op,list){
+    const full=sheet[op.source],needle=normalize(op.childQuery||''),numeric=needle.match(/^\d+$/);
+    let found=list||full.filter(p=>numeric?p.index===Number(needle)-1:normalize(p.label).includes(needle)||p.colors.some(c=>normalize(c).includes(needle)));
+    if(found.length===1)return response(sheet.name+' — '+sourceLabel(op.source)+' : '+plateText(found[0])+'.',{pending:context(sheet,op),printing:true});
+    return response(sheet.name+' — '+(found.length?'Quel plateau ? '+found.map(p=>(p.index+1)+'. '+p.label).join(' ; '):'Aucun plateau correspondant. Précise parmi : '+full.map(p=>(p.index+1)+'. '+p.label).join(' ; '))+'.',{outcome:'clarification',printing:true,pending:{kind:'technical_plateau_choice',productId:sheet.productId,field:op.field,source:op.source,indices:(found.length?found:full).map(p=>p.index),fingerprint:JSON.stringify(full)}});
   }
+  function selectModel(data,productId,modelId){const sheet=read(data,productId),all=Array.isArray(data.hfTemplates)?data.hfTemplates:[],found=all.filter(m=>String(m.id)===String(modelId));
+    if(!sheet.hueforge.eligible||found.length!==1)throw new Error('MODEL_SELECTION_INVALID');selections.set(String(productId),found[0].id);return read(data,productId);}
   function route(message,data,pending){
-    const q=normalize(message),requested=isRequest(q),choice=pending&&pending.kind==='technical_sheet_choice';
+    const q=normalize(message),requested=isRequest(q),choice=pending&&['technical_sheet_choice','technical_model_choice','technical_plateau_choice'].includes(pending.kind);
     const sensitive=/\b(couts? de revient|prix de revient|marges?)\b/.test(q)||requested&&/\b(prix|couts?|finances?|euros?|chiffre d affaires)\b/.test(q);
     if(!requested&&!choice&&!sensitive)return null;
     if(!requested&&choice&&/\b(stock|inventaire|objectif|seuil|regle|caisse|ticket|marche|urssaf)\b/.test(q))return null;
-    const security=root.JarvisSecurity;
-    if(!security||security.getAction(ACTION).readOnly!==true)throw new Error('READ_ACTION_FORBIDDEN');
-    const before=clone(data);
-    let output;
-    if(sensitive)output=response('Les coûts de revient, marges et données financières ne sont pas communiqués par la consultation des fiches techniques.',{outcome:'refusal'});
-    else if(/\b(modifie|modifier|change|changer|mets|mettre|corrige|corriger|cree|creer|ajoute|ajouter|supprime|supprimer|enregistre|enregistrer)\b/.test(q)){
-      output=response('Cette consultation est en lecture seule. La fiche technique n’a pas été modifiée.',{outcome:'refusal'});
+    const before=clone(data),security=root.JarvisSecurity;
+    if(!security||security.getAction(ACTION).readOnly!==true||security.getAction('consult.printing').readOnly!==true)throw new Error('READ_ACTION_FORBIDDEN');
+    let out;
+    if(sensitive)out=response('Les coûts de revient, marges et données financières ne sont pas communiqués par la consultation des fiches techniques.',{outcome:'refusal'});
+    else if(/\b(modifie|modifier|change|changer|mets|mettre|corrige|corriger|cree|creer|ajoute|ajouter|supprime|supprimer|enregistre|enregistrer)\b/.test(q))out=response('Cette consultation est en lecture seule. La fiche technique n’a pas été modifiée.',{outcome:'refusal'});
+    else if(!requested&&pending&&pending.kind==='technical_model_choice'){
+      const sheet=read(data,pending.productId),list=sheet.hueforge.candidates.filter(m=>pending.modelIds.some(id=>String(id)===String(m.id)));
+      let found=chooseNumber(q,list,'id');if(found===null)found=list.filter(m=>normalize(m.name)===q.replace(/^modele\s+/,''));
+      out=found.length===1?output(selectModel(data,pending.productId,found[0].id),pending):modelChoices(sheet,pending,'Sélection non reconnue ou ambiguë.');
+    }else if(!requested&&pending&&pending.kind==='technical_plateau_choice'){
+      const sheet=read(data,pending.productId),full=sheet[pending.source];
+      if(JSON.stringify(full)!==pending.fingerprint)out=response('Le plan a changé. Relis la liste des plateaux avant de sélectionner.',{outcome:'clarification',pending:context(sheet,pending),printing:true});
+      else {const list=full.filter(p=>pending.indices.includes(p.index)),rank=q.match(/^(?:le|la)?\s*(premier|premiere|deuxieme|second|seconde|troisieme|\d+)$/);
+        let found=rank?list[/prem/.test(rank[1])?0:/deux|second/.test(rank[1])?1:/trois/.test(rank[1])?2:Number(rank[1])-1]:null;
+        out=plateauResult(sheet,{...pending,childQuery:q},found?[found]:undefined);}
     }else{
-      const field=requested?fieldFor(q):pending.field,query=subject(message);
+      const op=requested?details(message):{...details(message),field:pending.field,source:pending.source||'plans'},query=op.query;
       let matches=[];
-      if(!requested&&choice){
-        const numbered=q.match(/^(?:le\s+)?(?:#\s*)?(\d+)$/);
-        const reply=root.JarvisReadBroker.route(numbered?'numéro '+numbered[1]:message,{kind:'entity',actionId:ACTION,candidates:pending.candidates});
-        const candidates=reply.pending&&reply.pending.candidates||pending.candidates;
-        if(candidates.length===1)matches=(data.products||[]).filter(p=>String(p.id)===String(candidates[0]));
-        else matches=root.JarvisReadBroker.resolveProduct({products:(data.products||[]).filter(p=>!pending.candidates.length||pending.candidates.some(id=>String(id)===String(p.id)))},query).matches;
-      }else if((requested&&!query)||/^(ce produit|cet article|celui ci|ce modele|le meme produit)$/.test(query)){
-        if(pending&&pending.kind==='technical_sheet_context')matches=(data.products||[]).filter(p=>String(p.id)===String(pending.productId));
-      }else if(query)matches=root.JarvisReadBroker.resolveProduct(data,query).matches;
-      if(!matches.length){
-        output=response(query&&!/^(ce produit|cet article|celui ci|ce modele|le meme produit)$/.test(query)?'Je ne trouve pas ce produit. Précise son nom ou sa catégorie pour consulter sa fiche technique.':'Quel produit veux-tu consulter ? Précise son nom.',{outcome:'clarification',missingInformation:['produit'],pending:{kind:'technical_sheet_choice',candidates:choice?pending.candidates:[],field}});
-      }else if(matches.length>1){
-        output=response('Quel produit veux-tu consulter ? '+matches.map((p,i)=>(i+1)+'. '+p.name+' — '+(p.category||p.categorie||'catégorie non renseignée')+' (#'+p.id+')').join(' ; ')+'.',{outcome:'clarification',missingInformation:['produit'],pending:{kind:'technical_sheet_choice',candidates:matches.map(p=>p.id),field}});
-      }else{
-        const sheet=read(data,matches[0].id),answer=answerFor(sheet,field);
-        output=response(answer.answer,{missingInformation:answer.missingInformation,pending:{kind:'technical_sheet_context',productId:sheet.productId,field}});
-      }
+      if(!requested&&pending&&pending.kind==='technical_sheet_choice'){
+        const dataCandidates=pending.candidates.flatMap(id=>(data.products||[]).filter(p=>String(id)===String(p.id)));
+        const found=chooseNumber(q,dataCandidates,'id');
+        if(found!==null)matches=found;else matches=root.JarvisReadBroker.resolveProduct({products:pending.candidates.length?dataCandidates:(data.products||[])},query).matches;
+      }else if(!query||/^(ce produit|cet article|celui ci|ce modele|le meme produit)$/.test(query)){
+        if(pending&&['technical_sheet_context','technical_model_choice','technical_plateau_choice'].includes(pending.kind))matches=(data.products||[]).filter(p=>String(p.id)===String(pending.productId));
+      }else matches=root.JarvisReadBroker.resolveProduct(data,query).matches;
+      if(!matches.length)out=response(query&&!/^(ce produit|cet article|celui ci|ce modele|le meme produit)$/.test(query)?'Je ne trouve pas ce produit. Précise son nom et sa catégorie.':'Quel produit veux-tu consulter ? Précise son nom et sa catégorie.',{outcome:'clarification',missingInformation:['produit'],pending:{kind:'technical_sheet_choice',candidates:pending&&pending.kind==='technical_sheet_choice'?pending.candidates:[],field:op.field,source:op.source}});
+      else if(matches.length>1){const cats=[...new Set(matches.map(p=>p.category||p.categorie||''))];out=response((cats.length>1?'Quelle catégorie et référence veux-tu consulter ? ':'Quelle référence exacte veux-tu consulter ? ')+matches.map((p,i)=>(i+1)+'. '+p.name+' — '+(p.category||p.categorie||'catégorie non renseignée')+(p.variant?' — '+p.variant:'')+' (#'+p.id+')').join(' ; ')+'.',{outcome:'clarification',missingInformation:['produit'],pending:{kind:'technical_sheet_choice',candidates:matches.map(p=>p.id),field:op.field,source:op.source}});}
+      else {const sheet=read(data,matches[0].id);out=op.childQuery?plateauResult(sheet,op):output(sheet,op);}
     }
-    const audit=security.auditCandidate(ACTION,before,clone(data));
-    if(!audit.ok||audit.changes.length||audit.protectedFinancialDataUnchanged!==true)throw new Error('READ_AUDIT_FAILED');
-    return output;
+    for(const action of [ACTION,'consult.printing']){const audit=security.auditCandidate(action,before,clone(data));if(!audit.ok||audit.changes.length||audit.protectedFinancialDataUnchanged!==true)throw new Error('READ_AUDIT_FAILED');}
+    return out;
   }
-  function open(productId){
-    const data=typeof db!=='undefined'?db:root.db;
-    let sheet;
+  function open(productId,preserveScroll=false){
+    const data=typeof db!=='undefined'?db:root.db;let sheet;
+    const previousScroll=preserveScroll?(document.getElementById('modal-content')?.scrollTop||0):0;
     try{sheet=read(data,productId);}catch(error){openModal('<div class="modal-title">Fiche indisponible</div><p>Le produit est absent ou son identifiant est ambigu.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');return;}
     const fields=sheet.rows.map(r=>'<div><dt style="color:var(--muted);font-size:12px">'+escape(r.label)+'</dt><dd style="margin:4px 0 12px;font-weight:700">'+escape(r.value===null?'Non renseigné':r.value)+'</dd></div>').join('');
-    openModal('<div class="modal-title">Fiche technique — '+escape(sheet.name)+'</div><p>'+escape(sheet.category)+' · Référence #'+escape(sheet.productId)+'</p><dl style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:8px 16px">'+fields+'</dl><p style="color:var(--muted);font-size:12px">Consultation des informations enregistrées. Le poids n’indique pas nécessairement la consommation de filament.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');
+    const section=(label,text)=>'<section style="margin:14px 0"><h3>'+escape(label)+'</h3><p style="white-space:pre-wrap">'+escape(text)+'</p></section>';
+    let extra='';
+    if(sheet.plans.length)extra+=section(sourceLabel('plans'),sheet.plans.map(plateText).join('\n'));
+    if(sheet.plaques.length)extra+=section(sourceLabel('plaques'),sheet.plaques.map(plateText).join('\n')+'\nCe suivi est distinct du plan; les travaux ne sont pas additionnés.');
+    if(sheet.hueforge.eligible){
+      if(sheet.hueforge.selected)extra+=section('HueForge',modelText(sheet.hueforge.selected));
+      const buttons=sheet.hueforge.candidates.map(m=>'<button class="btn btn-secondary btn-sm" onclick="selectProductTechnicalModel('+escape(JSON.stringify(String(sheet.productId)))+','+escape(JSON.stringify(String(m.id)))+')">'+escape(m.name)+' — modèle #'+escape(m.id)+'</button>').join(' ');
+      extra+='<section><h3>Modèle HueForge existant</h3><p>Sélection pour cette page uniquement. Aucun lien permanent n’est créé.</p>'+buttons+'</section>';
+    }
+    if(sheet.jobs.length)extra+=section('Impressions ponctuelles liées par ID',sheet.jobs.map(j=>j.source+(j.date?' '+j.date:'')+' — '+j.name+' : '+duration(j.minutes)+' ; '+j.state).join('\n')+'\nCes valeurs ne remplacent pas les données permanentes.');
+    openModal('<div class="modal-title">Fiche technique — '+escape(sheet.name)+'</div><p>'+escape(sheet.category)+' · Référence #'+escape(sheet.productId)+'</p><h3>Fiche produit</h3><dl style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:8px 16px">'+fields+'</dl>'+extra+'<p style="color:var(--muted);font-size:12px">Consultation des informations enregistrées. Le poids n’indique pas nécessairement la consommation de filament.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');
+    const modal=document.getElementById('modal-content');if(modal)modal.scrollTop=previousScroll;
   }
-  root.JarvisTechnicalSheet9B=Object.freeze({version:'9B-read-only-1',read,route,isRequest:message=>isRequest(normalize(message)),getState:()=>({readOnly:true,writesEnabled:false})});
+  root.JarvisTechnicalSheet9B=Object.freeze({version:'9B-read-only-2-connections',read,route,isRequest:message=>isRequest(normalize(message)),getState:()=>({readOnly:true,writesEnabled:false})});
   root.openProductTechnicalSheet=open;
+  root.selectProductTechnicalModel=(productId,modelId)=>{const data=typeof db!=='undefined'?db:root.db;try{selectModel(data,productId,modelId);open(productId,true);}catch(error){openModal('<div class="modal-title">Sélection de modèle impossible</div><p>La référence ou le modèle est absent ou ambigu. Aucune liaison n’a été enregistrée.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');}};
 })(typeof window!=='undefined'?window:globalThis);
 </script>
 
