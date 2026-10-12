@@ -9,7 +9,8 @@ if (typeof deployed !== 'string' || !runnerTemp) throw new Error('TEMPORARY_RULE
 const actualSha256 = crypto.createHash('sha256').update(deployed, 'utf8').digest('hex').toUpperCase();
 if (actualSha256 !== expectedSha256) throw new Error('PUBLISHED_RULES_FINGERPRINT_MISMATCH');
 const normalizedDeployed = deployed.charCodeAt(0) === 0xFEFF ? deployed.slice(1) : deployed;
-if (!normalizedDeployed.startsWith("rules_version = '2';")) {
+const leadingCommentsRemoved = normalizedDeployed.replace(/^(?:[ \t]*\/\/[^\r\n]*(?:\r?\n|$)|[ \t]*\r?\n)*/, '');
+if (!/^rules_version\s*=\s*'2';/.test(leadingCommentsRemoved)) {
   throw new Error('PUBLISHED_RULES_BASELINE_INVALID_OR_ALREADY_CONTAINS_9C');
 }
 const matchPaths = [...normalizedDeployed.matchAll(/^\s*match\s+(.+?)\s+\{\s*$/gm)].map(match => match[1].trim());
