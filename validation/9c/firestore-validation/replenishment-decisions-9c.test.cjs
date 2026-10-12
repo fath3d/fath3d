@@ -17,7 +17,15 @@ const api=global.JarvisReplenishment9C;
 const pathFor=id=>'fath3d/'+UID+'/replenishmentDecisions/'+id;
 const parentPath='fath3d/'+UID+'/settings/replenishment';
 const tests=[];let env,owner,other,anonymous;
-async function test(name,fn){try{await env.clearFirestore();await fn();tests.push({name,status:'RÉUSSI'});}catch(error){tests.push({name,status:'ÉCHEC',error:error.message});}}
+function safeErrorCode(error){
+  const code=error&&typeof error.code==='string'?error.code:'';
+  if(/^[A-Za-z0-9_./-]{1,80}$/.test(code))return code;
+  if(error&&error.name==='AssertionError')return 'ASSERTION_FAILURE';
+  const message=String(error&&error.message||'');
+  const match=message.match(/\b(?:DECISION|FIRESTORE|FIREBASE|PERMISSION|AUTH|RULES|ERR)_[A-Z0-9_]+\b/);
+  return match?match[0]:'INITIALIZATION_OR_EMULATOR_FAILURE';
+}
+async function test(name,fn){try{await env.clearFirestore();await fn();tests.push({name,status:'RÉUSSI'});}catch(error){tests.push({name,status:'ÉCHEC',error:error.message,errorCode:safeErrorCode(error)});}}
 async function existingPermissionProfile(rules){
   const profileEnv=await initializeTestEnvironment({projectId:PROJECT,firestore:{host:HOST,port:PORT,rules}});
   try{
@@ -72,7 +80,7 @@ function record(id,decision='reprint',revision=1,extra={}){return {schemaVersion
     await test('runtime mock bloque répétition après résultat incertain',async()=>{const adapter=api.createMockAdapter({ownerUid:'mock-owner'}),runtime=api.createRuntime({adapter,identity:{uid:'mock-owner',authenticated:true}});adapter.setFaultForTest('uncertain_after');const p=await runtime.prepare({productId:'mock-1',decision:'reprint'});assert.equal((await runtime.confirm(p.proposalId,{explicit:true})).status,'uncertain');await assert.rejects(runtime.prepare({productId:'mock-2',decision:'stopped'}),/DECISION_BUSY_OR_UNCERTAIN/);assert.equal(adapter.getWriteCount(),1);assert.equal((await runtime.reconcile()).status,'applied');});
     await test('le fichier complet testé est le candidat local approuvé et garde le verrou production 9C fermé',async()=>{assert.equal(candidateHash,'C5E7321F359835B048FB8C81D7A943555B3345E6665226693D57B28DEB897B76');assert.match(match[1],/const PRODUCTION_WRITES_ENABLED=false/);assert.match(match[1],/createFirebaseEmulatorAdapter/);assert.match(match[1],/127\.0\.0\.1:8785/);});
     await test('la décision 9C ne touche pas au stock boutique, aux ventes ni aux données de caisse/finance',async()=>{const ref=sdk.doc(owner,pathFor('side-effects'));await env.withSecurityRulesDisabled(async ctx=>{await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID+'/fixture/stock'),{maison:4,marche:2,boutique:7});await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID+'/fixture/finance'),{sales:123.45,tickets:['ticket-fixture-1'],urssaf:12.34});});const stockRef=sdk.doc(owner,'fath3d/'+UID+'/fixture/stock'),financeRef=sdk.doc(owner,'fath3d/'+UID+'/fixture/finance'),beforeStock=(await sdk.getDoc(stockRef)).data(),beforeFinance=(await sdk.getDoc(financeRef)).data(),runtime=runtimeFor(owner),p=await runtime.prepare({productId:'side-effects',decision:'reprint'});await runtime.confirm(p.proposalId,{explicit:true});assert.deepEqual((await sdk.getDoc(stockRef)).data(),beforeStock);assert.deepEqual((await sdk.getDoc(financeRef)).data(),beforeFinance);assert.equal((await sdk.getDoc(ref)).exists(),true);});
-  }catch(error){tests.push({name:'initialisation / compilation Rules ou émulateur',status:'ÉCHEC',error:error.stack||error.message});}
+  }catch(error){tests.push({name:'initialisation / compilation Rules ou émulateur',status:'ÉCHEC',error:error.stack||error.message,errorCode:safeErrorCode(error)});}
   finally{
     if(env)await env.cleanup();
     delete global.JarvisReplenishment9C;
