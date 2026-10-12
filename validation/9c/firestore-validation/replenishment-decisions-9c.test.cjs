@@ -3,9 +3,13 @@ const {initializeTestEnvironment,assertFails,assertSucceeds}=require('@firebase/
 const sdk=require('firebase/firestore');
 const PROJECT='demo-jarvis-replenishment-9c',HOST='127.0.0.1',PORT=8785,UID='owner-9c-test',OTHER='other-9c-test';
 if(process.env.FIRESTORE_EMULATOR_HOST!==HOST+':'+PORT||process.env.GCLOUD_PROJECT!==PROJECT||!PROJECT.startsWith('demo-'))throw new Error('ISOLATION_REQUIRED: emulator and fictitious demo project must be explicit');
-const htmlPath=path.resolve(__dirname,'../9c-replenishment/manager/index.html'),rulesPath=path.resolve(__dirname,'../firestore.rules.proposed');
+const htmlPath=process.env.JARVIS_9C_CANDIDATE_PATH,rulesPath=process.env.JARVIS_9C_COMBINED_RULES_PATH;
+if(!htmlPath||!fs.existsSync(htmlPath))throw new Error('EPHEMERAL_CANDIDATE_MANAGER_REQUIRED');
+if(!rulesPath||!fs.existsSync(rulesPath))throw new Error('EPHEMERAL_COMBINED_RULES_REQUIRED');
 const html=fs.readFileSync(htmlPath,'utf8'),match=html.match(/<script id="jarvis-replenishment-9c-decisions">([\s\S]*?)<\/script>/);
 if(!match)throw new Error('9C_DECISION_MODULE_MISSING');
+const candidateHash=crypto.createHash('sha256').update(html).digest('hex').toUpperCase();
+if(candidateHash!=='C5E7321F359835B048FB8C81D7A943555B3345E6665226693D57B28DEB897B76')throw new Error('CANDIDATE_MANAGER_HASH_MISMATCH');
 const originalWindow=global.window,originalCrypto=global.crypto;
 global.window=global;global.crypto=crypto.webcrypto;
 vm.runInThisContext(match[1],{filename:'jarvis-replenishment-9c-decisions.js'});
@@ -14,13 +18,38 @@ const pathFor=id=>'fath3d/'+UID+'/replenishmentDecisions/'+id;
 const parentPath='fath3d/'+UID+'/settings/replenishment';
 const tests=[];let env,owner,other,anonymous;
 async function test(name,fn){try{await env.clearFirestore();await fn();tests.push({name,status:'RÉUSSI'});}catch(error){tests.push({name,status:'ÉCHEC',error:error.message});}}
+async function existingPermissionProfile(rules){
+  const profileEnv=await initializeTestEnvironment({projectId:PROJECT,firestore:{host:HOST,port:PORT,rules}});
+  try{
+    await profileEnv.clearFirestore();
+    await profileEnv.withSecurityRulesDisabled(async ctx=>{
+      await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID),{payload:'synthetic-manager-payload',revision:1});
+      await sdk.setDoc(sdk.doc(ctx.firestore(),parentPath),{schemaVersion:1,revision:1,categoryRules:{},lastMutationId:'fixture-rule-mutation-0001'});
+    });
+    await assertSucceeds(sdk.getDoc(sdk.doc(profileEnv.authenticatedContext(UID).firestore(),'fath3d/'+UID)));
+    await assertSucceeds(sdk.getDoc(sdk.doc(profileEnv.authenticatedContext(UID).firestore(),parentPath)));
+    await assertFails(sdk.getDoc(sdk.doc(profileEnv.authenticatedContext(OTHER).firestore(),'fath3d/'+UID)));
+    await assertFails(sdk.getDoc(sdk.doc(profileEnv.authenticatedContext(OTHER).firestore(),parentPath)));
+    await assertFails(sdk.getDoc(sdk.doc(profileEnv.unauthenticatedContext().firestore(),'fath3d/'+UID)));
+    await assertFails(sdk.getDoc(sdk.doc(profileEnv.unauthenticatedContext().firestore(),parentPath)));
+    return {ownerReadsManager:true,ownerReadsSettings:true,otherUidDeniedManager:true,otherUidDeniedSettings:true,anonymousDeniedManager:true,anonymousDeniedSettings:true};
+  }finally{await profileEnv.cleanup();}
+}
 function fixtureDb(database){return database;}
 function adapterFor(database,userUid=UID){return api.createFirebaseEmulatorAdapter({db:fixtureDb(database),auth:{currentUser:{uid:userUid}},sdk,emulatorHost:HOST+':'+PORT});}
 function runtimeFor(database,userUid=UID,now){return api.createRuntime({adapter:adapterFor(database,userUid),identity:{authenticated:true,uid:userUid},...(now?{now}:{})});}
 function record(id,decision='reprint',revision=1,extra={}){return {schemaVersion:1,productId:id,decision,revision,lastMutationId:'fixture-mutation-id-'+String(revision).padStart(6,'0'),...extra};}
 (async()=>{
   try{
-    env=await initializeTestEnvironment({projectId:PROJECT,firestore:{host:HOST,port:PORT,rules:fs.readFileSync(rulesPath,'utf8')}});
+    const combinedRules=fs.readFileSync(rulesPath,'utf8');
+    if(combinedRules.includes('86F10B4A')||combinedRules.includes('JARVIS_9C_RULES_TEMP'))throw new Error('RULES_SECRET_MARKER_IN_COMBINED_FILE');
+    const deployedRulesPath=process.env.JARVIS_9C_DEPLOYED_RULES_PATH;
+    if(!deployedRulesPath||!fs.existsSync(deployedRulesPath))throw new Error('EPHEMERAL_DEPLOYED_RULES_REQUIRED');
+    const baselineProfile=await existingPermissionProfile(fs.readFileSync(deployedRulesPath,'utf8'));
+    const combinedProfile=await existingPermissionProfile(combinedRules);
+    assert.deepEqual(combinedProfile,baselineProfile,'les permissions existantes Manager/Settings doivent être identiques avant/après ajout 9C');
+    tests.push({name:'parité des permissions existantes Manager et 9A entre Rules publiées et Rules combinées',status:'RÉUSSI'});
+    env=await initializeTestEnvironment({projectId:PROJECT,firestore:{host:HOST,port:PORT,rules:combinedRules}});
     owner=env.authenticatedContext(UID).firestore();other=env.authenticatedContext(OTHER).firestore();anonymous=env.unauthenticatedContext().firestore();
     await test('émulateur compilé, chemins Firestore cohérents et adaptateur emulator-only',async()=>{assert.equal(api.decisionCollectionPath(UID),'fath3d/'+UID+'/replenishmentDecisions');assert.equal(api.decisionDocumentPath(UID,'path-check'),pathFor('path-check'));assert.equal(api.createRuntime({adapter:api.createMockAdapter(),identity:{uid:'mock',authenticated:true}}).getState().productionWritesEnabled,false);assert.throws(()=>api.createFirebaseEmulatorAdapter({db:owner,auth:{currentUser:{uid:UID}},sdk,emulatorHost:'prod'}),/DECISION_EMULATOR_REQUIRED/);});
     await test('lecture initiale vide et consultation sans écriture',async()=>{const runtime=runtimeFor(owner);assert.deepEqual({...await runtime.read()},{ });assert.equal(runtime.getState().persistent,true);});
@@ -41,6 +70,8 @@ function record(id,decision='reprint',revision=1,extra={}){return {schemaVersion
     await test('confirmation explicite obligatoire et double confirmation bloquée',async()=>{const runtime=runtimeFor(owner),p=await runtime.prepare({productId:'double',decision:'reprint'});await assert.rejects(runtime.confirm(p.proposalId),/DECISION_EXPLICIT_CONFIRMATION_REQUIRED/);assert.equal((await runtime.confirm(p.proposalId,{explicit:true})).status,'committed');await assert.rejects(runtime.confirm(p.proposalId,{explicit:true}),/DECISION_PROPOSAL_MISMATCH/);});
     await test('atomicité fonctionnelle : décision seule, aucun planning/création de stock',async()=>{const runtime=runtimeFor(owner),before=await runtime.read(),p=await runtime.prepare({productId:'no-side-effects',decision:'reprint'});await runtime.confirm(p.proposalId,{explicit:true});const after=await runtime.read();assert.deepEqual(Object.keys(after['no-side-effects']).sort(),['decision','lastMutationId','productId','revision','schemaVersion'].sort());assert.deepEqual(before['no-side-effects'],undefined);});
     await test('runtime mock bloque répétition après résultat incertain',async()=>{const adapter=api.createMockAdapter({ownerUid:'mock-owner'}),runtime=api.createRuntime({adapter,identity:{uid:'mock-owner',authenticated:true}});adapter.setFaultForTest('uncertain_after');const p=await runtime.prepare({productId:'mock-1',decision:'reprint'});assert.equal((await runtime.confirm(p.proposalId,{explicit:true})).status,'uncertain');await assert.rejects(runtime.prepare({productId:'mock-2',decision:'stopped'}),/DECISION_BUSY_OR_UNCERTAIN/);assert.equal(adapter.getWriteCount(),1);assert.equal((await runtime.reconcile()).status,'applied');});
+    await test('le fichier complet testé est le candidat local approuvé et garde le verrou production 9C fermé',async()=>{assert.equal(candidateHash,'C5E7321F359835B048FB8C81D7A943555B3345E6665226693D57B28DEB897B76');assert.match(match[1],/const PRODUCTION_WRITES_ENABLED=false/);assert.match(match[1],/createFirebaseEmulatorAdapter/);assert.match(match[1],/127\.0\.0\.1:8785/);});
+    await test('la décision 9C ne touche pas au stock boutique, aux ventes ni aux données de caisse/finance',async()=>{const ref=sdk.doc(owner,pathFor('side-effects'));await env.withSecurityRulesDisabled(async ctx=>{await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID+'/fixture/stock'),{maison:4,marche:2,boutique:7});await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID+'/fixture/finance'),{sales:123.45,tickets:['ticket-fixture-1'],urssaf:12.34});});const stockRef=sdk.doc(owner,'fath3d/'+UID+'/fixture/stock'),financeRef=sdk.doc(owner,'fath3d/'+UID+'/fixture/finance'),beforeStock=(await sdk.getDoc(stockRef)).data(),beforeFinance=(await sdk.getDoc(financeRef)).data(),runtime=runtimeFor(owner),p=await runtime.prepare({productId:'side-effects',decision:'reprint'});await runtime.confirm(p.proposalId,{explicit:true});assert.deepEqual((await sdk.getDoc(stockRef)).data(),beforeStock);assert.deepEqual((await sdk.getDoc(financeRef)).data(),beforeFinance);assert.equal((await sdk.getDoc(ref)).exists(),true);});
   }catch(error){tests.push({name:'initialisation / compilation Rules ou émulateur',status:'ÉCHEC',error:error.stack||error.message});}
   finally{
     if(env)await env.cleanup();
@@ -48,7 +79,11 @@ function record(id,decision='reprint',revision=1,extra={}){return {schemaVersion
     if(originalWindow===undefined)delete global.window;else global.window=originalWindow;
     if(originalCrypto===undefined)delete global.crypto;else global.crypto=originalCrypto;
     const report={projectId:PROJECT,emulator:HOST+':'+PORT,emulatorOnly:true,total:tests.length,passed:tests.filter(test=>test.status==='RÉUSSI').length,failed:tests.filter(test=>test.status==='ÉCHEC').length,firebaseProductionWrites:0,tests};
-    fs.writeFileSync(path.join(__dirname,'9c-decisions-results.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));if(report.failed)process.exitCode=1;
+    const reportPath=path.join(process.env.RUNNER_TEMP||require('node:os').tmpdir(),'9c-decisions-results.json');
+    fs.writeFileSync(reportPath,JSON.stringify(report,null,2),{mode:0o600});
+    console.log(JSON.stringify({projectId:report.projectId,emulatorOnly:report.emulatorOnly,total:report.total,passed:report.passed,failed:report.failed,failures:tests.filter(item=>item.status==='ÉCHEC').map(item=>({name:item.name,error:String(item.error||'').split('\n')[0]})),firebaseProductionWrites:0}));
+    if(report.failed)process.exitCode=1;
   }
 })();
+
 

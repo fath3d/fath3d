@@ -1,4 +1,4 @@
-name: Jarvis 9C Firestore isolated validation
+name: Jarvis 9C exact-Rules isolated validation
 on:
   push:
     branches:
@@ -13,8 +13,10 @@ concurrency:
   cancel-in-progress: true
 jobs:
   firestore-emulator:
+    if: github.ref == 'refs/heads/work/9c-firestore-validation'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    environment: jarvis-9c-validation
     steps:
       - name: Checkout test branch only
         uses: actions/checkout@v4
@@ -29,19 +31,50 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: Install pinned test dependencies
+      - name: Install pinned isolated test dependencies
         run: npm install --no-audit --no-fund --package-lock=false
         working-directory: validation/9c
-      - name: Run Firestore Rules and persistence tests in emulator
-        run: >-
-          npx firebase-tools emulators:exec
-          --only firestore
-          --project demo-jarvis-replenishment-9c
-          --config firebase.json
-          "node firestore-validation/replenishment-decisions-9c.test.cjs"
+      - name: Install Chromium for isolated candidate UI check
+        run: npx playwright install --with-deps chromium
+        working-directory: validation/9c
+      - name: Reconstruct and verify exact local candidate in runner temp
+        run: |
+          set -euo pipefail
+          candidate_dir="$RUNNER_TEMP/jarvis-9c-candidate"
+          mkdir -p "$candidate_dir/manager"
+          cp manager/index.html "$candidate_dir/manager/index.html"
+          patch --batch --forward --fuzz=0 -p1 -d "$candidate_dir" < validation/9c/candidate-manager-9c.patch
+          actual="$(sha256sum "$candidate_dir/manager/index.html" | cut -d ' ' -f1 | tr '[:lower:]' '[:upper:]')"
+          test "$actual" = "C5E7321F359835B048FB8C81D7A943555B3345E6665226693D57B28DEB897B76"
+          printf 'JARVIS_9C_CANDIDATE_PATH=%s\n' "$candidate_dir/manager/index.html" >> "$GITHUB_ENV"
+      - name: Prepare exact published Rules and additive 9C Rules in runner temp only
+        env:
+          JARVIS_9C_RULES_TEMP: ${{ secrets.JARVIS_9C_RULES_TEMP }}
+        run: |
+          set +x
+          node scripts/prepare-ephemeral-rules.cjs
+        working-directory: validation/9c
+      - name: Compile Rules and run the full candidate integration against the demo emulator
+        run: |
+          set +e
+          npx firebase-tools emulators:exec --only firestore --project demo-jarvis-replenishment-9c --config "$JARVIS_9C_FIREBASE_CONFIG" "node firestore-validation/replenishment-decisions-9c.test.cjs && node firestore-validation/candidate-manager-9c-ui.test.cjs" > "$RUNNER_TEMP/jarvis-9c-emulator.log" 2>&1
+          result=$?
+          node scripts/summarize-9c-results.cjs
+          exit "$result"
         working-directory: validation/9c
         env:
           FIREBASE_CLI_DISABLE_UPDATE_CHECK: "true"
           FIRESTORE_EMULATOR_HOST: "127.0.0.1:8785"
           GCLOUD_PROJECT: "demo-jarvis-replenishment-9c"
           GOOGLE_CLOUD_PROJECT: "demo-jarvis-replenishment-9c"
+      - name: Remove all temporary Rules and test files
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/jarvis-9c-deployed.rules" \
+            "$RUNNER_TEMP/jarvis-9c-combined.rules" \
+            "$RUNNER_TEMP/jarvis-9c-firebase.json" \
+            "$RUNNER_TEMP/9c-decisions-results.json" \
+            "$RUNNER_TEMP/9c-candidate-ui-results.json" \
+            "$RUNNER_TEMP/jarvis-9c-emulator.log"
+          rm -rf "$RUNNER_TEMP/jarvis-9c-candidate"
+
