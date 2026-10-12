@@ -6,9 +6,10 @@ if(process.env.FIRESTORE_EMULATOR_HOST!==HOST+':'+PORT||process.env.GCLOUD_PROJE
 const htmlPath=path.resolve(__dirname,'../9c-replenishment/manager/index.html'),rulesPath=path.resolve(__dirname,'../firestore.rules.proposed');
 const html=fs.readFileSync(htmlPath,'utf8'),match=html.match(/<script id="jarvis-replenishment-9c-decisions">([\s\S]*?)<\/script>/);
 if(!match)throw new Error('9C_DECISION_MODULE_MISSING');
-const context={crypto:crypto.webcrypto,Uint8Array,Date,JSON,Object,Set,WeakSet,String,Number,Array,Error,Math};context.window=context;context.globalThis=context;
-vm.runInNewContext(match[1],context,{filename:'jarvis-replenishment-9c-decisions.js'});
-const api=context.JarvisReplenishment9C;
+const originalWindow=global.window,originalCrypto=global.crypto;
+global.window=global;global.crypto=crypto.webcrypto;
+vm.runInThisContext(match[1],{filename:'jarvis-replenishment-9c-decisions.js'});
+const api=global.JarvisReplenishment9C;
 const pathFor=id=>'fath3d/'+UID+'/replenishmentDecisions/'+id;
 const parentPath='fath3d/'+UID+'/settings/replenishment';
 const tests=[];let env,owner,other,anonymous;
@@ -43,6 +44,9 @@ function record(id,decision='reprint',revision=1,extra={}){return {schemaVersion
   }catch(error){tests.push({name:'initialisation / compilation Rules ou émulateur',status:'ÉCHEC',error:error.stack||error.message});}
   finally{
     if(env)await env.cleanup();
+    delete global.JarvisReplenishment9C;
+    if(originalWindow===undefined)delete global.window;else global.window=originalWindow;
+    if(originalCrypto===undefined)delete global.crypto;else global.crypto=originalCrypto;
     const report={projectId:PROJECT,emulator:HOST+':'+PORT,emulatorOnly:true,total:tests.length,passed:tests.filter(test=>test.status==='RÉUSSI').length,failed:tests.filter(test=>test.status==='ÉCHEC').length,firebaseProductionWrites:0,tests};
     fs.writeFileSync(path.join(__dirname,'9c-decisions-results.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));if(report.failed)process.exitCode=1;
   }
