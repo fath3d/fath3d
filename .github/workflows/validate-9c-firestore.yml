@@ -44,6 +44,7 @@ jobs:
           mkdir -p "$candidate_dir/manager"
           cp manager/index.html "$candidate_dir/manager/index.html"
           patch --batch --forward --fuzz=0 -p1 -d "$candidate_dir" < validation/9c/candidate-manager-9c.patch
+          node -e 'const fs=require("node:fs"),p=process.argv[1],s=fs.readFileSync(p,"utf8");fs.writeFileSync(p,s.replace(/\r?\n/g,"\r\n"));' "$candidate_dir/manager/index.html"
           actual="$(sha256sum "$candidate_dir/manager/index.html" | cut -d ' ' -f1 | tr '[:lower:]' '[:upper:]')"
           test "$actual" = "C5E7321F359835B048FB8C81D7A943555B3345E6665226693D57B28DEB897B76"
           printf 'JARVIS_9C_CANDIDATE_PATH=%s\n' "$candidate_dir/manager/index.html" >> "$GITHUB_ENV"
