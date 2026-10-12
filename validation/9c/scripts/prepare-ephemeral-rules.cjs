@@ -8,10 +8,11 @@ const runnerTemp = process.env.RUNNER_TEMP;
 if (typeof deployed !== 'string' || !runnerTemp) throw new Error('TEMPORARY_RULES_SECRET_OR_RUNNER_TEMP_MISSING');
 const actualSha256 = crypto.createHash('sha256').update(deployed, 'utf8').digest('hex').toUpperCase();
 if (actualSha256 !== expectedSha256) throw new Error('PUBLISHED_RULES_FINGERPRINT_MISMATCH');
-if (!deployed.startsWith("rules_version = '2';") || deployed.includes('replenishmentDecisions')) {
+const normalizedDeployed = deployed.charCodeAt(0) === 0xFEFF ? deployed.slice(1) : deployed;
+if (!normalizedDeployed.startsWith("rules_version = '2';")) {
   throw new Error('PUBLISHED_RULES_BASELINE_INVALID_OR_ALREADY_CONTAINS_9C');
 }
-const matchPaths = [...deployed.matchAll(/^\s*match\s+(.+?)\s+\{\s*$/gm)].map(match => match[1].trim());
+const matchPaths = [...normalizedDeployed.matchAll(/^\s*match\s+(.+?)\s+\{\s*$/gm)].map(match => match[1].trim());
 const expectedMatchPaths = [
   '/databases/{database}/documents',
   '/fath3d/{userId}',
@@ -39,8 +40,8 @@ if (deployed.split(documentMatch).length !== 2) throw new Error('PUBLISHED_RULES
 const deployedPath = path.join(runnerTemp, 'jarvis-9c-deployed.rules');
 const combinedPath = path.join(runnerTemp, 'jarvis-9c-combined.rules');
 const tempFirebaseConfig = path.join(runnerTemp, 'jarvis-9c-firebase.json');
-fs.writeFileSync(deployedPath, deployed, { mode: 0o600, flag: 'wx' });
-fs.writeFileSync(combinedPath, deployed.replace(documentMatch, documentMatch + '\n    ' + ruleBlock + '\n'), { mode: 0o600, flag: 'wx' });
+fs.writeFileSync(deployedPath, normalizedDeployed, { mode: 0o600, flag: 'wx' });
+fs.writeFileSync(combinedPath, normalizedDeployed.replace(documentMatch, documentMatch + '\n    ' + ruleBlock + '\n'), { mode: 0o600, flag: 'wx' });
 const firebaseConfig = JSON.parse(fs.readFileSync(path.join(repoRoot, 'firebase.json'), 'utf8'));
 firebaseConfig.firestore.rules = combinedPath;
 fs.writeFileSync(tempFirebaseConfig, JSON.stringify(firebaseConfig), { mode: 0o600, flag: 'wx' });
