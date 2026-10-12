@@ -84,7 +84,8 @@
     MOCKS.add(adapter);return adapter;
   }
   function createFirebaseEmulatorAdapter({db,auth,sdk,emulatorHost}={}){
-    if(!db||!auth||!sdk||emulatorHost!=='127.0.0.1:8785'||!db._settings||!String(db._settings.host||'').includes('127.0.0.1:8785')||!['doc','collection','getDocsFromServer','runTransaction'].every(key=>typeof sdk[key]==='function'))throw new Error('DECISION_EMULATOR_REQUIRED');
+    const dbConnection=db&&(db._settings?db:db._delegate);
+    if(!db||!auth||!sdk||emulatorHost!=='127.0.0.1:8785'||!dbConnection||!dbConnection._settings||!String(dbConnection._settings.host||'').includes('127.0.0.1:8785')||!['doc','collection','getDocsFromServer','runTransaction'].every(key=>typeof sdk[key]==='function'))throw new Error('DECISION_EMULATOR_REQUIRED');
     function owner(uid){const user=auth.currentUser;if(!user||typeof user.uid!=='string'||user.uid!==uid)throw new Error('DECISION_AUTH_REQUIRED');}
     async function read({uid}){
       owner(uid);
