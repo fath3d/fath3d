@@ -16,47 +16,74 @@ const html=`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta nam
 let env,browser,context,ownerDb,runtime,api,page;
 const confirmTrace=[];
 const result={candidateSha256:hash,projectId:PROJECT,emulatorOnly:true,passed:0,failed:0,tests:[],firebaseProductionWrites:0};
-let currentStage='test setup';
-const safeError=(error)=>{
-  const code=String(error&&((error.code)||(error.name))||'ASSERTION_FAILURE').replace(/[^A-Za-z0-9_.:-]/g,'').slice(0,80);
-  let message=String(error&&(error.message||error)||'Unknown error').split(String.fromCharCode(10))[0];
-  message=message.replaceAll(PROJECT,'[demo-project]').replaceAll(UID,'[fixture-uid]')
-    .slice(0,220);
-  return {code,message};
-};
-async function step(name,fn){currentStage=name;return await fn();}
-async function test(name,fn){currentStage='start';try{await fn();result.tests.push({name,status:'RÉUSSI'});result.passed++;}catch(error){const safe=safeError(error);result.tests.push({name,status:'ÉCHEC',stage:currentStage,code:safe.code,error:safe.message});result.failed++;}}
-
+let currentStage='HARNESS_SETUP';
+const SAFE_CATEGORIES=new Set(['RULES_COMPILATION_FAILURE','RULES_LOAD_FAILURE','EMULATOR_CONNECTION_FAILURE','EMULATOR_SETUP_FAILURE','PERMISSION_DENIED','CLIENT_CONTEXT_INIT_FAILURE','CANDIDATE_INIT_FAILURE','BROWSER_INIT_FAILURE','DOM_INIT_FAILURE','UI_INIT_FAILURE','ASSERTION_FAILURE','TEST_LOGIC_FAILURE','UNKNOWN_TEST_FAILURE']);
+const STEP_IDS=new Map([
+  ['attente de la carte d’alerte','UI_ALERT_WAIT'],['vérification du seuil rendu','UI_ALERT_THRESHOLD_ASSERT'],['vérification du mode émulateur','UI_MODE_ASSERT'],
+  ['sélection À réimprimer','UI_DECISION_SELECT'],['clic Préparer','UI_PREPARE_CLICK'],['attente de la proposition','UI_PROPOSAL_WAIT'],
+  ['clic Annuler','UI_CANCEL_CLICK'],['attente de la fin de l’annulation','UI_CANCEL_COMPLETE_WAIT'],['vérification du snapshot vide','UI_EMPTY_SNAPSHOT_ASSERT'],
+  ['vérification directe du document Firestore absent','UI_CANCEL_FIRESTORE_ABSENCE_ASSERT'],['vérification absence de faux succès','UI_NO_FALSE_SUCCESS_ASSERT'],
+  ['attente de la proposition explicite','UI_EXPLICIT_PROPOSAL_WAIT'],['clic de confirmation explicite','UI_EXPLICIT_CONFIRM_CLICK'],
+  ['attente du retour de transaction','UI_TRANSACTION_RESULT_WAIT'],['vérification du statut de transaction','UI_TRANSACTION_STATUS_ASSERT'],
+  ['vérification directe de l’écriture Firestore','UI_FIRESTORE_WRITE_ASSERT'],['relecture par un runtime neuf','UI_NEW_SESSION_REREAD'],
+  ['actualisation du rendu et vérification du groupe À réimprimer','UI_DECISION_GROUP_REFRESH_ASSERT']
+]);
+function categoryFor(error,stage=currentStage){
+  if(error&&SAFE_CATEGORIES.has(error.safeCategory))return error.safeCategory;
+  if(error&&error.name==='AssertionError')return 'ASSERTION_FAILURE';
+  const code=String(error&&error.code||'').toLowerCase();
+  if(code==='permission-denied'||code==='unauthenticated')return 'PERMISSION_DENIED';
+  if(code==='unavailable'||code==='deadline-exceeded'||code==='cancelled')return 'EMULATOR_CONNECTION_FAILURE';
+  const message=String(error&&error.message||'').toLowerCase();
+  if(/syntax|compile|compil|parse|rules.*invalid|invalid.*rules/.test(message))return 'RULES_COMPILATION_FAILURE';
+  if(/econnrefused|unavailable|emulator|connection|deadline/.test(message))return 'EMULATOR_CONNECTION_FAILURE';
+  if(stage.includes('CLIENT_CONTEXT')||stage.includes('CONTEXT_INIT')||stage.includes('ADAPTER_INIT'))return 'CLIENT_CONTEXT_INIT_FAILURE';
+  if(stage.includes('CANDIDATE'))return 'CANDIDATE_INIT_FAILURE';
+  if(stage.includes('BROWSER')||stage.includes('PLAYWRIGHT'))return 'BROWSER_INIT_FAILURE';
+  if(stage.includes('DOM'))return 'DOM_INIT_FAILURE';
+  if(stage.includes('UI'))return 'UI_INIT_FAILURE';
+  if(stage.includes('RULES_INIT'))return 'RULES_LOAD_FAILURE';
+  return 'UNKNOWN_TEST_FAILURE';
+}
+async function atStage(id,fn){currentStage=id;try{return await fn();}catch(error){const wrapped=new Error('SAFE_DIAGNOSTIC');wrapped.safeStage=id;wrapped.safeCategory=categoryFor(error,id);throw wrapped;}}
+async function step(name,fn){const id=STEP_IDS.get(name)||'UI_STEP_UNMAPPED';return await atStage(id,fn);}
+async function test(name,fn){const testId='UI_TEST_'+String(result.tests.length+1).padStart(2,'0');currentStage='UI_TEST_START';try{await fn();result.tests.push({testId,name,status:'RÉUSSI'});result.passed++;}catch(error){const stage=error.safeStage||currentStage;result.tests.push({testId,name,status:'ÉCHEC',stageId:stage,category:categoryFor(error,stage)});result.failed++;}}
 (async()=>{
   const originalWindow=global.window,originalCrypto=global.crypto;
   try{
     const rulesPath=process.env.JARVIS_9C_COMBINED_RULES_PATH;
-    if(!rulesPath||!fs.existsSync(rulesPath))throw new Error('EPHEMERAL_COMBINED_RULES_REQUIRED');
-    env=await initializeTestEnvironment({projectId:PROJECT,firestore:{host:HOST,port:PORT,rules:fs.readFileSync(rulesPath,'utf8')}});
-    await env.clearFirestore();
-    ownerDb=env.authenticatedContext(UID).firestore();
+    const combinedRules=await atStage('COMBINED_RULES_FILE_READ',async()=>{
+      if(!rulesPath||!fs.existsSync(rulesPath))throw Object.assign(new Error('missing combined rules file'),{name:'AssertionError'});
+      return fs.readFileSync(rulesPath,'utf8');
+    });
+    env=await atStage('COMBINED_RULES_INIT',()=>initializeTestEnvironment({projectId:PROJECT,firestore:{host:HOST,port:PORT,rules:combinedRules}}));
+    await atStage('EMULATOR_DATABASE_RESET',()=>env.clearFirestore());
+    ownerDb=await atStage('OWNER_CLIENT_CONTEXT_INIT',async()=>env.authenticatedContext(UID).firestore());
     global.window=global;global.crypto=crypto.webcrypto;
-    vm.runInThisContext(script('jarvis-replenishment-9a'),{filename:'candidate-9a.js'});
-    vm.runInThisContext(script('jarvis-replenishment-9a3'),{filename:'candidate-9a3.js'});
-    vm.runInThisContext(script('jarvis-replenishment-9c-decisions'),{filename:'candidate-9c.js'});
+    await atStage('CANDIDATE_MODULE_INIT_9A',async()=>vm.runInThisContext(script('jarvis-replenishment-9a'),{filename:'candidate-9a.js'}));
+    await atStage('CANDIDATE_MODULE_INIT_9A3',async()=>vm.runInThisContext(script('jarvis-replenishment-9a3'),{filename:'candidate-9a3.js'}));
+    await atStage('CANDIDATE_MODULE_INIT_9C',async()=>vm.runInThisContext(script('jarvis-replenishment-9c-decisions'),{filename:'candidate-9c.js'}));
     api=global.JarvisReplenishment9C;
-    const adapter=api.createFirebaseEmulatorAdapter({db:ownerDb,auth:{currentUser:{uid:UID}},sdk,emulatorHost:HOST+':'+PORT});
-    runtime=api.createRuntime({adapter,identity:{uid:UID,authenticated:true}});
-    browser=await chromium.launch({headless:true,args:['--disable-background-networking']});
-    context=await browser.newContext({viewport:{width:1366,height:768}});
-    page=await context.newPage();
-    await page.route('**/*',route=>route.abort());
-    await page.exposeFunction('__9cRead',()=>runtime.read());
-    await page.exposeFunction('__9cPrepare',args=>runtime.prepare(args));
-    await page.exposeFunction('__9cConfirm',async(id,options)=>{const response=await runtime.confirm(id,options);confirmTrace.push({status:response&&response.status,reason:response&&response.reason,writeApplied:response&&response.writeApplied});return response;});
-    await page.exposeFunction('__9cCancel',(id,options)=>runtime.cancel(id,options));
-    await page.exposeFunction('__9cPending',()=>runtime.getPending());
-    await page.exposeFunction('__9cState',()=>runtime.getState());
-    await page.exposeFunction('__9cReconcile',()=>runtime.reconcile());
-    const pageErrors=[];page.on('pageerror',error=>pageErrors.push(error.message));
-    await page.setContent(html,{waitUntil:'domcontentloaded'});
+    if(!api)throw Object.assign(new Error('candidate module unavailable'),{name:'AssertionError'});
+    const adapter=await atStage('FIRESTORE_ADAPTER_INIT',async()=>api.createFirebaseEmulatorAdapter({db:ownerDb,auth:{currentUser:{uid:UID}},sdk,emulatorHost:HOST+':'+PORT}));
+    runtime=await atStage('RUNTIME_INIT',async()=>api.createRuntime({adapter,identity:{uid:UID,authenticated:true}}));
+    browser=await atStage('PLAYWRIGHT_BROWSER_LAUNCH',()=>chromium.launch({headless:true,args:['--disable-background-networking']}));
+    context=await atStage('PLAYWRIGHT_CONTEXT_INIT',()=>browser.newContext({viewport:{width:1366,height:768}}));
+    page=await atStage('PLAYWRIGHT_PAGE_INIT',()=>context.newPage());
+    await atStage('PLAYWRIGHT_NETWORK_ISOLATION',()=>page.route('**/*',route=>route.abort()));
+    await atStage('PLAYWRIGHT_BRIDGE_INIT',async()=>{
+await page.exposeFunction('__9cRead',()=>runtime.read());
+await page.exposeFunction('__9cPrepare',args=>runtime.prepare(args));
+await page.exposeFunction('__9cConfirm',async(id,options)=>{const response=await runtime.confirm(id,options);confirmTrace.push({status:response&&response.status,reason:response&&response.reason,writeApplied:response&&response.writeApplied});return response;});
+await page.exposeFunction('__9cCancel',(id,options)=>runtime.cancel(id,options));
+await page.exposeFunction('__9cPending',()=>runtime.getPending());
+await page.exposeFunction('__9cState',()=>runtime.getState());
+await page.exposeFunction('__9cReconcile',()=>runtime.reconcile());
+    });
+    const pageErrors=[];page.on('pageerror',()=>pageErrors.push('PAGE_ERROR'));
+    await atStage('DOM_CONTENT_INITIALIZATION',()=>page.setContent(html,{waitUntil:'domcontentloaded'}));
     const fixture={products:[{id:101,name:'MINIMAL RENARD',categorie:'Minimaux',emoji:'🦊',stocks:{maison:3,marche:1}}]};
-    await page.evaluate(async({fixture})=>{
+    await atStage('UI_RENDER_INITIALIZATION',()=>page.evaluate(async({fixture})=>{
       const rules={root:{schemaVersion:1,revision:1,categoryRules:{minimaux:{alertThreshold:{value:5,scope:'maison_marche'}}},lastMutationId:'fixture-initial-revision-0001'},exceptions:{}};
       const settingsAdapter=JarvisReplenishment9A3.createMockAdapter(rules);
       window.JarvisReplenishment9A3Runtime=JarvisReplenishment9A3.createRuntime({adapter:settingsAdapter,identity:{authenticated:true,uid:'synthetic-settings-owner'}});
@@ -70,9 +97,10 @@ async function test(name,fn){currentStage='start';try{await fn();result.tests.pu
       };
       JarvisReplenishment9A4.render(document.getElementById('content'),document.getElementById('actions'),()=>window.__testDb);
       await JarvisReplenishment9A4.refresh();
-    },{fixture});
+    },{fixture}));
 
     async function resetScenario(){
+      currentStage='TEST_SCENARIO_RESET';
       await env.clearFirestore();
       confirmTrace.length=0;
       runtime=createDecisionRuntime();
@@ -140,7 +168,7 @@ async function test(name,fn){currentStage='start';try{await fn();result.tests.pu
         assert.equal(await page.locator('[data-testid="r9-group-undecided"] [data-testid="r9-alert-101"]').count(),0);
       });
     });
-  }catch(error){const safe=safeError(error);result.failed++;result.tests.push({name:'initialisation / candidate / émulateur / navigateur',status:'ÉCHEC',stage:currentStage,code:safe.code,error:safe.message});}
+  }catch(error){const stage=error.safeStage||currentStage;result.failed++;result.tests.push({testId:'UI_INITIALIZATION',name:'INITIALIZATION',status:'ÉCHEC',stageId:stage,category:categoryFor(error,stage)});}
   finally{
     if(context)await context.close().catch(()=>{});
     if(browser)await browser.close().catch(()=>{});
@@ -150,7 +178,7 @@ async function test(name,fn){currentStage='start';try{await fn();result.tests.pu
     if(originalCrypto===undefined)delete global.crypto;else global.crypto=originalCrypto;
     const output=path.join(process.env.RUNNER_TEMP||require('node:os').tmpdir(),'9c-candidate-ui-results.json');
     fs.writeFileSync(output,JSON.stringify(result,null,2),{mode:0o600});
-    console.log(JSON.stringify({candidateSha256:result.candidateSha256,projectId:result.projectId,emulatorOnly:result.emulatorOnly,total:result.passed+result.failed,passed:result.passed,failed:result.failed,failures:result.tests.filter(item=>item.status==='ÉCHEC').map(item=>({name:item.name,error:item.error})),firebaseProductionWrites:0}));
+    console.log(JSON.stringify({candidateSha256:result.candidateSha256,projectId:result.projectId,emulatorOnly:result.emulatorOnly,total:result.passed+result.failed,passed:result.passed,failed:result.failed,failures:result.tests.filter(item=>item.status==='ÉCHEC').map(item=>({testId:item.testId||'UI_INITIALIZATION',stageId:item.stageId||item.stage||'UI_TEST_START',category:item.category||'ASSERTION_FAILURE'})),firebaseProductionWrites:0,rawErrorsPublished:false}));
     if(result.failed)process.exitCode=1;
   }
 })();
