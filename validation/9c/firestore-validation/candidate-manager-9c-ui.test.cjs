@@ -21,7 +21,6 @@ const safeError=(error)=>{
   const code=String(error&&((error.code)||(error.name))||'ASSERTION_FAILURE').replace(/[^A-Za-z0-9_.:-]/g,'').slice(0,80);
   let message=String(error&&(error.message||error)||'Unknown error').split(String.fromCharCode(10))[0];
   message=message.replaceAll(PROJECT,'[demo-project]').replaceAll(UID,'[fixture-uid]')
-    .replace(/fath3d\\/[^/\\s]+\\/replenishmentDecisions/g,'fath3d/[fixture-uid]/replenishmentDecisions')
     .slice(0,220);
   return {code,message};
 };

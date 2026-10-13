@@ -89,7 +89,7 @@ jobs:
           const diagnosticLines = log.split(/\r?\n/).filter(line => /error|exception|failed|fatal|invalid|EADDRINUSE|compil|syntax/i.test(line)).slice(-8);
           const diagnostic = diagnosticLines.map(line => line
             .replace(/\/home\/runner\/[^\s:]+/g, '[runner-path]')
-            .replace(/(?:Bearer\s+|token[=: ]+)\S+/ig, '[redacted]')
+            .replace(/(?:Bearer\\s+[A-Za-z0-9._-]+|(?:secret|access[_-]?token|authorization)[=: ]+\\S+)/ig, '[redacted]')
             .replace(/(?:match|allow|function|service|firestore\.rules_version)[\s\S]*/i, '[details redacted]')
             .replaceAll('demo-jarvis-replenishment-9c', '[demo-project]')
             .slice(0, 240)).join(' | ').slice(0, 1200);
