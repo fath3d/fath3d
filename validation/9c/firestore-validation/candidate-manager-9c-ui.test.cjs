@@ -19,7 +19,7 @@ const result={candidateSha256:hash,projectId:PROJECT,emulatorOnly:true,passed:0,
 let currentStage='test setup';
 const safeError=(error)=>{
   const code=String(error&&((error.code)||(error.name))||'ASSERTION_FAILURE').replace(/[^A-Za-z0-9_.:-]/g,'').slice(0,80);
-  let message=String(error&&(error.message||error)||'Unknown error').split('\\n')[0];
+  let message=String(error&&(error.message||error)||'Unknown error').split(String.fromCharCode(10))[0];
   message=message.replaceAll(PROJECT,'[demo-project]').replaceAll(UID,'[fixture-uid]')
     .replace(/fath3d\\/[^/\\s]+\\/replenishmentDecisions/g,'fath3d/[fixture-uid]/replenishmentDecisions')
     .slice(0,220);
@@ -141,7 +141,7 @@ async function test(name,fn){currentStage='start';try{await fn();result.tests.pu
         assert.equal(await page.locator('[data-testid="r9-group-undecided"] [data-testid="r9-alert-101"]').count(),0);
       });
     });
-  }catch(error){result.failed++;result.tests.push({name:'initialisation / candidate / émulateur / navigateur',status:'ÉCHEC',error:String(error.message||error).split('\n')[0]});}
+  }catch(error){const safe=safeError(error);result.failed++;result.tests.push({name:'initialisation / candidate / émulateur / navigateur',status:'ÉCHEC',stage:currentStage,code:safe.code,error:safe.message});}
   finally{
     if(context)await context.close().catch(()=>{});
     if(browser)await browser.close().catch(()=>{});

@@ -71,7 +71,7 @@ jobs:
           set +e
           npx firebase-tools emulators:exec --only firestore --project demo-jarvis-replenishment-9c --config "$JARVIS_9C_FIREBASE_CONFIG" "node firestore-validation/candidate-manager-9c-ui.test.cjs" > "$RUNNER_TEMP/jarvis-9c-emulator.log" 2>&1
           emulator_result=$?
-          node - "$RUNNER_TEMP/jarvis-9c-emulator.log" "$RUNNER_TEMP/9c-candidate-ui-results.json" <<'NODE'
+          JARVIS_EMULATOR_EXIT="$emulator_result" node - "$RUNNER_TEMP/jarvis-9c-emulator.log" "$RUNNER_TEMP/9c-candidate-ui-results.json" <<'NODE'
           const fs = require('node:fs');
           const [logPath, resultPath] = process.argv.slice(2);
           const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
@@ -86,9 +86,16 @@ jobs:
           else if (/permission-denied|permission_denied|missing or insufficient permissions/i.test(all)) diagnosis = 'FIRESTORE_PERMISSION_FAILURE';
           else if (/authenticatedContext|unauthenticatedContext|auth(?:entication)?[^\n]{0,60}(?:failed|invalid|missing|initialize)|client[^\n]{0,60}(?:auth|initializ)/i.test(all)) diagnosis = 'FICTITIOUS_AUTH_CLIENT_INITIALIZATION_FAILURE';
           else if (!hasResult) diagnosis = 'EMULATOR_OR_RULES_STARTUP_FAILURE_UNCLASSIFIED';
+          const diagnosticLines = log.split(/\r?\n/).filter(line => /error|exception|failed|fatal|invalid|EADDRINUSE|compil|syntax/i.test(line)).slice(-8);
+          const diagnostic = diagnosticLines.map(line => line
+            .replace(/\/home\/runner\/[^\s:]+/g, '[runner-path]')
+            .replace(/(?:Bearer\s+|token[=: ]+)\S+/ig, '[redacted]')
+            .replace(/(?:match|allow|function|service|firestore\.rules_version)[\s\S]*/i, '[details redacted]')
+            .replaceAll('demo-jarvis-replenishment-9c', '[demo-project]')
+            .slice(0, 240)).join(' | ').slice(0, 1200);
           const summary = result
-            ? { category: diagnosis, emulatorAndRulesReachedTestRunner: true, total: result.passed + result.failed, passed: result.passed, failed: result.failed, failures: (result.tests || []).filter(t => t.status === 'ÉCHEC').map(t => ({name: t.name, stage: t.stage || 'unknown', code: t.code || 'ASSERTION_FAILURE', message: t.error || 'No safe error message available'})), productionWrites: 0, rulesSource: 'repository proposal fixture only', project: 'demo-jarvis-replenishment-9c' }
-            : { category: diagnosis, emulatorAndRulesReachedTestRunner: false, exitCode: Number(process.env.JARVIS_EMULATOR_EXIT || 1), productionWrites: 0, rulesSource: 'repository proposal fixture only', project: 'demo-jarvis-replenishment-9c' };
+            ? {category:diagnosis,emulatorAndRulesReachedTestRunner:true,total:result.passed+result.failed,passed:result.passed,failed:result.failed,failures:(result.tests||[]).filter(t=>t.status==='ÉCHEC').map(t=>({name:t.name,stage:t.stage||'unknown',code:t.code||'ASSERTION_FAILURE',message:t.error||'No safe error message available'})),productionWrites:0,rulesSource:'repository proposal fixture only',project:'demo-jarvis-replenishment-9c'}
+            : {category:diagnosis,emulatorAndRulesReachedTestRunner:false,exitCode:Number(process.env.JARVIS_EMULATOR_EXIT||1),diagnostic:diagnostic||'No safe matching CLI diagnostic line; consult sanitized step logs.',productionWrites:0,rulesSource:'repository proposal fixture only',project:'demo-jarvis-replenishment-9c'};
           console.log(JSON.stringify(summary));
           NODE
           if [ "$emulator_result" -ne 0 ]; then exit "$emulator_result"; fi
