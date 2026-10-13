@@ -24,8 +24,8 @@ async function compile(stageId,envName,expectedCount){
     }
     emulator=await initializeTestEnvironment({projectId:PROJECT,firestore:{host:HOST,port:PORT,rules}});
     results.push({stageId,status:'PASS',category:'RULES_COMPILED'});
-  }catch(_){
-    results.push({stageId,status:'FAIL',category:'RULES_COMPILE_OR_LOAD_FAILURE'});
+  }catch(error){
+    results.push({stageId,status:'FAIL',category:classify(error)});
   }finally{
     if(emulator)await emulator.cleanup().catch(()=>{});
   }
