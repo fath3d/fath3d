@@ -64,22 +64,29 @@ jobs:
         run: |
           set +e
           test_command='set +e
+          node scripts/compile-fake-rules.cjs > "$RUNNER_TEMP/9c-rules-compile.log" 2>&1
+          c=$?
           node firestore-validation/replenishment-decisions-9c.test.cjs > "$RUNNER_TEMP/9c-decisions.log" 2>&1
           a=$?
           node firestore-validation/candidate-manager-9c-ui.test.cjs > "$RUNNER_TEMP/9c-ui.log" 2>&1
           b=$?
-          printf "%s %s\n" "$a" "$b" > "$RUNNER_TEMP/9c-test-exit-codes"
-          test "$a" -eq 0 -a "$b" -eq 0'
+          printf "%s %s %s\n" "$c" "$a" "$b" > "$RUNNER_TEMP/9c-test-exit-codes"
+          test "$c" -eq 0 -a "$a" -eq 0 -a "$b" -eq 0'
           npx firebase-tools emulators:exec --only firestore --project demo-jarvis-replenishment-9c --config "$JARVIS_9C_FIREBASE_CONFIG" "$test_command" > "$RUNNER_TEMP/9c-emulator-cli.log" 2>&1
           emulator_exit=$?
+          if [ -f "$RUNNER_TEMP/9c-rules-compile.log" ]; then cat "$RUNNER_TEMP/9c-rules-compile.log"; fi
+          if [ "$emulator_exit" -ne 0 ] && [ -f "$RUNNER_TEMP/9c-emulator-cli.log" ]; then
+            echo "FAKE_RULES_EMULATOR_START_DIAGNOSTIC"
+            cat "$RUNNER_TEMP/9c-emulator-cli.log"
+          fi
           node scripts/summarize-9c-results.cjs
           summary_exit=$?
           if [ "$emulator_exit" -ne 0 ] || [ "$summary_exit" -ne 0 ]; then exit 1; fi
-          if [ ! -f "$RUNNER_TEMP/9c-test-exit-codes" ] || [ "$(cat "$RUNNER_TEMP/9c-test-exit-codes")" != "0 0" ]; then exit 1; fi
+          if [ ! -f "$RUNNER_TEMP/9c-test-exit-codes" ] || [ "$(cat "$RUNNER_TEMP/9c-test-exit-codes")" != "0 0 0" ]; then exit 1; fi
       - name: Remove candidate, fake Rules, reports, and temporary logs
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/jarvis-9c-fake-baseline.rules" \
+          rm -f "$RUNNER_TEMP/jarvis-9c-fake-baseline-9a.rules" \
             "$RUNNER_TEMP/jarvis-9c-fake-combined.rules" \
             "$RUNNER_TEMP/jarvis-9c-fake-firebase.json" \
             "$RUNNER_TEMP/9c-decisions-results.json" \
@@ -87,5 +94,7 @@ jobs:
             "$RUNNER_TEMP/9c-decisions.log" \
             "$RUNNER_TEMP/9c-ui.log" \
             "$RUNNER_TEMP/9c-emulator-cli.log" \
-            "$RUNNER_TEMP/9c-test-exit-codes"
+            "$RUNNER_TEMP/9c-test-exit-codes" \
+            "$RUNNER_TEMP/9c-rules-compile.log" \
+            "$RUNNER_TEMP/9c-rules-compile-results.json"
           rm -rf "$RUNNER_TEMP/jarvis-9c-candidate"
