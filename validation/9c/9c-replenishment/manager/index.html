@@ -1,0 +1,160 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><script id="jarvis-replenishment-9c-decisions">
+(function(root){
+  'use strict';
+  const VERSION='9C-1.0.0-local-emulator',ACTION='replenishment.decision.update',TTL_MS=600000;
+  const DECISIONS=new Set(['undecided','reprint','deferred','stopped']);
+  const READ_SCOPES=new WeakSet(),WRITE_SCOPES=new WeakSet(),CONSUMED=new WeakSet(),
+    MOCKS=new WeakSet(),FIREBASE=new WeakSet();
+  const own=(value,key)=>!!value&&Object.prototype.hasOwnProperty.call(value,key);
+  const clone=value=>value===undefined?undefined:JSON.parse(JSON.stringify(value));
+  const same=(a,b)=>JSON.stringify(a===undefined?null:a)===JSON.stringify(b===undefined?null:b);
+  function decisionCollectionPath(uid){
+    if(typeof uid!=='string'||!uid.trim()||uid.includes('/'))throw new Error('DECISION_UID_INVALID');
+    return 'fath3d/'+uid+'/replenishmentDecisions';
+  }
+  function decisionDocumentPath(uid,productId){
+    const id=String(productId===undefined||productId===null?'':productId);
+    if(!id||id.length>128||id.includes('/'))throw new Error('DECISION_PRODUCT_ID_INVALID');
+    return decisionCollectionPath(uid)+'/'+id;
+  }
+  function validCivilDate(value){
+    if(typeof value!=='string'||!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value))return false;
+    const [year,month,day]=value.split('-').map(Number),date=new Date(Date.UTC(year,month-1,day));
+    return date.getUTCFullYear()===year&&date.getUTCMonth()===month-1&&date.getUTCDate()===day;
+  }
+  function validateDecisionDraft(decision,reminderDate){
+    if(!DECISIONS.has(decision))throw new Error('DECISION_VALUE_INVALID');
+    if(decision==='deferred'){
+      if(reminderDate!==undefined&&reminderDate!==null&&reminderDate!==''&&!validCivilDate(reminderDate))throw new Error('DECISION_DATE_INVALID');
+      return reminderDate?String(reminderDate):null;
+    }
+    if(reminderDate!==undefined&&reminderDate!==null&&reminderDate!=='')throw new Error('DECISION_DATE_NOT_ALLOWED');
+    return null;
+  }
+  function validRecord(value,documentId){
+    if(!value||typeof value!=='object'||Array.isArray(value))return false;
+    const allowed=['schemaVersion','productId','decision','revision','lastMutationId','reminderDate'];
+    const required=['schemaVersion','productId','decision','revision','lastMutationId'];
+    if(Object.keys(value).some(key=>!allowed.includes(key))||required.some(key=>!own(value,key)))return false;
+    if(value.schemaVersion!==1||String(value.productId)!==String(documentId)||!DECISIONS.has(value.decision)||!Number.isInteger(value.revision)||value.revision<1||typeof value.lastMutationId!=='string'||value.lastMutationId.length<16||value.lastMutationId.length>80)return false;
+    if(value.decision==='deferred')return !own(value,'reminderDate')||validCivilDate(value.reminderDate);
+    return !own(value,'reminderDate');
+  }
+  function secureId(){
+    const cryptoObject=root.crypto;
+    if(!cryptoObject||typeof cryptoObject.getRandomValues!=='function')throw new Error('DECISION_NONCE_UNAVAILABLE');
+    const bytes=new Uint8Array(24);cryptoObject.getRandomValues(bytes);
+    return Array.from(bytes,value=>value.toString(16).padStart(2,'0')).join('');
+  }
+  function normalizeSnapshot(raw){
+    const decisions=Object.create(null);
+    if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('DECISION_SNAPSHOT_INVALID');
+    Object.entries(raw).forEach(([id,value])=>{
+      if(!validRecord(value,id))throw new Error('DECISION_SCHEMA_INCOMPATIBLE:'+id);
+      decisions[String(id)]=clone(value);
+    });
+    return decisions;
+  }
+  function createMockAdapter({seed={},ownerUid='test-owner'}={}){
+    let rows=normalizeSnapshot(seed),writes=0,attempts=0,fault='normal',clock=()=>Date.now(),gate=null;
+    const consumed=new WeakSet();
+    async function read({uid}){
+      if(uid!==ownerUid)throw new Error('DECISION_UID_DENIED');
+      return clone(rows);
+    }
+    async function commit(request){
+      attempts++;
+      const auth=request&&request.scopedAuthorization;
+      if(!request||!auth||!WRITE_SCOPES.has(auth)||consumed.has(auth)||auth.consumed!==false||auth.actionId!==ACTION||auth.uid!==ownerUid||request.uid!==auth.uid||request.proposalId!==auth.proposalId||request.productId!==auth.productId||request.expectedRevision!==auth.expectedRevision||clock()>auth.expiresAt)return {status:'refused',writeApplied:false,reason:'SCOPED_DECISION_AUTHORIZATION_REQUIRED'};
+      consumed.add(auth);CONSUMED.add(auth);auth.consumed=true;
+      const nextDate=validateDecisionDraft(request.decision,request.reminderDate);
+      const next={schemaVersion:1,productId:String(request.productId),decision:request.decision,revision:request.expectedRevision+1,lastMutationId:request.proposalId};
+      if(nextDate)next.reminderDate=nextDate;
+      if(fault==='reject_before'){fault='normal';return {status:'refused',writeApplied:false,reason:'MOCK_DECISION_REFUSED'};}
+      if(fault==='uncertain_before'){fault='normal';return {status:'uncertain',writeApplied:null,reason:'MOCK_DECISION_UNCERTAIN'};}
+      if(gate)await gate();
+      const old=rows[String(request.productId)]||null,currentRevision=old?old.revision:0;
+      if(old&&old.lastMutationId===request.proposalId&&same({...old,revision:next.revision},next))return {status:'already_applied',writeApplied:false,record:clone(old)};
+      if(currentRevision!==request.expectedRevision)return {status:'conflict',writeApplied:false,reason:'STALE_DECISION_REVISION'};
+      if(fault==='uncertain_after'){fault='normal';rows[String(request.productId)]=next;writes++;return {status:'uncertain',writeApplied:null,reason:'MOCK_DECISION_UNCERTAIN_AFTER_APPLY'};}
+      fault='normal';rows[String(request.productId)]=next;writes++;
+      return {status:'committed',writeApplied:true,record:clone(next)};
+    }
+    const adapter=Object.freeze({mode:'MOCK',read,commit,setFaultForTest(value){if(!['normal','reject_before','uncertain_before','uncertain_after'].includes(value))throw new Error('DECISION_MOCK_FAULT_INVALID');fault=value;},setClockForTest(value){clock=value;},setCommitGateForTest(value){gate=value;},snapshot:()=>clone(rows),getWriteCount:()=>writes,getAttemptCount:()=>attempts});
+    MOCKS.add(adapter);return adapter;
+  }
+  function createFirebaseEmulatorAdapter({db,auth,sdk,emulatorHost}={}){
+    const dbConnection=db&&(db._settings?db:db._delegate);
+    if(!db||!auth||!sdk||emulatorHost!=='127.0.0.1:8785'||!dbConnection||!dbConnection._settings||!String(dbConnection._settings.host||'').includes('127.0.0.1:8785')||!['doc','collection','getDocsFromServer','runTransaction'].every(key=>typeof sdk[key]==='function'))throw new Error('DECISION_EMULATOR_REQUIRED');
+    function owner(uid){const user=auth.currentUser;if(!user||typeof user.uid!=='string'||user.uid!==uid)throw new Error('DECISION_AUTH_REQUIRED');}
+    async function read({uid}){
+      owner(uid);
+      const snapshot=await sdk.getDocsFromServer(sdk.collection(db,decisionCollectionPath(uid))),out=Object.create(null);
+      snapshot.forEach(item=>{const value=item.data();if(!validRecord(value,item.id))throw new Error('DECISION_SCHEMA_INCOMPATIBLE:'+item.id);out[item.id]=clone(value);});
+      return out;
+    }
+    async function commit(request){
+      const authz=request&&request.scopedAuthorization;
+      try{owner(request&&request.uid);}catch(error){return {status:'refused',writeApplied:false,reason:error.message};}
+      if(!authz||!WRITE_SCOPES.has(authz)||CONSUMED.has(authz)||authz.consumed!==false||authz.actionId!==ACTION||authz.uid!==request.uid||authz.productId!==String(request.productId)||authz.proposalId!==request.proposalId||authz.expectedRevision!==request.expectedRevision||Date.now()>authz.expiresAt)return {status:'refused',writeApplied:false,reason:'SCOPED_DECISION_AUTHORIZATION_REQUIRED'};
+      let reminderDate;
+      try{reminderDate=validateDecisionDraft(request.decision,request.reminderDate);}catch(error){return {status:'refused',writeApplied:false,reason:error.message};}
+      CONSUMED.add(authz);authz.consumed=true;
+      const ref=sdk.doc(db,decisionDocumentPath(request.uid,request.productId));
+      try{
+        const result=await sdk.runTransaction(db,async transaction=>{
+          owner(request.uid);
+          const snapshot=await transaction.get(ref),old=snapshot.exists()?snapshot.data():null;
+          if(old&&!validRecord(old,String(request.productId)))throw Object.assign(new Error('DECISION_SCHEMA_INCOMPATIBLE'),{definite:true});
+          if(old&&old.lastMutationId===request.proposalId&&old.decision===request.decision&&(old.reminderDate||null)===reminderDate)return {status:'already_applied',writeApplied:false,record:old};
+          const revision=old?old.revision:0;
+          if(revision!==request.expectedRevision)return {status:'conflict',writeApplied:false,reason:'STALE_DECISION_REVISION'};
+          const record={schemaVersion:1,productId:String(request.productId),decision:request.decision,revision:revision+1,lastMutationId:request.proposalId};
+          if(reminderDate)record.reminderDate=reminderDate;
+          transaction.set(ref,record);
+          return {status:'committed',writeApplied:true,record};
+        });
+        return result;
+      }catch(error){
+        if(error&&error.definite)return {status:'refused',writeApplied:false,reason:error.message};
+        if(error&&['permission-denied','firestore/permission-denied'].includes(error.code))return {status:'refused',writeApplied:false,reason:'DECISION_PERMISSION_DENIED'};
+        return {status:'uncertain',writeApplied:null,reason:(error&&error.code?error.code+': ':'')+(error&&error.message||'DECISION_TRANSACTION_RESULT_UNKNOWN')};
+      }
+    }
+    const adapter=Object.freeze({mode:'FIRESTORE_EMULATOR_ONLY',read,commit});FIREBASE.add(adapter);return adapter;
+  }
+  function createRuntime({adapter,identity,now=()=>Date.now()}={}){
+    const mode=adapter&&MOCKS.has(adapter)?'MOCK':adapter&&FIREBASE.has(adapter)?'FIRESTORE_EMULATOR_ONLY':null;
+    if(!mode)throw new Error('DECISION_ADAPTER_REQUIRED');
+    if(!identity||identity.authenticated!==true||typeof identity.uid!=='string'||!identity.uid.trim())throw new Error('DECISION_AUTH_REQUIRED');
+    const uid=identity.uid;let pending=null,busy=false,blockedUncertain=false;const completed=new Set();
+    async function read(){return normalizeSnapshot(await adapter.read({uid}));}
+    async function prepare({productId,decision,reminderDate}={}){
+      if(busy||pending||blockedUncertain)throw new Error('DECISION_BUSY_OR_UNCERTAIN');
+      const id=String(productId===undefined||productId===null?'':productId),path=decisionDocumentPath(uid,id),date=validateDecisionDraft(decision,reminderDate),snapshot=await read(),current=snapshot[id]||null;
+      const createdAt=now(),proposalId=secureId(),nonce=secureId();
+      pending=Object.freeze({actionId:ACTION,uid,documentPath:path,productId:id,decision,reminderDate:date,expectedRevision:current?current.revision:0,previousDecision:current?current.decision:'undecided',previousReminderDate:current?current.reminderDate||null:null,createdAt,expiresAt:createdAt+TTL_MS,proposalId,nonce,status:'pending'});
+      return clone(pending);
+    }
+    async function confirm(proposalId,{explicit=false}={}){
+      if(busy)throw new Error('DECISION_EXECUTION_IN_PROGRESS');
+      if(!pending||pending.proposalId!==proposalId||pending.uid!==uid)throw new Error('DECISION_PROPOSAL_MISMATCH');
+      if(explicit!==true)throw new Error('DECISION_EXPLICIT_CONFIRMATION_REQUIRED');
+      if(now()>pending.expiresAt){pending=null;throw new Error('DECISION_PROPOSAL_EXPIRED');}
+      if(completed.has(proposalId))throw new Error('DECISION_ALREADY_PROCESSED');
+      busy=true;const proposal=pending,scope={uid,documentPath:proposal.documentPath,productId:proposal.productId,actionId:ACTION,proposalId,expectedRevision:proposal.expectedRevision,nonce:proposal.nonce,expiresAt:proposal.expiresAt,consumed:false};WRITE_SCOPES.add(scope);
+      try{
+        const result=await adapter.commit({uid,productId:proposal.productId,decision:proposal.decision,reminderDate:proposal.reminderDate,expectedRevision:proposal.expectedRevision,proposalId,scopedAuthorization:scope});
+        if(result.status==='committed'||result.status==='already_applied'){completed.add(proposalId);pending=null;return result;}
+        if(result.status==='uncertain'){blockedUncertain=true;pending=Object.freeze({...proposal,status:'blocked_uncertain'});return result;}
+        if(result.status==='conflict'||result.status==='refused'){completed.add(proposalId);pending=null;return result;}
+        blockedUncertain=true;pending=Object.freeze({...proposal,status:'blocked_uncertain'});return {status:'uncertain',writeApplied:null,reason:'DECISION_RESULT_UNRECOGNIZED'};
+      }finally{busy=false;}
+    }
+    function cancel(proposalId,{explicit=false}={}){if(explicit!==true)throw new Error('DECISION_EXPLICIT_CANCELLATION_REQUIRED');if(!pending||pending.proposalId!==proposalId)throw new Error('DECISION_PROPOSAL_MISMATCH');if(pending.status==='blocked_uncertain')throw new Error('DECISION_UNCERTAIN_REQUIRES_RECONCILIATION');pending=null;completed.add(proposalId);return {status:'cancelled',writeApplied:false};}
+    async function reconcile(){if(!blockedUncertain||!pending)throw new Error('DECISION_NOT_UNCERTAIN');const proposal=pending,snapshot=await read(),current=snapshot[proposal.productId]||null;if(current&&current.lastMutationId===proposal.proposalId&&current.decision===proposal.decision&&(current.reminderDate||null)===proposal.reminderDate){blockedUncertain=false;pending=null;completed.add(proposal.proposalId);return {status:'applied',record:current};}if((current?current.revision:0)===proposal.expectedRevision){blockedUncertain=false;pending=null;completed.add(proposal.proposalId);return {status:'not_applied',record:current};}return {status:'changed_by_other_revision',record:current};}
+    return Object.freeze({mode,actionId:ACTION,ttlMs:TTL_MS,read,prepare,confirm,cancel,reconcile,getPending:()=>pending?clone(pending):null,getState:()=>({mode,productionWritesEnabled:false,busy,blockedUncertain,persistent:mode==='FIRESTORE_EMULATOR_ONLY'})});
+  }
+  root.JarvisReplenishment9C=Object.freeze({version:VERSION,actionId:ACTION,ttlMs:TTL_MS,decisionValues:[...DECISIONS],decisionCollectionPath,decisionDocumentPath,validCivilDate,validRecord,createMockAdapter,createFirebaseEmulatorAdapter,createRuntime});
+})(typeof window!=='undefined'?window:globalThis);
+</script></body></html>

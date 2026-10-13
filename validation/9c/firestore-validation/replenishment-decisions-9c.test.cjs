@@ -1,0 +1,97 @@
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict'),crypto=require('node:crypto');
+const {initializeTestEnvironment,assertFails,assertSucceeds}=require('@firebase/rules-unit-testing');
+const sdk=require('firebase/firestore');
+const PROJECT='demo-jarvis-replenishment-9c',HOST='127.0.0.1',PORT=8785,UID='owner-9c-test',OTHER='other-9c-test';
+if(process.env.FIRESTORE_EMULATOR_HOST!==HOST+':'+PORT||process.env.GCLOUD_PROJECT!==PROJECT||!PROJECT.startsWith('demo-'))throw new Error('ISOLATION_REQUIRED: emulator and fictitious demo project must be explicit');
+const htmlPath=process.env.JARVIS_9C_CANDIDATE_PATH,rulesPath=process.env.JARVIS_9C_COMBINED_RULES_PATH;
+if(!htmlPath||!fs.existsSync(htmlPath))throw new Error('EPHEMERAL_CANDIDATE_MANAGER_REQUIRED');
+if(!rulesPath||!fs.existsSync(rulesPath))throw new Error('EPHEMERAL_COMBINED_RULES_REQUIRED');
+const html=fs.readFileSync(htmlPath,'utf8'),match=html.match(/<script id="jarvis-replenishment-9c-decisions">([\s\S]*?)<\/script>/);
+if(!match)throw new Error('9C_DECISION_MODULE_MISSING');
+const candidateHash=crypto.createHash('sha256').update(html).digest('hex').toUpperCase();
+if(candidateHash!=='C5E7321F359835B048FB8C81D7A943555B3345E6665226693D57B28DEB897B76')throw new Error('CANDIDATE_MANAGER_HASH_MISMATCH');
+const originalWindow=global.window,originalCrypto=global.crypto;
+global.window=global;global.crypto=crypto.webcrypto;
+vm.runInThisContext(match[1],{filename:'jarvis-replenishment-9c-decisions.js'});
+const api=global.JarvisReplenishment9C;
+const pathFor=id=>'fath3d/'+UID+'/replenishmentDecisions/'+id;
+const parentPath='fath3d/'+UID+'/settings/replenishment';
+const tests=[];let env,owner,other,anonymous;
+function safeErrorCode(error){
+  const code=error&&typeof error.code==='string'?error.code:'';
+  if(/^[A-Za-z0-9_./-]{1,80}$/.test(code))return code;
+  if(error&&error.name==='AssertionError')return 'ASSERTION_FAILURE';
+  const message=String(error&&error.message||'');
+  const match=message.match(/\b(?:DECISION|FIRESTORE|FIREBASE|PERMISSION|AUTH|RULES|ERR)_[A-Z0-9_]+\b/);
+  return match?match[0]:'INITIALIZATION_OR_EMULATOR_FAILURE';
+}
+async function test(name,fn){try{await env.clearFirestore();await fn();tests.push({name,status:'RÉUSSI'});}catch(error){tests.push({name,status:'ÉCHEC',error:error.message,errorCode:safeErrorCode(error)});}}
+async function existingPermissionProfile(rules){
+  const profileEnv=await initializeTestEnvironment({projectId:PROJECT,firestore:{host:HOST,port:PORT,rules}});
+  try{
+    await profileEnv.clearFirestore();
+    await profileEnv.withSecurityRulesDisabled(async ctx=>{
+      await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID),{payload:'synthetic-manager-payload',revision:1});
+      await sdk.setDoc(sdk.doc(ctx.firestore(),parentPath),{schemaVersion:1,revision:1,categoryRules:{},lastMutationId:'fixture-rule-mutation-0001'});
+    });
+    await assertSucceeds(sdk.getDoc(sdk.doc(profileEnv.authenticatedContext(UID).firestore(),'fath3d/'+UID)));
+    await assertSucceeds(sdk.getDoc(sdk.doc(profileEnv.authenticatedContext(UID).firestore(),parentPath)));
+    await assertFails(sdk.getDoc(sdk.doc(profileEnv.authenticatedContext(OTHER).firestore(),'fath3d/'+UID)));
+    await assertFails(sdk.getDoc(sdk.doc(profileEnv.authenticatedContext(OTHER).firestore(),parentPath)));
+    await assertFails(sdk.getDoc(sdk.doc(profileEnv.unauthenticatedContext().firestore(),'fath3d/'+UID)));
+    await assertFails(sdk.getDoc(sdk.doc(profileEnv.unauthenticatedContext().firestore(),parentPath)));
+    return {ownerReadsManager:true,ownerReadsSettings:true,otherUidDeniedManager:true,otherUidDeniedSettings:true,anonymousDeniedManager:true,anonymousDeniedSettings:true};
+  }finally{await profileEnv.cleanup();}
+}
+function fixtureDb(database){return database;}
+function adapterFor(database,userUid=UID){return api.createFirebaseEmulatorAdapter({db:fixtureDb(database),auth:{currentUser:{uid:userUid}},sdk,emulatorHost:HOST+':'+PORT});}
+function runtimeFor(database,userUid=UID,now){return api.createRuntime({adapter:adapterFor(database,userUid),identity:{authenticated:true,uid:userUid},...(now?{now}:{})});}
+function record(id,decision='reprint',revision=1,extra={}){return {schemaVersion:1,productId:id,decision,revision,lastMutationId:'fixture-mutation-id-'+String(revision).padStart(6,'0'),...extra};}
+(async()=>{
+  try{
+    const combinedRules=fs.readFileSync(rulesPath,'utf8');
+    if(combinedRules.includes('86F10B4A')||combinedRules.includes('JARVIS_9C_RULES_TEMP'))throw new Error('RULES_SECRET_MARKER_IN_COMBINED_FILE');
+    const deployedRulesPath=process.env.JARVIS_9C_DEPLOYED_RULES_PATH;
+    if(!deployedRulesPath||!fs.existsSync(deployedRulesPath))throw new Error('EPHEMERAL_DEPLOYED_RULES_REQUIRED');
+    const baselineProfile=await existingPermissionProfile(fs.readFileSync(deployedRulesPath,'utf8'));
+    const combinedProfile=await existingPermissionProfile(combinedRules);
+    assert.deepEqual(combinedProfile,baselineProfile,'les permissions existantes Manager/Settings doivent être identiques avant/après ajout 9C');
+    tests.push({name:'parité des permissions existantes Manager et 9A entre Rules publiées et Rules combinées',status:'RÉUSSI'});
+    env=await initializeTestEnvironment({projectId:PROJECT,firestore:{host:HOST,port:PORT,rules:combinedRules}});
+    owner=env.authenticatedContext(UID).firestore();other=env.authenticatedContext(OTHER).firestore();anonymous=env.unauthenticatedContext().firestore();
+    await test('émulateur compilé, chemins Firestore cohérents et adaptateur emulator-only',async()=>{assert.equal(api.decisionCollectionPath(UID),'fath3d/'+UID+'/replenishmentDecisions');assert.equal(api.decisionDocumentPath(UID,'path-check'),pathFor('path-check'));assert.equal(api.createRuntime({adapter:api.createMockAdapter(),identity:{uid:'mock',authenticated:true}}).getState().productionWritesEnabled,false);assert.throws(()=>api.createFirebaseEmulatorAdapter({db:owner,auth:{currentUser:{uid:UID}},sdk,emulatorHost:'prod'}),/DECISION_EMULATOR_REQUIRED/);});
+    await test('lecture initiale vide et consultation sans écriture',async()=>{const runtime=runtimeFor(owner);assert.deepEqual({...await runtime.read()},{ });assert.equal(runtime.getState().persistent,true);});
+    await test('propriétaire crée À réimprimer à révision 1 puis retrouve après nouvelle session',async()=>{const runtime=runtimeFor(owner);const proposal=await runtime.prepare({productId:'101',decision:'reprint'});assert.equal(proposal.expectedRevision,0);const committed=await runtime.confirm(proposal.proposalId,{explicit:true});assert.equal(committed.status,'committed',JSON.stringify(committed));assert.equal(committed.record.revision,1);assert.equal((await runtimeFor(owner).read())['101'].decision,'reprint');});
+    await test('les quatre états, report daté/sans date, modification et retour à décider',async()=>{const runtime=runtimeFor(owner);for(const [decision,date] of [['deferred',null],['deferred','2026-12-25'],['stopped',null],['undecided',null]]){const proposal=await runtime.prepare({productId:'201',decision,reminderDate:date});assert.equal((await runtime.confirm(proposal.proposalId,{explicit:true})).status,'committed');}const rows=await runtime.read();assert.equal(rows['201'].decision,'undecided');assert.equal(rows['201'].revision,4);assert.equal(Object.hasOwn(rows['201'],'reminderDate'),false);});
+    await test('deux IDs homonymes restent indépendants',async()=>{const runtime=runtimeFor(owner);for(const id of ['202','303']){const p=await runtime.prepare({productId:id,decision:'stopped'});await runtime.confirm(p.proposalId,{explicit:true});}const rows=await runtime.read();assert.equal(rows['202'].decision,'stopped');assert.equal(rows['303'].decision,'stopped');assert.notEqual(rows['202'].productId,rows['303'].productId);});
+    await test('date invalide et date hors report refusées avant écriture',async()=>{const runtime=runtimeFor(owner);await assert.rejects(runtime.prepare({productId:'1',decision:'deferred',reminderDate:'2026-02-31'}),/DECISION_DATE_INVALID/);await assert.rejects(runtime.prepare({productId:'1',decision:'reprint',reminderDate:'2026-12-25'}),/DECISION_DATE_NOT_ALLOWED/);});
+    await test('date de rappel civile conservée exactement sans décalage UTC',async()=>{const runtime=runtimeFor(owner);const p=await runtime.prepare({productId:'date-1',decision:'deferred',reminderDate:'2026-12-25'});await runtime.confirm(p.proposalId,{explicit:true});assert.equal((await runtime.read())['date-1'].reminderDate,'2026-12-25');});
+    await test('révision périmée entre deux sessions refusée sans écrasement',async()=>{const a=runtimeFor(owner),b=runtimeFor(owner);const p1=await a.prepare({productId:'conflict',decision:'reprint'}),p2=await b.prepare({productId:'conflict',decision:'stopped'});assert.equal((await a.confirm(p1.proposalId,{explicit:true})).status,'committed');const stale=await b.confirm(p2.proposalId,{explicit:true});assert.equal(stale.status,'conflict');assert.equal((await a.read()).conflict.decision,'reprint');});
+    await test('révision périmée ou rejouée sans incrément strict refusée par Rules',async()=>{const runtime=runtimeFor(owner),proposal=await runtime.prepare({productId:'401',decision:'reprint'});assert.equal((await runtime.confirm(proposal.proposalId,{explicit:true})).status,'committed');const ref=sdk.doc(owner,pathFor('401'));await assertFails(sdk.updateDoc(ref,{decision:'stopped',revision:1,lastMutationId:'another-valid-mutation-id'}));});
+    await test('écriture transactionnelle valide puis incrémentation exacte +1',async()=>{const runtime=runtimeFor(owner);let p=await runtime.prepare({productId:'501',decision:'reprint'});await runtime.confirm(p.proposalId,{explicit:true});p=await runtime.prepare({productId:'501',decision:'deferred',reminderDate:'2026-11-01'});const result=await runtime.confirm(p.proposalId,{explicit:true});assert.equal(result.record.revision,2);});
+    await test('anonyme et autre UID ne peuvent pas lire ni écrire la décision propriétaire',async()=>{await env.withSecurityRulesDisabled(async ctx=>sdk.setDoc(sdk.doc(ctx.firestore(),pathFor('601')),record('601')));await assertFails(sdk.getDoc(sdk.doc(anonymous,pathFor('601'))));await assertFails(sdk.getDoc(sdk.doc(other,pathFor('601'))));await assertFails(sdk.setDoc(sdk.doc(other,pathFor('601')),record('601')));});
+    await test('champs, valeurs et types interdits refusés',async()=>{const ref=sdk.doc(owner,pathFor('701'));const cases=[['champ stock',{...record('701'),stocks:{maison:8}}],['champ financier',{...record('701'),sales:4}],['décision inconnue',{...record('701'),decision:'planned_print'}],['révision de type incorrect',{...record('701'),revision:'1'}],['champ inconnu',{...record('701'),unknown:true}],['date civile impossible',{...record('701','deferred',1,{reminderDate:'2026-02-31'})}],['29 février année non bissextile',{...record('701','deferred',1,{reminderDate:'2025-02-29'})}],['jour 31 dans un mois de 30 jours',{...record('701','deferred',1,{reminderDate:'2026-04-31'})}]];for(const [label,bad] of cases){try{await assertFails(sdk.setDoc(ref,bad));}catch(error){throw new Error(label+': '+error.message);}}await assertSucceeds(sdk.setDoc(ref,record('701','deferred',1,{reminderDate:'2024-02-29'})));});
+    await test('mise à jour +1 valide, ancien ID et révision sautée refusés',async()=>{const ref=sdk.doc(owner,pathFor('801'));await assertSucceeds(sdk.setDoc(ref,record('801')));await assertSucceeds(sdk.updateDoc(ref,{decision:'stopped',revision:2,lastMutationId:'mutation-two-identifier'}));await assertFails(sdk.updateDoc(ref,{revision:4,lastMutationId:'mutation-four-identifier'}));await assertFails(sdk.updateDoc(ref,{productId:'other-id',revision:3,lastMutationId:'mutation-three-identifier'}));});
+    await test('suppression et sous-chemin supplémentaire refusés',async()=>{const ref=sdk.doc(owner,pathFor('901'));await assertSucceeds(sdk.setDoc(ref,record('901')));await assertFails(sdk.deleteDoc(ref));await assertFails(sdk.setDoc(sdk.doc(owner,pathFor('901')+'/private/nested'),{value:1}));});
+    await test('écriture 9C ne modifie ni document 9A ni document Manager',async()=>{const manager=sdk.doc(owner,'fath3d/'+UID),settings=sdk.doc(owner,parentPath);await env.withSecurityRulesDisabled(async ctx=>{await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID),{payload:'synthetic-manager-payload',updated:'test',revision:1});await sdk.setDoc(sdk.doc(ctx.firestore(),parentPath),{schemaVersion:1,revision:1,categoryRules:{hueforge:{targetStock:{value:1,scope:'maison_marche'}}},lastMutationId:'fixture-rule-mutation-0001'});});const beforeManager=(await sdk.getDoc(manager)).data(),beforeSettings=(await sdk.getDoc(settings)).data();const runtime=runtimeFor(owner),p=await runtime.prepare({productId:'1001',decision:'reprint'});await runtime.confirm(p.proposalId,{explicit:true});assert.deepEqual((await sdk.getDoc(manager)).data(),beforeManager);assert.deepEqual((await sdk.getDoc(settings)).data(),beforeSettings);});
+    await test('révision expirée avant confirmation refusée sans mutation',async()=>{let clock=1000;const runtime=api.createRuntime({adapter:adapterFor(owner),identity:{uid:UID,authenticated:true},now:()=>clock});const p=await runtime.prepare({productId:'expired',decision:'reprint'});clock=p.expiresAt+1;await assert.rejects(runtime.confirm(p.proposalId,{explicit:true}),/DECISION_PROPOSAL_EXPIRED/);assert.equal((await runtimeFor(owner).read()).expired,undefined);});
+    await test('confirmation explicite obligatoire et double confirmation bloquée',async()=>{const runtime=runtimeFor(owner),p=await runtime.prepare({productId:'double',decision:'reprint'});await assert.rejects(runtime.confirm(p.proposalId),/DECISION_EXPLICIT_CONFIRMATION_REQUIRED/);assert.equal((await runtime.confirm(p.proposalId,{explicit:true})).status,'committed');await assert.rejects(runtime.confirm(p.proposalId,{explicit:true}),/DECISION_PROPOSAL_MISMATCH/);});
+    await test('atomicité fonctionnelle : décision seule, aucun planning/création de stock',async()=>{const runtime=runtimeFor(owner),before=await runtime.read(),p=await runtime.prepare({productId:'no-side-effects',decision:'reprint'});await runtime.confirm(p.proposalId,{explicit:true});const after=await runtime.read();assert.deepEqual(Object.keys(after['no-side-effects']).sort(),['decision','lastMutationId','productId','revision','schemaVersion'].sort());assert.deepEqual(before['no-side-effects'],undefined);});
+    await test('runtime mock bloque répétition après résultat incertain',async()=>{const adapter=api.createMockAdapter({ownerUid:'mock-owner'}),runtime=api.createRuntime({adapter,identity:{uid:'mock-owner',authenticated:true}});adapter.setFaultForTest('uncertain_after');const p=await runtime.prepare({productId:'mock-1',decision:'reprint'});assert.equal((await runtime.confirm(p.proposalId,{explicit:true})).status,'uncertain');await assert.rejects(runtime.prepare({productId:'mock-2',decision:'stopped'}),/DECISION_BUSY_OR_UNCERTAIN/);assert.equal(adapter.getWriteCount(),1);assert.equal((await runtime.reconcile()).status,'applied');});
+    await test('le fichier complet testé est le candidat local approuvé et garde le verrou production 9C fermé',async()=>{assert.equal(candidateHash,'C5E7321F359835B048FB8C81D7A943555B3345E6665226693D57B28DEB897B76');assert.match(match[1],/const PRODUCTION_WRITES_ENABLED=false/);assert.match(match[1],/createFirebaseEmulatorAdapter/);assert.match(match[1],/127\.0\.0\.1:8785/);});
+    await test('la décision 9C ne touche pas au stock boutique, aux ventes ni aux données de caisse/finance',async()=>{const ref=sdk.doc(owner,pathFor('side-effects'));await env.withSecurityRulesDisabled(async ctx=>{await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID+'/fixture/stock'),{maison:4,marche:2,boutique:7});await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID+'/fixture/finance'),{sales:123.45,tickets:['ticket-fixture-1'],urssaf:12.34});});const stockRef=sdk.doc(owner,'fath3d/'+UID+'/fixture/stock'),financeRef=sdk.doc(owner,'fath3d/'+UID+'/fixture/finance'),beforeStock=(await sdk.getDoc(stockRef)).data(),beforeFinance=(await sdk.getDoc(financeRef)).data(),runtime=runtimeFor(owner),p=await runtime.prepare({productId:'side-effects',decision:'reprint'});await runtime.confirm(p.proposalId,{explicit:true});assert.deepEqual((await sdk.getDoc(stockRef)).data(),beforeStock);assert.deepEqual((await sdk.getDoc(financeRef)).data(),beforeFinance);assert.equal((await sdk.getDoc(ref)).exists(),true);});
+  }catch(error){tests.push({name:'initialisation / compilation Rules ou émulateur',status:'ÉCHEC',error:error.stack||error.message,errorCode:safeErrorCode(error)});}
+  finally{
+    if(env)await env.cleanup();
+    delete global.JarvisReplenishment9C;
+    if(originalWindow===undefined)delete global.window;else global.window=originalWindow;
+    if(originalCrypto===undefined)delete global.crypto;else global.crypto=originalCrypto;
+    const report={projectId:PROJECT,emulator:HOST+':'+PORT,emulatorOnly:true,total:tests.length,passed:tests.filter(test=>test.status==='RÉUSSI').length,failed:tests.filter(test=>test.status==='ÉCHEC').length,firebaseProductionWrites:0,tests};
+    const reportPath=path.join(process.env.RUNNER_TEMP||require('node:os').tmpdir(),'9c-decisions-results.json');
+    fs.writeFileSync(reportPath,JSON.stringify(report,null,2),{mode:0o600});
+    console.log(JSON.stringify({projectId:report.projectId,emulatorOnly:report.emulatorOnly,total:report.total,passed:report.passed,failed:report.failed,failures:tests.filter(item=>item.status==='ÉCHEC').map(item=>({name:item.name,error:String(item.error||'').split('\n')[0]})),firebaseProductionWrites:0}));
+    if(report.failed)process.exitCode=1;
+  }
+})();
+
+

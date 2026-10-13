@@ -1,0 +1,13 @@
+{
+  "name": "FATH 3D Manager",
+  "short_name": "FATH 3D",
+  "start_url": "/fath3d/manager/",
+  "scope": "/fath3d/manager/",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#111111",
+  "icons": [
+    { "src": "FATH3D_192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "FATH3D_512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
