@@ -1,4 +1,4 @@
-name: Jarvis 9C isolated fictitious-Rules validation
+name: Jarvis 9C validation with exact published Rules
 on:
   push:
     branches:
@@ -8,11 +8,16 @@ on:
       - "validation/9c/**"
 permissions:
   contents: read
+concurrency:
+  group: jarvis-9c-exact-rules-validation
+  cancel-in-progress: false
 jobs:
   firestore-emulator:
     if: github.ref == 'refs/heads/work/9c-firestore-validation'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment:
+      name: jarvis-9c-validation
     steps:
       - name: Checkout isolated validation branch
         uses: actions/checkout@v4
@@ -44,72 +49,59 @@ jobs:
           actual="$(sha256sum "$candidate_dir/manager/index.html" | cut -d ' ' -f1 | tr '[:lower:]' '[:upper:]')"
           test "$actual" = "C5E7321F359835B048FB8C81D7A943555B3345E6665226693D57B28DEB897B76"
           printf 'JARVIS_9C_CANDIDATE_PATH=%s\n' "$candidate_dir/manager/index.html" >> "$GITHUB_ENV"
-      - name: Prepare repository-only non-production Rules fixture
-        run: |
-          set -euo pipefail
-          fixture_source="$GITHUB_WORKSPACE/validation/9c/firestore.rules.proposed"
-          fixture_rules="$RUNNER_TEMP/jarvis-9c-fixture.rules"
-          config_path="$RUNNER_TEMP/jarvis-9c-firebase.json"
-          test -f "$fixture_source"
-          cp "$fixture_source" "$fixture_rules"
-          node - "$fixture_rules" "$config_path" <<'NODE'
-          const fs = require('node:fs');
-          const [rulesPath, configPath] = process.argv.slice(2);
-          const rules = fs.readFileSync(rulesPath, 'utf8');
-          if (!/^\s*\/\/ PROPOSITION 9A/m.test(rules) || !rules.includes('replenishmentDecisions')) {
-            throw new Error('NON_PRODUCTION_RULES_FIXTURE_INVALID');
-          }
-          const config = JSON.parse(fs.readFileSync('firebase.json', 'utf8'));
-          config.firestore.rules = rulesPath;
-          fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600, flag: 'wx' });
-          NODE
-          printf 'JARVIS_9C_COMBINED_RULES_PATH=%s\n' "$fixture_rules" >> "$GITHUB_ENV"
-          printf 'JARVIS_9C_FIREBASE_CONFIG=%s\n' "$config_path" >> "$GITHUB_ENV"
+      - name: Verify exact published Rules and prepare private emulator files
         working-directory: validation/9c
-      - name: Run candidate integration against fictitious Rules and demo emulator
+        env:
+          JARVIS_9C_RULES_TEMP: ${{ secrets.JARVIS_9C_RULES_TEMP }}
         run: |
-          set +e
-          npx firebase-tools emulators:exec --only firestore --project demo-jarvis-replenishment-9c --config "$JARVIS_9C_FIREBASE_CONFIG" "node firestore-validation/candidate-manager-9c-ui.test.cjs" > "$RUNNER_TEMP/jarvis-9c-emulator.log" 2>&1
-          emulator_result=$?
-          JARVIS_EMULATOR_EXIT="$emulator_result" node - "$RUNNER_TEMP/jarvis-9c-emulator.log" "$RUNNER_TEMP/9c-candidate-ui-results.json" <<'NODE'
-          const fs = require('node:fs');
-          const [logPath, resultPath] = process.argv.slice(2);
-          const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
-          const hasResult = fs.existsSync(resultPath);
-          const result = hasResult ? JSON.parse(fs.readFileSync(resultPath, 'utf8')) : null;
-          const errors = result ? (result.tests || []).filter(t => t.status === 'ÉCHEC').map(t => [t.code, t.stage, t.error].filter(Boolean).join(' ')) : [];
-          const all = [...errors, log].join('\n');
-          let diagnosis = 'CANDIDATE_TEST_SCRIPT_FAILURE';
-          if (/EADDRINUSE|address already in use|failed to start.{0,40}emulator|could not start.{0,40}emulator|failed to download.{0,40}emulator/i.test(all)) diagnosis = 'FIRESTORE_EMULATOR_START_FAILURE';
-          else if (/rules?.{0,80}(?:syntax|compil|parse)|(?:syntax|compil|parse).{0,80}rules?/i.test(all)) diagnosis = 'RULES_COMPILATION_FAILURE';
-          else if (/(?:ENOENT|not found|cannot read|failed to load).{0,80}rules?|rules?.{0,80}(?:ENOENT|not found|cannot read|failed to load)/i.test(all)) diagnosis = 'RULES_FILE_LOAD_FAILURE';
-          else if (/permission-denied|permission_denied|missing or insufficient permissions/i.test(all)) diagnosis = 'FIRESTORE_PERMISSION_FAILURE';
-          else if (/authenticatedContext|unauthenticatedContext|auth(?:entication)?[^\n]{0,60}(?:failed|invalid|missing|initialize)|client[^\n]{0,60}(?:auth|initializ)/i.test(all)) diagnosis = 'FICTITIOUS_AUTH_CLIENT_INITIALIZATION_FAILURE';
-          else if (!hasResult) diagnosis = 'EMULATOR_OR_RULES_STARTUP_FAILURE_UNCLASSIFIED';
-          const diagnosticLines = log.split(/\r?\n/).filter(line => /error|exception|failed|fatal|invalid|EADDRINUSE|compil|syntax/i.test(line)).slice(-8);
-          const diagnostic = diagnosticLines.map(line => line
-            .replace(/\/home\/runner\/[^\s:]+/g, '[runner-path]')
-            .replace(/(?:Bearer\\s+[A-Za-z0-9._-]+|(?:secret|access[_-]?token|authorization)[=: ]+\\S+)/ig, '[redacted]')
-            .replace(/(?:match|allow|function|service|firestore\.rules_version)[\s\S]*/i, '[details redacted]')
-            .replaceAll('demo-jarvis-replenishment-9c', '[demo-project]')
-            .slice(0, 240)).join(' | ').slice(0, 1200);
-          const summary = result
-            ? {category:diagnosis,emulatorAndRulesReachedTestRunner:true,total:result.passed+result.failed,passed:result.passed,failed:result.failed,failures:(result.tests||[]).filter(t=>t.status==='ÉCHEC').map(t=>({name:t.name,stage:t.stage||'unknown',code:t.code||'ASSERTION_FAILURE',message:t.error||'No safe error message available'})),productionWrites:0,rulesSource:'repository proposal fixture only',project:'demo-jarvis-replenishment-9c'}
-            : {category:diagnosis,emulatorAndRulesReachedTestRunner:false,exitCode:Number(process.env.JARVIS_EMULATOR_EXIT||1),diagnostic:diagnostic||'No safe matching CLI diagnostic line; consult sanitized step logs.',productionWrites:0,rulesSource:'repository proposal fixture only',project:'demo-jarvis-replenishment-9c'};
-          console.log(JSON.stringify(summary));
-          NODE
-          if [ "$emulator_result" -ne 0 ]; then exit "$emulator_result"; fi
+          set +x
+          node scripts/prepare-ephemeral-rules.cjs
+      - name: Run decision and rendered-UI tests against combined Rules in demo emulator
+        id: emulator-tests
         working-directory: validation/9c
         env:
           FIREBASE_CLI_DISABLE_UPDATE_CHECK: "true"
           FIRESTORE_EMULATOR_HOST: "127.0.0.1:8785"
           GCLOUD_PROJECT: "demo-jarvis-replenishment-9c"
           GOOGLE_CLOUD_PROJECT: "demo-jarvis-replenishment-9c"
-      - name: Remove temporary candidate, Rules, reports, and emulator log
+        run: |
+          set +e
+          test_command='set +e; node firestore-validation/replenishment-decisions-9c.test.cjs > "$RUNNER_TEMP/9c-decisions.log" 2>&1; a=$?; node firestore-validation/candidate-manager-9c-ui.test.cjs > "$RUNNER_TEMP/9c-ui.log" 2>&1; b=$?; printf "%s %s\n" "$a" "$b" > "$RUNNER_TEMP/9c-test-exit-codes"; test "$a" -eq 0 -a "$b" -eq 0'
+          npx firebase-tools emulators:exec --only firestore --project demo-jarvis-replenishment-9c --config "$JARVIS_9C_FIREBASE_CONFIG" "$test_command" > "$RUNNER_TEMP/9c-emulator-cli.log" 2>&1
+          emulator_exit=$?
+          node scripts/summarize-9c-results.cjs
+          summary_exit=$?
+          node - "$RUNNER_TEMP/9c-emulator-cli.log" "$RUNNER_TEMP/9c-test-exit-codes" "$emulator_exit" <<'NODE'
+          const fs = require('node:fs');
+          const [logPath, statusPath, exitText] = process.argv.slice(2);
+          const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+          const status = fs.existsSync(statusPath) ? fs.readFileSync(statusPath, 'utf8').trim().split(/\s+/) : [];
+          let category = 'TEST_SCRIPT_FAILURE';
+          if (!fs.existsSync(statusPath)) {
+            category = /rules?.{0,100}(syntax|compil|parse)|(?:syntax|compil|parse).{0,100}rules?/i.test(log)
+              ? 'FIRESTORE_RULES_COMPILATION_OR_LOAD_FAILURE'
+              : /EADDRINUSE|address already in use|failed to start.{0,40}emulator|could not start.{0,40}emulator|failed to download.{0,40}emulator/i.test(log)
+                ? 'FIRESTORE_EMULATOR_START_FAILURE'
+                : 'EMULATOR_OR_RULES_STARTUP_FAILURE';
+          } else if (status[0] !== '0' || status[1] !== '0') {
+            category = 'INTEGRATION_ASSERTION_OR_PERMISSION_FAILURE';
+          } else if (Number(exitText) !== 0) {
+            category = 'EMULATOR_EXECUTION_FAILURE';
+          }
+          console.log(JSON.stringify({diagnosticCategory:category,decisionSuiteExit:status[0] ?? 'not-started',uiSuiteExit:status[1] ?? 'not-started',emulatorExit:Number(exitText),firebaseProductionWrites:0,rulesAreNeverPrinted:true}));
+          NODE
+          if [ "$emulator_exit" -ne 0 ] || [ "$summary_exit" -ne 0 ]; then exit 1; fi
+          if [ ! -f "$RUNNER_TEMP/9c-test-exit-codes" ] || [ "$(cat "$RUNNER_TEMP/9c-test-exit-codes")" != "0 0" ]; then exit 1; fi
+      - name: Remove candidate, Rules, reports, and all temporary logs
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/jarvis-9c-fixture.rules" \
+          rm -f "$RUNNER_TEMP/jarvis-9c-deployed.rules" \
+            "$RUNNER_TEMP/jarvis-9c-combined.rules" \
             "$RUNNER_TEMP/jarvis-9c-firebase.json" \
+            "$RUNNER_TEMP/9c-decisions-results.json" \
             "$RUNNER_TEMP/9c-candidate-ui-results.json" \
-            "$RUNNER_TEMP/jarvis-9c-emulator.log"
+            "$RUNNER_TEMP/9c-decisions.log" \
+            "$RUNNER_TEMP/9c-ui.log" \
+            "$RUNNER_TEMP/9c-emulator-cli.log" \
+            "$RUNNER_TEMP/9c-test-exit-codes"
           rm -rf "$RUNNER_TEMP/jarvis-9c-candidate"
