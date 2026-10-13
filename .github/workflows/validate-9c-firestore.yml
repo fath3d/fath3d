@@ -1,21 +1,22 @@
-name: Jarvis 9C initialization diagnostics (fake Rules only)
+name: Jarvis 9C real Rules validation (protected environment)
 on:
   push:
     branches:
       - "work/9c-firestore-validation"
     paths:
-      - ".github/workflows/validate-9c-firestore.yml"
-      - "validation/9c/**"
+      - "validation/9c/trigger/real-rules-validation.txt"
 permissions:
   contents: read
 concurrency:
-  group: jarvis-9c-fake-diagnostics
+  group: jarvis-9c-real-rules-validation
   cancel-in-progress: false
 jobs:
   firestore-emulator:
     if: github.ref == 'refs/heads/work/9c-firestore-validation'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    environment:
+      name: jarvis-9c-validation
     permissions:
       contents: read
     steps:
@@ -49,12 +50,13 @@ jobs:
           actual="$(sha256sum "$candidate_dir/manager/index.html" | cut -d ' ' -f1 | tr '[:lower:]' '[:upper:]')"
           test "$actual" = "C5E7321F359835B048FB8C81D7A943555B3345E6665226693D57B28DEB897B76"
           printf 'JARVIS_9C_CANDIDATE_PATH=%s\n' "$candidate_dir/manager/index.html" >> "$GITHUB_ENV"
-      - name: Prepare fictitious baseline and combined 9C Rules in runner temporary storage
+      - name: Prepare exact deployed Rules and the single 9C addition in runner temp
         working-directory: validation/9c
         env:
           GCLOUD_PROJECT: "demo-jarvis-replenishment-9c"
-        run: node scripts/prepare-fake-rules.cjs
-      - name: Run targeted emulator suites with fake Rules only
+          JARVIS_9C_RULES_TEMP: ${{ secrets.JARVIS_9C_RULES_TEMP }}
+        run: node scripts/prepare-real-rules.cjs
+      - name: Run one isolated real-Rules emulator campaign
         working-directory: validation/9c
         env:
           FIREBASE_CLI_DISABLE_UPDATE_CHECK: "true"
@@ -64,37 +66,36 @@ jobs:
         run: |
           set +e
           test_command='set +e
-          node scripts/compile-fake-rules.cjs > "$RUNNER_TEMP/9c-rules-compile.log" 2>&1
+          node scripts/compile-real-rules.cjs > "$RUNNER_TEMP/9c-real-compile.log" 2>&1
           c=$?
-          node firestore-validation/replenishment-decisions-9c.test.cjs > "$RUNNER_TEMP/9c-decisions.log" 2>&1
-          a=$?
-          node firestore-validation/candidate-manager-9c-ui.test.cjs > "$RUNNER_TEMP/9c-ui.log" 2>&1
-          b=$?
+          if [ "$c" -eq 0 ]; then
+            node firestore-validation/replenishment-decisions-9c.test.cjs > "$RUNNER_TEMP/9c-decisions.log" 2>&1
+            a=$?
+            node firestore-validation/candidate-manager-9c-ui.test.cjs > "$RUNNER_TEMP/9c-ui.log" 2>&1
+            b=$?
+          else
+            a=125
+            b=125
+          fi
           printf "%s %s %s\n" "$c" "$a" "$b" > "$RUNNER_TEMP/9c-test-exit-codes"
           test "$c" -eq 0 -a "$a" -eq 0 -a "$b" -eq 0'
-          npx firebase-tools emulators:exec --only firestore --project demo-jarvis-replenishment-9c --config "$JARVIS_9C_FIREBASE_CONFIG" "$test_command" > "$RUNNER_TEMP/9c-emulator-cli.log" 2>&1
+          npx firebase-tools emulators:exec --only firestore --project demo-jarvis-replenishment-9c --config "$JARVIS_9C_FIREBASE_CONFIG" "$test_command" > "$RUNNER_TEMP/9c-real-emulator-cli.log" 2>&1
           emulator_exit=$?
-          if [ -f "$RUNNER_TEMP/9c-rules-compile.log" ]; then cat "$RUNNER_TEMP/9c-rules-compile.log"; fi
-          if [ "$emulator_exit" -ne 0 ] && [ -f "$RUNNER_TEMP/9c-emulator-cli.log" ]; then
-            echo "FAKE_RULES_EMULATOR_START_DIAGNOSTIC"
-            cat "$RUNNER_TEMP/9c-emulator-cli.log"
-          fi
-          node scripts/summarize-9c-results.cjs
+          node scripts/summarize-real-rules-results.cjs "$emulator_exit"
           summary_exit=$?
           if [ "$emulator_exit" -ne 0 ] || [ "$summary_exit" -ne 0 ]; then exit 1; fi
-          if [ ! -f "$RUNNER_TEMP/9c-test-exit-codes" ] || [ "$(cat "$RUNNER_TEMP/9c-test-exit-codes")" != "0 0 0" ]; then exit 1; fi
-      - name: Remove candidate, fake Rules, reports, and temporary logs
+      - name: Remove real Rules, candidate, reports, and temporary logs
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/jarvis-9c-fake-baseline-9a.rules" \
-            "$RUNNER_TEMP/jarvis-9c-fake-combined.rules" \
-            "$RUNNER_TEMP/jarvis-9c-fake-firebase.json" \
+          rm -f "$RUNNER_TEMP/jarvis-9c-real-baseline.rules" \
+            "$RUNNER_TEMP/jarvis-9c-real-combined.rules" \
+            "$RUNNER_TEMP/jarvis-9c-real-firebase.json" \
+            "$RUNNER_TEMP/9c-real-rules-compile-results.json" \
             "$RUNNER_TEMP/9c-decisions-results.json" \
             "$RUNNER_TEMP/9c-candidate-ui-results.json" \
+            "$RUNNER_TEMP/9c-real-compile.log" \
             "$RUNNER_TEMP/9c-decisions.log" \
             "$RUNNER_TEMP/9c-ui.log" \
-            "$RUNNER_TEMP/9c-emulator-cli.log" \
-            "$RUNNER_TEMP/9c-test-exit-codes" \
-            "$RUNNER_TEMP/9c-rules-compile.log" \
-            "$RUNNER_TEMP/9c-rules-compile-results.json"
+            "$RUNNER_TEMP/9c-real-emulator-cli.log" \
+            "$RUNNER_TEMP/9c-test-exit-codes"
           rm -rf "$RUNNER_TEMP/jarvis-9c-candidate"
