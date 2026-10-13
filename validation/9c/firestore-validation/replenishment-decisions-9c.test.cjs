@@ -137,7 +137,30 @@ function record(id,decision='reprint',revision=1,extra={}){return {schemaVersion
     await test('atomicité fonctionnelle : décision seule, aucun planning/création de stock',async()=>{const runtime=runtimeFor(owner),before=await runtime.read(),p=await runtime.prepare({productId:'no-side-effects',decision:'reprint'});await runtime.confirm(p.proposalId,{explicit:true});const after=await runtime.read();assert.deepEqual(Object.keys(after['no-side-effects']).sort(),['decision','lastMutationId','productId','revision','schemaVersion'].sort());assert.deepEqual(before['no-side-effects'],undefined);});
     await test('runtime mock bloque répétition après résultat incertain',async()=>{const adapter=api.createMockAdapter({ownerUid:'mock-owner'}),runtime=api.createRuntime({adapter,identity:{uid:'mock-owner',authenticated:true}});adapter.setFaultForTest('uncertain_after');const p=await runtime.prepare({productId:'mock-1',decision:'reprint'});assert.equal((await runtime.confirm(p.proposalId,{explicit:true})).status,'uncertain');await assert.rejects(runtime.prepare({productId:'mock-2',decision:'stopped'}),/DECISION_BUSY_OR_UNCERTAIN/);assert.equal(adapter.getWriteCount(),1);assert.equal((await runtime.reconcile()).status,'applied');});
     await test('le fichier complet testé est le candidat local approuvé et garde le verrou production 9C fermé',async()=>{assert.equal(candidateHash,'C5E7321F359835B048FB8C81D7A943555B3345E6665226693D57B28DEB897B76');assert.match(match[1],/const PRODUCTION_WRITES_ENABLED=false/);assert.match(match[1],/createFirebaseEmulatorAdapter/);assert.match(match[1],/127\.0\.0\.1:8785/);});
-    await test('la décision 9C ne touche pas au stock boutique, aux ventes ni aux données de caisse/finance',async()=>{const ref=sdk.doc(owner,pathFor('side-effects'));await env.withSecurityRulesDisabled(async ctx=>{await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID+'/fixture/stock'),{maison:4,marche:2,boutique:7});await sdk.setDoc(sdk.doc(ctx.firestore(),'fath3d/'+UID+'/fixture/finance'),{sales:123.45,tickets:['ticket-fixture-1'],urssaf:12.34});});const stockRef=sdk.doc(owner,'fath3d/'+UID+'/fixture/stock'),financeRef=sdk.doc(owner,'fath3d/'+UID+'/fixture/finance'),beforeStock=(await sdk.getDoc(stockRef)).data(),beforeFinance=(await sdk.getDoc(financeRef)).data(),runtime=runtimeFor(owner),p=await runtime.prepare({productId:'side-effects',decision:'reprint'});await runtime.confirm(p.proposalId,{explicit:true});assert.deepEqual((await sdk.getDoc(stockRef)).data(),beforeStock);assert.deepEqual((await sdk.getDoc(financeRef)).data(),beforeFinance);assert.equal((await sdk.getDoc(ref)).exists(),true);});
+    await test('la décision 9C ne touche pas au stock boutique, aux ventes ni aux données de caisse/finance',async()=>{
+      const stockPath='fath3d/'+UID+'/fixture/stock',financePath='fath3d/'+UID+'/fixture/finance';
+      await env.withSecurityRulesDisabled(async ctx=>{
+        const db=ctx.firestore();
+        await sdk.setDoc(sdk.doc(db,stockPath),{maison:4,marche:2,boutique:7});
+        await sdk.setDoc(sdk.doc(db,financePath),{sales:123.45,tickets:['ticket-fixture-1'],urssaf:12.34});
+      });
+      const readProtectedFixtures=()=>env.withSecurityRulesDisabled(async ctx=>{
+        const db=ctx.firestore();
+        return {
+          stock:(await sdk.getDoc(sdk.doc(db,stockPath))).data(),
+          finance:(await sdk.getDoc(sdk.doc(db,financePath))).data()
+        };
+      });
+      const before=await readProtectedFixtures();
+      const runtime=runtimeFor(owner);
+      const proposal=await runtime.prepare({productId:'side-effects',decision:'reprint'});
+      const result=await runtime.confirm(proposal.proposalId,{explicit:true});
+      assert.equal(result.status,'committed','La décision 9C doit être exécutée avec les permissions normales du propriétaire.');
+      const after=await readProtectedFixtures();
+      assert.deepEqual(after,before,'Les documents fictifs de stock et de finance doivent rester identiques.');
+      const decision=await sdk.getDoc(sdk.doc(owner,pathFor('side-effects')));
+      assert.equal(decision.exists(),true,'La décision 9C doit avoir été enregistrée.');
+    });
   }catch(error){tests.push({testId:'DECISION_INITIALIZATION',name:'INITIALIZATION',status:'ÉCHEC',stage:error.safeStage||currentStage,category:categoryFor(error,error.safeStage||currentStage),permissionIds:Array.isArray(error.safePermissionIds)?error.safePermissionIds:undefined});}
   finally{
     if(env)await env.cleanup();
