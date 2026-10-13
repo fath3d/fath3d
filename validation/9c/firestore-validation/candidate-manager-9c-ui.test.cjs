@@ -13,9 +13,20 @@ const style=id=>{const re=new RegExp('<style id="'+id.replace(/[.*+?^${}()|[\]\\
 const baseCss=(source.match(/<style\b[^>]*>([\s\S]*?)<\/style>/i)||[])[1]||'';
 const html=`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${baseCss}\n${style('jarvis-replenishment-9a4-style')}</style></head><body><div class="app"><div class="main"><div class="topbar"><h1 class="page-title">Règles de réapprovisionnement — test isolé</h1><div class="topbar-actions" id="actions"></div></div><div class="content" id="content"></div></div></div><script>${script('jarvis-replenishment-9a')}</script><script>${script('jarvis-replenishment-9a3')}</script><script>${script('jarvis-replenishment-9c-decisions')}</script><script>${script('jarvis-replenishment-9a4')}</script></body></html>`;
 
-let env,browser,context,ownerDb,runtime,api;
+let env,browser,context,ownerDb,runtime,api,page;
+const confirmTrace=[];
 const result={candidateSha256:hash,projectId:PROJECT,emulatorOnly:true,passed:0,failed:0,tests:[],firebaseProductionWrites:0};
-async function test(name,fn){try{await fn();result.tests.push({name,status:'RÉUSSI'});result.passed++;}catch(error){result.tests.push({name,status:'ÉCHEC',error:String(error.message||error).split('\n')[0]});result.failed++;}}
+let currentStage='test setup';
+const safeError=(error)=>{
+  const code=String(error&&((error.code)||(error.name))||'ASSERTION_FAILURE').replace(/[^A-Za-z0-9_.:-]/g,'').slice(0,80);
+  let message=String(error&&(error.message||error)||'Unknown error').split('\\n')[0];
+  message=message.replaceAll(PROJECT,'[demo-project]').replaceAll(UID,'[fixture-uid]')
+    .replace(/fath3d\\/[^/\\s]+\\/replenishmentDecisions/g,'fath3d/[fixture-uid]/replenishmentDecisions')
+    .slice(0,220);
+  return {code,message};
+};
+async function step(name,fn){currentStage=name;return await fn();}
+async function test(name,fn){currentStage='start';try{await fn();result.tests.push({name,status:'RÉUSSI'});result.passed++;}catch(error){const safe=safeError(error);result.tests.push({name,status:'ÉCHEC',stage:currentStage,code:safe.code,error:safe.message});result.failed++;}}
 
 (async()=>{
   const originalWindow=global.window,originalCrypto=global.crypto;
@@ -34,11 +45,11 @@ async function test(name,fn){try{await fn();result.tests.push({name,status:'RÉU
     runtime=api.createRuntime({adapter,identity:{uid:UID,authenticated:true}});
     browser=await chromium.launch({headless:true,args:['--disable-background-networking']});
     context=await browser.newContext({viewport:{width:1366,height:768}});
-    const page=await context.newPage();
+    page=await context.newPage();
     await page.route('**/*',route=>route.abort());
     await page.exposeFunction('__9cRead',()=>runtime.read());
     await page.exposeFunction('__9cPrepare',args=>runtime.prepare(args));
-    await page.exposeFunction('__9cConfirm',(id,options)=>runtime.confirm(id,options));
+    await page.exposeFunction('__9cConfirm',async(id,options)=>{const response=await runtime.confirm(id,options);confirmTrace.push({status:response&&response.status,reason:response&&response.reason,writeApplied:response&&response.writeApplied});return response;});
     await page.exposeFunction('__9cCancel',(id,options)=>runtime.cancel(id,options));
     await page.exposeFunction('__9cPending',()=>runtime.getPending());
     await page.exposeFunction('__9cState',()=>runtime.getState());
@@ -62,31 +73,73 @@ async function test(name,fn){try{await fn();result.tests.push({name,status:'RÉU
       await JarvisReplenishment9A4.refresh();
     },{fixture});
 
+    async function resetScenario(){
+      await env.clearFirestore();
+      confirmTrace.length=0;
+      runtime=createDecisionRuntime();
+      await page.evaluate(async({fixture})=>{
+        window.__decisionPending=null;
+        window.__decisionState={mode:'FIRESTORE_EMULATOR_ONLY',writesEnabled:true,blockedUncertain:false};
+        window.__testDb=fixture;
+        JarvisReplenishment9A4.render(document.getElementById('content'),document.getElementById('actions'),()=>window.__testDb);
+        await JarvisReplenishment9A4.refresh();
+      },{fixture});
+    }
+
     await test('alerte candidate complète visible avec données fictives',async()=>{
-      await page.getByTestId('r9-alert-101').waitFor({state:'visible',timeout:5000});
-      assert.match(await page.getByTestId('r9-alert-101').innerText(),/Stock seuil : 4 · seuil ≤ 5/);
-      assert.match(await page.getByTestId('r9-decision-storage').innerText(),/ÉMULATEUR Firestore 9C/);
+      await step('attente de la carte d’alerte',()=>page.getByTestId('r9-alert-101').waitFor({state:'visible',timeout:5000}));
+      await step('vérification du seuil rendu',async()=>assert.match(await page.getByTestId('r9-alert-101').innerText(),/Stock seuil : 4 · seuil ≤ 5/));
+      await step('vérification du mode émulateur',async()=>assert.match(await page.getByTestId('r9-decision-storage').innerText(),/ÉMULATEUR Firestore 9C/));
     });
     await test('annulation depuis le vrai rendu 9A4 ne crée aucune décision',async()=>{
-      await page.getByTestId('r9-decision-choice-101').selectOption('reprint');
-      await page.getByTestId('r9-prepare-decision-101').click();
-      await page.getByTestId('r9-decision-proposal').waitFor({state:'visible'});
-      await page.getByTestId('r9-cancel-decision').click();
-      await page.waitForTimeout(50);
-      assert.deepEqual(await runtime.read(),{});
-      assert.doesNotMatch(await page.getByTestId('r9-alert-101').innerText(),/Décision enregistrée/);
+      await resetScenario();
+      await step('sélection À réimprimer',()=>page.getByTestId('r9-decision-choice-101').selectOption('reprint'));
+      await step('clic Préparer',()=>page.getByTestId('r9-prepare-decision-101').click());
+      await step('attente de la proposition',()=>page.getByTestId('r9-decision-proposal').waitFor({state:'visible'}));
+      await step('clic Annuler',()=>page.getByTestId('r9-cancel-decision').click());
+      await step('attente de la fin de l’annulation',()=>page.waitForFunction(()=>window.__decisionPending===null,{timeout:5000}));
+      await step('vérification du snapshot vide',async()=>{
+        const snapshot=await runtime.read();
+        assert.equal(Object.keys(snapshot).length,0,'Le snapshot doit rester sans décision après annulation.');
+      });
+      await step('vérification directe du document Firestore absent',async()=>{
+        const ref=sdk.doc(ownerDb,'fath3d',UID,'replenishmentDecisions','101');
+        const stored=await sdk.getDoc(ref);
+        assert.equal(stored.exists(),false,'Aucun document de décision ne doit être créé après annulation.');
+      });
+      await step('vérification absence de faux succès',async()=>{
+        assert.doesNotMatch(await page.getByTestId('r9-alert-101').innerText(),/Décision enregistrée/);
+      });
     });
     await test('confirmation depuis le vrai rendu 9A4 enregistre puis relit dans Firestore Emulator',async()=>{
-      await page.getByTestId('r9-decision-choice-101').selectOption('reprint');
-      await page.getByTestId('r9-prepare-decision-101').click();
-      await page.getByTestId('r9-decision-proposal').waitFor({state:'visible'});
-      await page.getByTestId('r9-confirm-decision').click();
-      await page.getByTestId('r9-alert-101').waitFor({state:'visible'});
-      const reread=await runtimeForNewSession();
-      assert.equal(reread['101'].decision,'reprint');
-      assert.equal(reread['101'].revision,1);
-      assert.match(await page.getByTestId('r9-alert-101').innerText(),/Décision enregistrée : À réimprimer/);
-      assert.deepEqual(pageErrors,[]);
+      await resetScenario();
+      await step('sélection À réimprimer',()=>page.getByTestId('r9-decision-choice-101').selectOption('reprint'));
+      await step('clic Préparer',()=>page.getByTestId('r9-prepare-decision-101').click());
+      await step('attente de la proposition explicite',()=>page.getByTestId('r9-decision-proposal').waitFor({state:'visible'}));
+      await step('clic de confirmation explicite',()=>page.getByTestId('r9-confirm-decision').click());
+      await step('attente du retour de transaction',()=>page.waitForFunction(()=>window.__decisionPending===null,{timeout:10000}));
+      await step('vérification du statut de transaction',async()=>{
+        assert.equal(confirmTrace.at(-1)?.status,'committed','La transaction Firestore doit retourner committed.');
+      });
+      await step('vérification directe de l’écriture Firestore',async()=>{
+        const ref=sdk.doc(ownerDb,'fath3d',UID,'replenishmentDecisions','101');
+        const stored=await sdk.getDoc(ref);
+        assert.equal(stored.exists(),true,'Le document décision doit exister après confirmation.');
+        assert.equal(stored.data().decision,'reprint');
+        assert.equal(stored.data().revision,1);
+      });
+      await step('relecture par un runtime neuf',async()=>{
+        const reread=await runtimeForNewSession();
+        assert.equal(reread['101'].decision,'reprint');
+        assert.equal(reread['101'].revision,1);
+      });
+      await step('actualisation du rendu et vérification du groupe À réimprimer',async()=>{
+        await page.evaluate(()=>JarvisReplenishment9A4.refresh());
+        const card=page.locator('[data-testid="r9-group-reprint"] [data-testid="r9-alert-101"]');
+        await card.waitFor({state:'visible',timeout:5000});
+        assert.match(await card.innerText(),/Décision enregistrée : À réimprimer/);
+        assert.equal(await page.locator('[data-testid="r9-group-undecided"] [data-testid="r9-alert-101"]').count(),0);
+      });
     });
   }catch(error){result.failed++;result.tests.push({name:'initialisation / candidate / émulateur / navigateur',status:'ÉCHEC',error:String(error.message||error).split('\n')[0]});}
   finally{
@@ -103,8 +156,9 @@ async function test(name,fn){try{await fn();result.tests.push({name,status:'RÉU
   }
 })();
 
-async function runtimeForNewSession(){
+function createDecisionRuntime(){
   const adapter=api.createFirebaseEmulatorAdapter({db:ownerDb,auth:{currentUser:{uid:UID}},sdk,emulatorHost:HOST+':'+PORT});
-  return api.createRuntime({adapter,identity:{uid:UID,authenticated:true}}).read();
+  return api.createRuntime({adapter,identity:{uid:UID,authenticated:true}});
 }
+async function runtimeForNewSession(){return createDecisionRuntime().read();}
 
