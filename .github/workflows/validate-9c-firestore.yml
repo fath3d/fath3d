@@ -77,7 +77,7 @@ jobs:
           const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
           const hasResult = fs.existsSync(resultPath);
           const result = hasResult ? JSON.parse(fs.readFileSync(resultPath, 'utf8')) : null;
-          const errors = result ? (result.tests || []).filter(t => t.status === 'ÉCHEC').map(t => String(t.error || '')) : [];
+          const errors = result ? (result.tests || []).filter(t => t.status === 'ÉCHEC').map(t => [t.code, t.stage, t.error].filter(Boolean).join(' ')) : [];
           const all = [...errors, log].join('\n');
           let diagnosis = 'CANDIDATE_TEST_SCRIPT_FAILURE';
           if (/EADDRINUSE|address already in use|failed to start.{0,40}emulator|could not start.{0,40}emulator|failed to download.{0,40}emulator/i.test(all)) diagnosis = 'FIRESTORE_EMULATOR_START_FAILURE';
@@ -87,7 +87,7 @@ jobs:
           else if (/authenticatedContext|unauthenticatedContext|auth(?:entication)?[^\n]{0,60}(?:failed|invalid|missing|initialize)|client[^\n]{0,60}(?:auth|initializ)/i.test(all)) diagnosis = 'FICTITIOUS_AUTH_CLIENT_INITIALIZATION_FAILURE';
           else if (!hasResult) diagnosis = 'EMULATOR_OR_RULES_STARTUP_FAILURE_UNCLASSIFIED';
           const summary = result
-            ? { category: diagnosis, emulatorAndRulesReachedTestRunner: true, total: result.passed + result.failed, passed: result.passed, failed: result.failed, failures: (result.tests || []).filter(t => t.status === 'ÉCHEC').map(t => t.name), productionWrites: 0, rulesSource: 'repository proposal fixture only', project: 'demo-jarvis-replenishment-9c' }
+            ? { category: diagnosis, emulatorAndRulesReachedTestRunner: true, total: result.passed + result.failed, passed: result.passed, failed: result.failed, failures: (result.tests || []).filter(t => t.status === 'ÉCHEC').map(t => ({name: t.name, stage: t.stage || 'unknown', code: t.code || 'ASSERTION_FAILURE', message: t.error || 'No safe error message available'})), productionWrites: 0, rulesSource: 'repository proposal fixture only', project: 'demo-jarvis-replenishment-9c' }
             : { category: diagnosis, emulatorAndRulesReachedTestRunner: false, exitCode: Number(process.env.JARVIS_EMULATOR_EXIT || 1), productionWrites: 0, rulesSource: 'repository proposal fixture only', project: 'demo-jarvis-replenishment-9c' };
           console.log(JSON.stringify(summary));
           NODE
