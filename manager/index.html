@@ -174,7 +174,7 @@ if ('serviceWorker' in navigator) {
     const args = proposal.parameters || {};
     const productId = args.productId;
     const location = args.location;
-    if(!['maison','marche','artComplices','btvero'].includes(location)) throw new Error('SCOPED_TARGET_INVALID');
+    if(!['maison','marche','artComplices','btvero','videoGamers'].includes(location)) throw new Error('SCOPED_TARGET_INVALID');
     if(productId === undefined || productId === null || Array.isArray(productId)) throw new Error('PRODUCT_NOT_FOUND');
     const expectedBefore = Number(proposal.oldValue);
     const requestedAfter = Number(proposal.newValue);
@@ -1809,7 +1809,7 @@ function renderDashboard(el, actions) {
   const benefice = totalCA - totalDepenses;
   const totalStock = db.products.reduce((s,p)=>{
     const st = p.stocks||{};
-    return s + (Number(st.maison)||0) + (Number(st.marche)||0) + (Number(st.artComplices)||0) + (Number(st.btvero)||0);
+    return s + (Number(st.maison)||0) + (Number(st.marche)||0) + (Number(st.artComplices)||0) + (Number(st.btvero)||0) + (Number(st.videoGamers)||0);
   },0);
 
   if(typeof window._showFinances === 'undefined') {
@@ -4427,7 +4427,7 @@ function renderDiagnostic(el, actions) {
 
   // 3. Stocks négatifs
   db.products.forEach(p => {
-    ['maison','marche','artComplices','btvero'].forEach(loc => {
+    ['maison','marche','artComplices','btvero','videoGamers'].forEach(loc => {
       const v = p.stocks[loc];
       if(v < 0) {
         issues.push({type:'danger', cat:'Stock', msg:`"${p.name}" a un stock ${loc} négatif (${v})`, action:`openEditProduct(${p.id})`, actionLabel:'Corriger'});
@@ -5556,7 +5556,7 @@ function vocalAnswer(question){
     const comm1 = (v)=>{
       const brut = (Number(v.prixVente)||0)*(Number(v.qty)||1);
       if(v.comm!==undefined && v.comm!==null && v.comm!=='') return Number(v.comm)||0;
-      const pct = boutiqueCommPct(v.boutique);
+      const pct = boutiqueCommPct(v.boutique, moisYM(Number(v.annee)||2026, v.mois), v.categorie);
       if(pct!==null) return Math.round(brut*pct)/100;
       if(v.boutique==='boutA') return 1.00*(Number(v.qty)||1);
       return 0;
@@ -7742,7 +7742,7 @@ function doJaiImprime(productId){
   const mr = parseInt(document.getElementById('jaiimp-marche').value)||0;
   if(tot<=0){ showToast('Quantité invalide !', false); return; }
   if(ma+mr!==tot){ showToast('La répartition ne fait pas le total !', false); return; }
-  if(!p.stocks) p.stocks = {maison:0,marche:0,artComplices:0,btvero:0};
+  if(!p.stocks) p.stocks = {maison:0,marche:0,artComplices:0,btvero:0,videoGamers:0};
   const bMa = p.stocks.maison||0, bMr = p.stocks.marche||0;
   if(ma>0){ p.stocks.maison = bMa+ma; logStockChange(p.id, p.name, 'maison', bMa, p.stocks.maison, 'Réimpression'); }
   if(mr>0){ p.stocks.marche = bMr+mr; logStockChange(p.id, p.name, 'marche', bMr, p.stocks.marche, 'Réimpression'); }
@@ -8654,6 +8654,7 @@ function renderStocksBoutiques(el, actions) {
   actions.innerHTML = `
     <button class="btn btn-secondary btn-sm" onclick="exportReassortPDF()">📄 Bon Réassort</button>
     <button class="btn btn-primary btn-sm" onclick="openReassortMultiBoutique()">📦 Réassort → Boutique</button>
+    <button class="btn btn-secondary btn-sm" onclick="openTransfertVG()">📦 Transfert Marché → Video Gamers</button>
   `;
   const cats = ['all', ...[...new Set(db.products.map(p=>p.categorie).filter(Boolean))].sort((a,b)=>a.localeCompare(b))];
   const filtered = db.products.filter(p => {
@@ -8670,33 +8671,35 @@ function renderStocksBoutiques(el, actions) {
   const totalBTV = filtered.reduce((s,p)=>s+(p.stocks.btvero||0),0);
   const valAC    = filtered.reduce((s,p)=>s+(p.stocks.artComplices||0)*p.price,0);
   const valBTV   = filtered.reduce((s,p)=>s+(p.stocks.btvero||0)*p.price,0);
+  const totalVG  = filtered.reduce((s,p)=>s+(p.stocks.videoGamers||0),0);
+  const valVG    = filtered.reduce((s,p)=>s+(p.stocks.videoGamers||0)*p.price,0);
 
   el.innerHTML = `
     <!-- Historique réassorts boutiques -->
-    ${(db.reassortHistory||[]).filter(r=>r.lines.some(l=>l.destination==='Arts Complices'||l.destination==='Btq de Véro')).length>0?`
+    ${(db.reassortHistory||[]).filter(r=>r.lines.some(l=>l.destination==='Arts Complices'||l.destination==='Btq de Véro'||l.destination==='Video Gamers')).length>0?`
     <div class="card" style="margin-bottom:14px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div class="card-title" style="margin:0;">Derniers réassorts boutiques</div>
       </div>
-      ${[...(db.reassortHistory||[])].reverse().filter(r=>r.lines.some(l=>l.destination==='Arts Complices'||l.destination==='Btq de Véro')).slice(0,5).map(r=>`
+      ${[...(db.reassortHistory||[])].reverse().filter(r=>r.lines.some(l=>l.destination==='Arts Complices'||l.destination==='Btq de Véro'||l.destination==='Video Gamers')).slice(0,5).map(r=>`
         <div style="padding:8px;border-bottom:1px solid var(--border);">
           <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
             <span style="font-size:11px;font-weight:700;color:var(--muted);">${formatDateMarche(r.date)} ${r.time}</span>
-            <span style="font-size:11px;color:var(--muted);">${r.lines.filter(l=>l.destination==='Arts Complices'||l.destination==='Btq de Véro').reduce((s,l)=>s+l.qty,0)} pièces</span>
+            <span style="font-size:11px;color:var(--muted);">${r.lines.filter(l=>l.destination==='Arts Complices'||l.destination==='Btq de Véro'||l.destination==='Video Gamers').reduce((s,l)=>s+l.qty,0)} pièces</span>
           </div>
-          ${r.lines.filter(l=>l.destination==='Arts Complices'||l.destination==='Btq de Véro').map(l=>`
+          ${r.lines.filter(l=>l.destination==='Arts Complices'||l.destination==='Btq de Véro'||l.destination==='Video Gamers').map(l=>`
             <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
               <span>${l.emoji}</span>
               <span style="flex:1;">${l.name}</span>
               <span style="font-weight:700;">+${l.qty}</span>
-              <span class="badge" style="font-size:10px;background:${l.destination==='Arts Complices'?'rgba(230,48,48,.15)':'rgba(255,106,0,.15)'};color:${l.destination==='Arts Complices'?'#e63030':'#ff6a00'};">${l.destination}</span>
+              <span class="badge" style="font-size:10px;background:${l.destination==='Arts Complices'?'rgba(230,48,48,.15)':l.destination==='Video Gamers'?'rgba(55,138,221,.15)':'rgba(255,106,0,.15)'};color:${l.destination==='Arts Complices'?'#e63030':l.destination==='Video Gamers'?'#378add':'#ff6a00'};">${l.destination}</span>
             </div>
           `).join('')}
         </div>
       `).join('')}
     </div>`:''}
 
-    <div class="grid-2" style="margin-bottom:14px;">
+    <div style="margin-bottom:14px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
       <div class="stat" style="border-left:3px solid var(--accent)">
         <div class="stat-label" style="color:#e63030">🎨 Arts Complices</div>
         <div class="stat-value" style="color:var(--accent)">${totalAC}</div>
@@ -8706,6 +8709,11 @@ function renderStocksBoutiques(el, actions) {
         <div class="stat-label">💛 La Boutique de Véro</div>
         <div class="stat-value" style="color:#ff6a00">${totalBTV}</div>
         <div class="stat-sub">${valBTV.toFixed(2)}€ valeur</div>
+      </div>
+      <div class="stat" style="border-left:3px solid #378add">
+        <div class="stat-label" style="color:#378add">🎮 Video Gamers</div>
+        <div class="stat-value" style="color:#378add">${totalVG}</div>
+        <div class="stat-sub">${valVG.toFixed(2)}€ valeur</div>
       </div>
     </div>
 
@@ -8724,19 +8732,20 @@ function renderStocksBoutiques(el, actions) {
               <th>Catégorie</th><th>Référence</th><th>Prix</th>
               <th style="text-align:center;color:#e63030">🎨 Arts Complices</th>
               <th style="text-align:center;color:#ff6a00">🟠 Btq de Véro</th>
+              <th style="text-align:center;color:#378add">🎮 Video Gamers</th>
               <th style="text-align:center;">TOTAL</th><th></th>
             </tr>
           </thead>
           <tbody id="stocks-boutiques-tbody">
             ${filtered.map(p => {
-              const total = (p.stocks.artComplices||0)+(p.stocks.btvero||0);
+              const total = (p.stocks.artComplices||0)+(p.stocks.btvero||0)+(p.stocks.videoGamers||0);
               const sb = (v) => `<span style="display:inline-block;min-width:28px;text-align:center;padding:2px 6px;border-radius:6px;font-weight:700;font-size:12px;background:${v===0?'rgba(255,68,68,.1)':v<3?'rgba(255,229,0,.1)':'rgba(68,204,136,.1)'};color:${v===0?'var(--danger)':v<3?'var(--accent)':'var(--success)'};">${v}</span>`;
               return `<tr>
                 <td><span style="font-size:11px;padding:2px 8px;background:var(--border);border-radius:4px;color:var(--text);font-weight:600;">${p.categorie||'—'}</span></td>
                 <td style="font-weight:700;">${p.emoji} ${p.name}</td>
                 <td style="font-weight:700;color:var(--accent);">${p.price}€</td>
                 <td style="text-align:center;">${sb(p.stocks.artComplices||0)}</td>
-                <td style="text-align:center;">${sb(p.stocks.btvero||0)}</td>
+                <td style="text-align:center;">${sb(p.stocks.btvero||0)}</td><td style="text-align:center;">${sb(p.stocks.videoGamers||0)}</td>
                 <td style="text-align:center;font-weight:800;">${total}</td>
                 <td><button class="btn btn-secondary btn-sm" onclick="openAdjustStockBoutique(${p.id})">✏️</button></td>
               </tr>`;
@@ -8762,13 +8771,13 @@ function updateStocksBoutiquesTable() {
   if(!tbody) { renderStocksBoutiques(document.getElementById('content'),document.getElementById('topbar-actions')); return; }
   const sb = (v) => `<span style="display:inline-block;min-width:28px;text-align:center;padding:2px 6px;border-radius:6px;font-weight:700;font-size:12px;background:${v===0?'rgba(255,68,68,.1)':v<3?'rgba(255,229,0,.1)':'rgba(68,204,136,.1)'};color:${v===0?'var(--danger)':v<3?'var(--accent)':'var(--success)'};">${v}</span>`;
   tbody.innerHTML = filtered.map(p => {
-    const total = (p.stocks.artComplices||0)+(p.stocks.btvero||0);
+    const total = (p.stocks.artComplices||0)+(p.stocks.btvero||0)+(p.stocks.videoGamers||0);
     return `<tr>
       <td><span style="font-size:11px;padding:2px 8px;background:var(--border);border-radius:4px;color:var(--text);font-weight:600;">${p.categorie||'—'}</span></td>
       <td style="font-weight:700;">${p.emoji} ${p.name}</td>
       <td style="font-weight:700;color:var(--accent);">${p.price}€</td>
       <td style="text-align:center;">${sb(p.stocks.artComplices||0)}</td>
-      <td style="text-align:center;">${sb(p.stocks.btvero||0)}</td>
+      <td style="text-align:center;">${sb(p.stocks.btvero||0)}</td><td style="text-align:center;">${sb(p.stocks.videoGamers||0)}</td>
       <td style="text-align:center;font-weight:800;">${total}</td>
       <td><button class="btn btn-secondary btn-sm" onclick="openAdjustStockBoutique(${p.id})">✏️</button></td>
     </tr>`;
@@ -8795,6 +8804,10 @@ function openReassortMultiBoutique() {
       <button id="rbtn-artComplices" onclick="setReassortBoutique('artComplices')"
         style="flex:1;padding:10px;border-radius:8px;border:2px solid var(--border);background:none;color:var(--muted);font-weight:800;cursor:pointer;font-family:'Exo 2',sans-serif;">
         🔴 Arts Complices
+      </button>
+      <button id="rbtn-videoGamers" onclick="setReassortBoutique('videoGamers')"
+        style="flex:1;padding:10px;border-radius:8px;border:2px solid var(--border);background:none;color:var(--muted);font-weight:800;cursor:pointer;font-family:'Exo 2',sans-serif;">
+        🎮 Video Gamers
       </button>
     </div>
 
@@ -8828,17 +8841,17 @@ function openReassortMultiBoutique() {
   window._reassortBoutiqueDest = 'btvero';
 }
 
+function reassortDestLabel(d) { return d==='btvero'?'Btq de Véro':d==='videoGamers'?'Video Gamers':'Arts Complices'; }
 function setReassortBoutique(dest) {
   window._reassortBoutiqueDest = dest;
-  const btnVero = document.getElementById('rbtn-btvero');
-  const btnAC = document.getElementById('rbtn-artComplices');
-  if(dest==='btvero') {
-    btnVero.style.borderColor='#ff6a00'; btnVero.style.background='rgba(255,106,0,.1)'; btnVero.style.color='#ff6a00';
-    btnAC.style.borderColor='var(--border)'; btnAC.style.background='none'; btnAC.style.color='var(--muted)';
-  } else {
-    btnAC.style.borderColor='#e63030'; btnAC.style.background='rgba(230,48,48,.1)'; btnAC.style.color='#e63030';
-    btnVero.style.borderColor='var(--border)'; btnVero.style.background='none'; btnVero.style.color='var(--muted)';
-  }
+  const defs = {btvero:['#ff6a00','rgba(255,106,0,.1)'], artComplices:['#e63030','rgba(230,48,48,.1)'], videoGamers:['#378add','rgba(55,138,221,.1)']};
+  Object.keys(defs).forEach(k => {
+    const b = document.getElementById('rbtn-'+k); if(!b) return;
+    const on = k===dest;
+    b.style.borderColor = on ? defs[k][0] : 'var(--border)';
+    b.style.background = on ? defs[k][1] : 'none';
+    b.style.color = on ? defs[k][0] : 'var(--muted)';
+  });
 }
 
 function doReassortMultiBoutique() {
@@ -8854,7 +8867,7 @@ function doReassortMultiBoutique() {
     if(qty > 0) {
       p.stocks[dest] = (p.stocks[dest]||0) + qty;
       p.stocks.maison = (p.stocks.maison||0) - qty;
-      lines.push({name:p.name, emoji:p.emoji, categorie:p.categorie||'', qty, destination: dest==='btvero'?'Btq de Véro':'Arts Complices'});
+      lines.push({name:p.name, emoji:p.emoji, categorie:p.categorie||'', qty, destination: reassortDestLabel(dest)});
       totalQty += qty;
     }
   });
@@ -8863,7 +8876,7 @@ function doReassortMultiBoutique() {
   if(lines.length>0) logReassort(lines);
 
   saveData(); closeModal();
-  showToast(`${totalQty} pièce(s) → ${dest==='btvero'?'Btq de Véro':'Arts Complices'} ✅`, true);
+  showToast(`${totalQty} pièce(s) → ${reassortDestLabel(dest)} ✅`, true);
   renderStocksBoutiques(document.getElementById('content'), document.getElementById('topbar-actions'));
 }
 
@@ -8872,9 +8885,10 @@ function openAdjustStockBoutique(productId) {
   const stockMaison = p.stocks.maison || 0;
   const stockAC = p.stocks.artComplices || 0;
   const stockBTV = p.stocks.btvero || 0;
+  const stockVG = p.stocks.videoGamers || 0;
   openModal(`
     <div class="modal-title">${p.emoji} ${p.name}</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
       <div style="padding:10px;background:var(--bg);border-radius:8px;text-align:center;">
         <div style="font-size:11px;color:var(--muted);">🏠 Maison</div>
         <div style="font-weight:800;font-size:18px;color:var(--text);">${stockMaison}</div>
@@ -8886,6 +8900,10 @@ function openAdjustStockBoutique(productId) {
       <div style="padding:10px;background:var(--bg);border-radius:8px;text-align:center;">
         <div style="font-size:11px;color:#ff6a00;">🟠 Btq de Véro</div>
         <div style="font-weight:800;font-size:18px;color:#ff6a00;">${stockBTV}</div>
+      </div>
+      <div style="padding:10px;background:var(--bg);border-radius:8px;text-align:center;">
+        <div style="font-size:11px;color:#378add;">🎮 Video Gamers</div>
+        <div style="font-weight:800;font-size:18px;color:#378add;">${stockVG}</div>
       </div>
     </div>
 
@@ -8901,7 +8919,7 @@ function openAdjustStockBoutique(productId) {
     <div id="mode-info-add" style="font-size:12px;color:var(--muted);margin-bottom:12px;">Stock Maison disponible : <strong style="color:var(--text);">${stockMaison}</strong> — sera déduit automatiquement</div>
     <div id="mode-info-remove" style="font-size:12px;color:var(--muted);margin-bottom:12px;display:none;">Le stock retiré sera <strong style="color:var(--text);">recrédité sur le stock Maison</strong></div>
 
-    ${[{key:'artComplices',label:'🎨 Arts Complices',max:stockAC},{key:'btvero',label:'💛 Boutique de Véro',max:stockBTV}].map(d=>`
+    ${[{key:'artComplices',label:'🎨 Arts Complices',max:stockAC},{key:'btvero',label:'💛 Boutique de Véro',max:stockBTV},{key:'videoGamers',label:'🎮 Video Gamers',max:stockVG}].map(d=>`
       <div class="form-group">
         <label class="form-label">${d.label}</label>
         <div class="number-row">
@@ -8940,38 +8958,46 @@ function setBoutiqueMode(mode) {
   }
   document.getElementById('adj-artComplices').value = 0;
   document.getElementById('adj-btvero').value = 0;
+  document.getElementById('adj-videoGamers').value = 0;
 }
 
 function doAdjustStockBoutique(productId) {
   const p = db.products.find(x=>x.id===productId);
   const qtyAC  = Math.max(0, +document.getElementById('adj-artComplices').value);
   const qtyBTV = Math.max(0, +document.getElementById('adj-btvero').value);
-  const total = qtyAC + qtyBTV;
+  const qtyVG  = Math.max(0, +document.getElementById('adj-videoGamers').value);
+  const total = qtyAC + qtyBTV + qtyVG;
   if(total === 0) { showToast('Quantité = 0 !', false); return; }
 
   if(window._boutiqueMode === 'add') {
     if(total > (p.stocks.maison||0)) { showToast('Stock maison insuffisant !', false); return; }
-    const mAvant = p.stocks.maison||0, acAvant = p.stocks.artComplices||0, btvAvant = p.stocks.btvero||0;
+    const mAvant = p.stocks.maison||0, acAvant = p.stocks.artComplices||0, btvAvant = p.stocks.btvero||0, vgAvant = p.stocks.videoGamers||0;
     p.stocks.artComplices = acAvant + qtyAC;
     p.stocks.btvero       = btvAvant + qtyBTV;
+    p.stocks.videoGamers  = vgAvant + qtyVG;
     p.stocks.maison       = mAvant - total;
     if(qtyAC>0) logStockChange(p.id, p.name, 'artComplices', acAvant, p.stocks.artComplices, 'Dépôt → Arts Complices');
     if(qtyBTV>0) logStockChange(p.id, p.name, 'btvero', btvAvant, p.stocks.btvero, 'Dépôt → Btq de Véro');
+    if(qtyVG>0) logStockChange(p.id, p.name, 'videoGamers', vgAvant, p.stocks.videoGamers, 'Dépôt → Video Gamers');
     logStockChange(p.id, p.name, 'maison', mAvant, p.stocks.maison, 'Dépôt en boutique');
     const lines = [];
     if(qtyAC > 0) lines.push({name:p.name, emoji:p.emoji, categorie:p.categorie||'', qty:qtyAC, destination:'Arts Complices'});
     if(qtyBTV > 0) lines.push({name:p.name, emoji:p.emoji, categorie:p.categorie||'', qty:qtyBTV, destination:'Btq de Véro'});
+    if(qtyVG > 0) lines.push({name:p.name, emoji:p.emoji, categorie:p.categorie||'', qty:qtyVG, destination:'Video Gamers'});
     if(lines.length > 0) logReassort(lines);
     showToast(`${total} pièce(s) → Boutiques ✅`, true);
   } else {
     if(qtyAC > (p.stocks.artComplices||0)) { showToast('Stock Arts Complices insuffisant !', false); return; }
     if(qtyBTV > (p.stocks.btvero||0)) { showToast('Stock Btq de Véro insuffisant !', false); return; }
-    const mAvant2 = p.stocks.maison||0, acAvant2 = p.stocks.artComplices||0, btvAvant2 = p.stocks.btvero||0;
+    if(qtyVG > (p.stocks.videoGamers||0)) { showToast('Stock Video Gamers insuffisant !', false); return; }
+    const mAvant2 = p.stocks.maison||0, acAvant2 = p.stocks.artComplices||0, btvAvant2 = p.stocks.btvero||0, vgAvant2 = p.stocks.videoGamers||0;
     p.stocks.artComplices = acAvant2 - qtyAC;
     p.stocks.btvero       = btvAvant2 - qtyBTV;
+    p.stocks.videoGamers  = vgAvant2 - qtyVG;
     p.stocks.maison       = mAvant2 + total;
     if(qtyAC>0) logStockChange(p.id, p.name, 'artComplices', acAvant2, p.stocks.artComplices, 'Retour Arts Complices → Maison');
     if(qtyBTV>0) logStockChange(p.id, p.name, 'btvero', btvAvant2, p.stocks.btvero, 'Retour Btq Véro → Maison');
+    if(qtyVG>0) logStockChange(p.id, p.name, 'videoGamers', vgAvant2, p.stocks.videoGamers, 'Retour Video Gamers → Maison');
     logStockChange(p.id, p.name, 'maison', mAvant2, p.stocks.maison, 'Retour boutique → Maison');
     showToast(`${total} pièce(s) retirées → Maison ✅`, true);
   }
@@ -9156,6 +9182,7 @@ function buildProductsTableHTML() {
           <th style="text-align:center">🏪 Marché</th>
           <th style="text-align:center">🎨 Art.C</th>
           <th style="text-align:center">💛 Btq Véro</th>
+          <th style="text-align:center">🎮 Video Gamers</th>
           <th>Actions</th>
         </tr></thead>
         <tbody>
@@ -9194,6 +9221,13 @@ function buildProductsTableHTML() {
                 <button onclick="quickUpdateStock(${p.id},'btvero',Math.max(0,(${p.stocks.btvero||0})-1))" class="btn btn-secondary btn-sm" style="padding:1px 6px;font-size:13px;">−</button>
                 <span style="display:inline-block;min-width:28px;text-align:center;padding:2px 6px;border-radius:6px;font-weight:700;font-size:12px;background:${(p.stocks.btvero||0)===0?'rgba(255,68,68,.1)':(p.stocks.btvero||0)<3?'rgba(255,229,0,.1)':'rgba(68,204,136,.1)'};color:${(p.stocks.btvero||0)===0?'var(--danger)':(p.stocks.btvero||0)<3?'var(--accent)':'var(--success)'}">${p.stocks.btvero||0}</span>
                 <button onclick="quickUpdateStock(${p.id},'btvero',(${p.stocks.btvero||0})+1)" class="btn btn-secondary btn-sm" style="padding:1px 6px;font-size:13px;">+</button>
+              </div>
+            </td>
+            <td style="text-align:center;" onclick="event.stopPropagation()">
+              <div style="display:inline-flex;align-items:center;gap:3px;">
+                <button onclick="quickUpdateStock(${p.id},'videoGamers',Math.max(0,(${p.stocks.videoGamers||0})-1))" class="btn btn-secondary btn-sm" style="padding:1px 6px;font-size:13px;">−</button>
+                <span style="display:inline-block;min-width:28px;text-align:center;padding:2px 6px;border-radius:6px;font-weight:700;font-size:12px;background:${(p.stocks.videoGamers||0)===0?'rgba(255,68,68,.1)':(p.stocks.videoGamers||0)<3?'rgba(255,229,0,.1)':'rgba(68,204,136,.1)'};color:${(p.stocks.videoGamers||0)===0?'var(--danger)':(p.stocks.videoGamers||0)<3?'var(--accent)':'var(--success)'}">${p.stocks.videoGamers||0}</span>
+                <button onclick="quickUpdateStock(${p.id},'videoGamers',(${p.stocks.videoGamers||0})+1)" class="btn btn-secondary btn-sm" style="padding:1px 6px;font-size:13px;">+</button>
               </div>
             </td>
             <td style="display:flex;gap:4px;" onclick="event.stopPropagation()">
@@ -9522,7 +9556,7 @@ function duplicateProduct(id) {
   const copy = JSON.parse(JSON.stringify(original));
   copy.id = getNextProductId();
   copy.name = original.name + ' (copie)';
-  copy.stocks = { maison: 0, marche: 0, artComplices: 0, btvero: 0 };
+  copy.stocks = { maison: 0, marche: 0, artComplices: 0, btvero: 0, videoGamers: 0 };
   db.products.push(copy);
   saveData();
   showToast('Produit dupliqué ✅ modifie-le maintenant', true);
@@ -9881,7 +9915,7 @@ function doAddProduct() {
     emoji: document.getElementById('p-emoji').value || emojiForCat(catVal),
     price: +document.getElementById('p-price').value,
     filamentG: 0,
-    stocks: { maison: +document.getElementById('p-sm').value, marche: +document.getElementById('p-smr').value, artComplices: +(document.getElementById('p-sac')||{value:0}).value, btvero: +(document.getElementById('p-sbv')||{value:0}).value }
+    stocks: { maison: +document.getElementById('p-sm').value, marche: +document.getElementById('p-smr').value, artComplices: +(document.getElementById('p-sac')||{value:0}).value, btvero: +(document.getElementById('p-sbv')||{value:0}).value, videoGamers: 0 }
   };
   db.products.push(p);
   saveData(); closeModal(); showToast('Produit créé ✅', true);
@@ -10598,7 +10632,7 @@ function doGlobalSearch(q) {
 
   // Produits
   db.products.filter(p => p.name.toLowerCase().includes(ql) || (p.categorie||'').toLowerCase().includes(ql)).forEach(p => {
-    const total = (p.stocks.maison||0)+(p.stocks.marche||0)+(p.stocks.artComplices||0)+(p.stocks.btvero||0);
+    const total = (p.stocks.maison||0)+(p.stocks.marche||0)+(p.stocks.artComplices||0)+(p.stocks.btvero||0)+(p.stocks.videoGamers||0);
     results.push({
       type:'Produit', icon:p.emoji, title:p.name,
       sub:`${p.categorie} · ${p.price}€ · Stock total: ${total}`,
@@ -13869,30 +13903,280 @@ const BOUTIQUE_NAMES = {boutA: 'La Boutique de Véro', boutB: 'Arts Complices'};
 const BOUTIQUE_COLORS = {boutA: '#ff6a00', boutB: '#e63030'};
 
 // Boutiques archivées (fermées) : historique conservé et affiché, mais plus de nouvelle saisie.
-// Arts Complices est la seule boutique active ; db.boutiquesExtra permet d'en ajouter d'autres.
+// Arts Complices et Video Gamers sont actives ; db.boutiquesExtra permet d'en ajouter d'autres.
 const BOUTIQUES_ARCHIVEES = ['boutA', 'boutC'];
 const COULEURS_EXTRA = ['#1d9e75', '#378add', '#f5c400', '#ff69b4', '#6c3483'];
+const MOIS_RECAP_BRUT = 2026 * 12 + 8;   // le récap AUTO est envoyé au BRUT à partir de septembre 2026
+// Rubriques et taux de Video Gamers (feuille de dépôt)
+const VG_RUBRIQUES = [
+  {id: 'figurine', nom: 'Figurine crochet', pct: 30},
+  {id: 'xl',       nom: 'Figurine XL',      pct: 20},
+  {id: 'licorne',  nom: 'Dragon licorne',   pct: 30},
+  {id: 'articule', nom: 'Articulé',         pct: 20},
+  {id: 'lampe',    nom: 'Lampe',            pct: 20},
+  {id: 'portecle', nom: 'Porte-clés',       pct: 20}
+];
+
+function moneyB(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 function boutiquesExtra() { return (typeof db !== 'undefined' && db && Array.isArray(db.boutiquesExtra)) ? db.boutiquesExtra : []; }
 function boutiqueExtraNom(id) { const b = boutiquesExtra().find(x => x.id === id); return b ? b.nom : ''; }
-function boutiqueExtra_estSource(nom) { return boutiquesExtra().some(b => b.nom === nom); }
 function boutiqueExtraColor(id) { const b = boutiquesExtra().find(x => x.id === id); return b ? b.couleur : ''; }
+function boutiqueExtra_estSource(nom) { return boutiquesExtra().some(b => b.nom === nom); }
 function boutiqueNom(id) { return BOUTIQUE_NAMES[id] || boutiqueExtraNom(id) || (id === 'boutC' ? 'La Créatique' : id); }
-// Taux de commission automatique : Arts Complices 10 % pour tous les produits (Minimaux compris),
-// boutiques ajoutées = leur taux. null = boutique archivée, pas de calcul automatique.
-function boutiqueCommPct(id) {
-  const b = boutiquesExtra().find(x => x.id === id);
-  if(b) return Number(b.commPct) || 0;
-  return id === 'boutB' ? 10 : null;
+function ymCourant() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+function moisYM(annee, mois) { const i = MOIS_ORDER.indexOf(mois); return i < 0 ? '' : annee + '-' + String(i + 1).padStart(2, '0'); }
+function ymLabel(ym) { const p = String(ym).split('-'); return p[1] + '/' + p[0]; }
+
+// Réglages par boutique : loyers et taux de commission, chacun avec une date de départ (mois "AAAA-MM").
+// Un changement futur ne modifie jamais les mois passés (les lignes de vente gardent leur commission enregistrée).
+function boutiqueCfgDefaut(id) {
+  if(id === 'boutB') return {rubriques: [], loyers: [{depuis: '2025-08', montant: 25}], taux: [{depuis: '2000-01', defaut: 10, rubriques: {}}]};
+  const e = boutiquesExtra().find(x => x.id === id);
+  if(e) return {rubriques: Array.isArray(e.rubriques) ? e.rubriques : [], loyers: [], taux: [{depuis: '2000-01', defaut: Number(e.commPct) || 0, rubriques: {}}]};
+  return null;   // boutique archivée (Véro, La Créatique) : pas de réglage
 }
-function calcBoutiqueComm(id, brut) {
-  const pct = boutiqueCommPct(id);
+function boutiqueCfg(id) {
+  const c = (typeof db !== 'undefined' && db && db.boutiquesConfig) ? db.boutiquesConfig[id] : null;
+  return c || boutiqueCfgDefaut(id);
+}
+function boutiqueCfgStore(id) {
+  if(!db.boutiquesConfig) db.boutiquesConfig = {};
+  if(!db.boutiquesConfig[id]) { const d = boutiqueCfgDefaut(id); if(d) db.boutiquesConfig[id] = JSON.parse(JSON.stringify(d)); }
+  return db.boutiquesConfig[id] || null;
+}
+function boutiqueRubriques(id) { const c = boutiqueCfg(id); return (c && Array.isArray(c.rubriques)) ? c.rubriques : []; }
+function rubriqueNom(id, rub) { const r = boutiqueRubriques(id).find(x => x.id === rub); return r ? r.nom : ''; }
+// Entrée en vigueur pour un mois : la dernière dont la date de départ est <= mois. Avant la première : la première (taux) ou rien (loyer).
+function boutiqueEntree(liste, ym, premiereSiAvant) {
+  const l = [...(liste || [])].sort((a, b) => a.depuis.localeCompare(b.depuis));
+  let r = null;
+  l.forEach(e => { if(e.depuis <= ym) r = e; });
+  return r || (premiereSiAvant ? (l[0] || null) : null);
+}
+function boutiqueLoyer(id, ym) {
+  const c = boutiqueCfg(id); if(!c) return 0;
+  const e = boutiqueEntree(c.loyers, ym, false);
+  return e ? (Number(e.montant) || 0) : 0;
+}
+// Taux de commission (%) ; null = boutique archivée, pas de calcul automatique
+function boutiqueCommPct(id, ym, rub) {
+  const c = boutiqueCfg(id); if(!c) return null;
+  const t = boutiqueEntree(c.taux, ym || ymCourant(), true); if(!t) return null;
+  const r = (rub && t.rubriques && t.rubriques[rub] !== undefined && t.rubriques[rub] !== '') ? Number(t.rubriques[rub]) : Number(t.defaut);
+  return Number.isFinite(r) ? r : null;
+}
+function calcBoutiqueComm(id, brut, ym, rub) {
+  const pct = boutiqueCommPct(id, ym, rub);
   return pct === null ? null : Math.round(brut * pct) / 100;
+}
+function boutiqueIdLibre() {
+  const used = new Set(['boutA', 'boutB', 'boutC', ...boutiquesExtra().map(b => b.id)]);
+  const l = 'DEFGHIJKLMNOPQRSTUVWXYZ'.split('').find(x => !used.has('bout' + x));
+  return l ? 'bout' + l : null;
 }
 // Options de <select> : boutiques actives + (en édition) la boutique de la ligne si elle est archivée
 function boutiqueOptions(selected) {
   const list = [{id: 'boutB', nom: BOUTIQUE_NAMES.boutB}].concat(boutiquesExtra().map(b => ({id: b.id, nom: b.nom})));
   if(selected && !list.some(b => b.id === selected)) list.push({id: selected, nom: boutiqueNom(selected) + ' (archivée)'});
   return list.map(b => `<option value="${b.id}" ${b.id === selected ? 'selected' : ''}>${b.nom}</option>`).join('');
+}
+
+// ----- Récap Boutiques : Brut / Commission / Loyer / Reste réel (information seulement, hors livre de recettes et URSSAF)
+function htmlLoyerReste(year) {
+  const act = [{id: 'boutB', nom: BOUTIQUE_NAMES.boutB, couleur: '#e63030'}].concat(boutiquesExtra().map(b => ({id: b.id, nom: b.nom, couleur: b.couleur || '#888'})));
+  const now = ymCourant();
+  const eur = n => (Number(n) || 0).toFixed(2) + ' €';
+  const neg = n => (n > 0 ? '-' : '') + eur(n);
+  const blocs = act.map(b => {
+    // lignes sans année = 2026 (même hypothèse que la première synchronisation)
+    const rows = (db.boutiquesVentes || []).filter(v => v.boutique === b.id && (Number(v.annee) || 2026) === year);
+    const T = {brut: 0, comm: 0, loyer: 0, reste: 0};
+    const lignes = [];
+    MOIS_ORDER.forEach((m, i) => {
+      const ym = year + '-' + String(i + 1).padStart(2, '0');
+      const rm = rows.filter(v => v.mois === m);
+      const loyer = boutiqueLoyer(b.id, ym);
+      if(!rm.length && !(loyer > 0 && ym <= now)) return;
+      const brut = moneyB(rm.reduce((s, v) => s + (Number(v.prixVente) || 0) * (Number(v.qty) || 1), 0));
+      const comm = moneyB(rm.reduce((s, v) => s + (Number(v.comm) || 0), 0));
+      const reste = moneyB(brut - comm - loyer);
+      T.brut += brut; T.comm += comm; T.loyer += loyer; T.reste += reste;
+      lignes.push(`<tr><td style="font-weight:700;">${m.charAt(0) + m.slice(1).toLowerCase()}</td><td style="text-align:right;">${eur(brut)}</td><td style="text-align:right;color:var(--danger);">${neg(comm)}</td><td style="text-align:right;color:var(--danger);">${neg(loyer)}</td><td style="text-align:right;font-weight:800;color:${reste < 0 ? 'var(--danger)' : 'var(--accent2)'};">${eur(reste)}</td></tr>`);
+    });
+    if(!lignes.length) return '';
+    const cur = boutiqueLoyer(b.id, now);
+    return `<div style="margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap;">
+        <span style="width:10px;height:10px;border-radius:50%;background:${b.couleur};display:inline-block;"></span>
+        <strong>${b.nom}</strong>
+        <span style="font-size:12px;color:var(--muted);">Loyer actuel : ${eur(cur)} / mois</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Mois</th><th style="text-align:right;">Brut</th><th style="text-align:right;">Commission</th><th style="text-align:right;">Loyer</th><th style="text-align:right;">Reste réel</th></tr></thead>
+        <tbody>${lignes.join('')}
+          <tr style="border-top:2px solid var(--border);"><td style="font-weight:800;">Total ${year}</td><td style="text-align:right;font-weight:800;">${eur(T.brut)}</td><td style="text-align:right;font-weight:800;color:var(--danger);">${neg(T.comm)}</td><td style="text-align:right;font-weight:800;color:var(--danger);">${neg(T.loyer)}</td><td style="text-align:right;font-weight:900;color:${T.reste < 0 ? 'var(--danger)' : 'var(--accent2)'};">${eur(T.reste)}</td></tr>
+        </tbody>
+      </table></div>
+    </div>`;
+  }).join('');
+  if(!blocs) return '';
+  return `<div class="card" style="margin-bottom:16px;">
+    <div class="card-title">Loyer & reste réel — ${year}</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Reste réel = Brut − Commission − Loyer. Information seulement : le loyer n'entre ni dans le livre de recettes ni dans l'URSSAF.</div>
+    ${blocs}
+  </div>`;
+}
+
+// ----- Réglages boutiques : loyers et taux avec date de départ
+function openReglagesBoutiques() {
+  const bs = [{id: 'boutB', nom: BOUTIQUE_NAMES.boutB}].concat(boutiquesExtra().map(b => ({id: b.id, nom: b.nom, ville: b.ville})));
+  const eur = n => (Number(n) || 0).toFixed(2).replace('.', ',') + ' €';
+  const now = ymCourant();
+  const inp = 'style="padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;"';
+  const html = bs.map(b => {
+    const c = boutiqueCfgStore(b.id) || boutiqueCfgDefaut(b.id);
+    const loyers = [...(c.loyers || [])].sort((x, y) => x.depuis.localeCompare(y.depuis));
+    const taux = [...(c.taux || [])].sort((x, y) => x.depuis.localeCompare(y.depuis));
+    const rubs = c.rubriques || [];
+    const tAct = boutiqueEntree(c.taux, now, true) || {defaut: 0, rubriques: {}};
+    const lLoyers = loyers.length ? loyers.map(l => `<div style="display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 0;"><span style="flex:1;">depuis ${ymLabel(l.depuis)} : <strong>${eur(l.montant)}</strong> / mois${l.depuis <= now ? '' : ' <em>(à venir)</em>'}</span><button class="btn btn-secondary btn-sm" onclick="reglSuppr('loyers','${b.id}','${l.depuis}')" title="Supprimer">✕</button></div>`).join('') : '<div style="font-size:12px;color:var(--muted);">Aucun loyer enregistré</div>';
+    const lTaux = taux.map(t => `<div style="display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 0;"><span style="flex:1;">${t.depuis === '2000-01' ? 'depuis le début' : 'depuis ' + ymLabel(t.depuis)} : <strong>${t.defaut} %</strong>${rubs.length ? ' par défaut — ' + rubs.map(r => r.nom + ' ' + ((t.rubriques && t.rubriques[r.id] !== undefined && t.rubriques[r.id] !== '') ? t.rubriques[r.id] : t.defaut) + ' %').join(' · ') : ''}${t.depuis <= now ? '' : ' <em>(à venir)</em>'}</span><button class="btn btn-secondary btn-sm" onclick="reglSuppr('taux','${b.id}','${t.depuis}')" title="Supprimer">✕</button></div>`).join('');
+    const inRub = rubs.map(r => `<label style="font-size:11px;color:var(--muted);">${r.nom} (%)<br><input type="number" id="rt-r-${b.id}-${r.id}" min="0" max="100" step="0.5" value="${(tAct.rubriques && tAct.rubriques[r.id] !== undefined && tAct.rubriques[r.id] !== '') ? tAct.rubriques[r.id] : tAct.defaut}" style="width:70px;padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);"></label>`).join(' ');
+    return `<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:12px;">
+      <div style="font-weight:800;margin-bottom:8px;">${b.nom}${b.ville ? ' <span style="font-weight:400;color:var(--muted);font-size:12px;">— ' + b.ville + '</span>' : ''}</div>
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:4px;">Loyer mensuel</div>
+      ${lLoyers}
+      <div style="display:flex;gap:6px;align-items:end;flex-wrap:wrap;margin:6px 0 12px;">
+        <label style="font-size:11px;color:var(--muted);">À partir de<br><input type="month" id="rl-m-${b.id}" value="${now}" ${inp}></label>
+        <label style="font-size:11px;color:var(--muted);">Montant (€)<br><input type="number" id="rl-v-${b.id}" min="0" step="0.5" value="${boutiqueLoyer(b.id, now)}" style="width:90px;padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);"></label>
+        <button class="btn btn-primary btn-sm" onclick="reglAjoutLoyer('${b.id}')">Ajouter / modifier</button>
+      </div>
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:4px;">Commission</div>
+      ${lTaux}
+      <div style="display:flex;gap:6px;align-items:end;flex-wrap:wrap;margin-top:6px;">
+        <label style="font-size:11px;color:var(--muted);">À partir de<br><input type="month" id="rt-m-${b.id}" value="${now}" ${inp}></label>
+        <label style="font-size:11px;color:var(--muted);">${rubs.length ? 'Par défaut' : 'Taux'} (%)<br><input type="number" id="rt-d-${b.id}" min="0" max="100" step="0.5" value="${tAct.defaut}" style="width:70px;padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);"></label>
+        ${inRub}
+        <button class="btn btn-primary btn-sm" onclick="reglAjoutTaux('${b.id}')">Ajouter / modifier</button>
+      </div>
+    </div>`;
+  }).join('');
+  openModal(`<div class="modal-title">⚙️ Réglages boutiques</div>
+    <p style="font-size:12px;color:var(--muted);margin-top:0;">Chaque changement s'applique à partir du mois choisi : les mois passés gardent l'ancien montant. Le loyer est une information (Récap Boutiques), il n'entre ni dans le livre de recettes ni dans l'URSSAF.</p>
+    <div style="max-height:62vh;overflow-y:auto;">${html}</div>
+    <div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>`);
+}
+function reglFin() {
+  saveData();
+  if(typeof currentPage !== 'undefined' && currentPage === 'boutiques') render('boutiques');
+  openReglagesBoutiques();
+}
+function reglAjoutLoyer(id) {
+  const m = document.getElementById('rl-m-' + id).value, v = Number(document.getElementById('rl-v-' + id).value);
+  if(!/^\d{4}-\d{2}$/.test(m) || !Number.isFinite(v) || v < 0) { showToast('Vérifie le mois et le montant', false); return; }
+  const c = boutiqueCfgStore(id); if(!c) return;
+  c.loyers = (c.loyers || []).filter(e => e.depuis !== m);
+  c.loyers.push({depuis: m, montant: v});
+  c.loyers.sort((a, b) => a.depuis.localeCompare(b.depuis));
+  reglFin();
+}
+function reglAjoutTaux(id) {
+  const m = document.getElementById('rt-m-' + id).value, d = Number(document.getElementById('rt-d-' + id).value);
+  if(!/^\d{4}-\d{2}$/.test(m) || !Number.isFinite(d) || d < 0 || d > 100) { showToast('Vérifie le mois et le taux (0 à 100 %)', false); return; }
+  const c = boutiqueCfgStore(id); if(!c) return;
+  const rub = {};
+  for(const r of (c.rubriques || [])) {
+    const el = document.getElementById('rt-r-' + id + '-' + r.id); if(!el || el.value === '') continue;
+    const n = Number(el.value);
+    if(!Number.isFinite(n) || n < 0 || n > 100) { showToast('Taux invalide : ' + r.nom, false); return; }
+    rub[r.id] = n;
+  }
+  c.taux = (c.taux || []).filter(e => e.depuis !== m);
+  c.taux.push({depuis: m, defaut: d, rubriques: rub});
+  c.taux.sort((a, b) => a.depuis.localeCompare(b.depuis));
+  reglFin();
+}
+function reglSuppr(type, id, depuis) {
+  const c = boutiqueCfgStore(id); if(!c) return;
+  if(type === 'taux' && (c.taux || []).length <= 1) { showToast('Il faut garder au moins un taux', false); return; }
+  if(!confirm('Supprimer cette ligne ?')) return;
+  c[type] = (c[type] || []).filter(e => e.depuis !== depuis);
+  reglFin();
+}
+
+// ----- Transfert de stock Marché -> Video Gamers (une seule fois, sur validation)
+const TRANSFERT_VG = [{"id": 17, "nom": "HERBIZARRE", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "herbizard", "prix": 15}, {"id": 261, "nom": "BULBIZARRE", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "bulll bizard", "prix": 15}, {"id": 15, "nom": "FLORIZARRE", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "floriazrd", "prix": 18}, {"id": 30, "nom": "REPTINCEL", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "reptincel", "prix": 15}, {"id": 38, "nom": "TORTANK", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "tortank", "prix": 15}, {"id": 22, "nom": "LEROY", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "leroy", "prix": 15}, {"id": 33, "nom": "SALAMECHE", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "salamèche", "prix": 15}, {"id": 306, "nom": "RON", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "ron", "prix": 15}, {"id": 13, "nom": "ECTOPLASMA", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "ectoplasma", "prix": 15}, {"id": 11, "nom": "DERPY", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "derpy", "prix": 15}, {"id": 32, "nom": "RUMI", "cat": "Figurine", "qty": 2, "rub": "figurine", "feuille": "rumy", "prix": 15}, {"id": 268, "nom": "MIRA", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "mira", "prix": 15}, {"id": 40, "nom": "ZOEY", "cat": "Figurine", "qty": 2, "rub": "figurine", "feuille": "zoé", "prix": 15}, {"id": 36, "nom": "STITCH", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "stitch", "prix": 15}, {"id": 269, "nom": "ANGEL", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "angel", "prix": 15}, {"id": 270, "nom": "LILO", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "lilo", "prix": 15}, {"id": 16, "nom": "HARRY POTTER", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "harry potter", "prix": 15}, {"id": 35, "nom": "SASSUKE", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "sasuke", "prix": 15}, {"id": 14, "nom": "EVOLIE", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "évoli", "prix": 15}, {"id": 21, "nom": "KAKASHI", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "kakashi", "prix": 15}, {"id": 307, "nom": "NARUTO", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "naruto", "prix": 15}, {"id": 20, "nom": "ITACHI", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "itachi", "prix": 15}, {"id": 18, "nom": "HERMIONE", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "hermione", "prix": 15}, {"id": 265, "nom": "DOBBY", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "dobby", "prix": 15}, {"id": 39, "nom": "ZENITSU", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "zenitsu", "prix": 15}, {"id": 19, "nom": "INOSUKE", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "inosuke", "prix": 15}, {"id": 41, "nom": "ZORO", "cat": "Figurine", "qty": 2, "rub": "figurine", "feuille": "zoro", "prix": 15}, {"id": 271, "nom": "LUFFY", "cat": "Figurine", "qty": 2, "rub": "figurine", "feuille": "luffy petit", "prix": 15}, {"id": 34, "nom": "SANJI", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "sanji", "prix": 15}, {"id": 12, "nom": "DRACAUFEU", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "dracaufeu", "prix": 15}, {"id": 37, "nom": "TANJIRO", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "tanjiro", "prix": 15}, {"id": 9, "nom": "CARABAFFE", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "carabaffe", "prix": 15}, {"id": 10, "nom": "CARAPUCE", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "carapuce", "prix": 15}, {"id": 266, "nom": "SACHA", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "sacha", "prix": 15}, {"id": 29, "nom": "PIKACHU", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "pikachu", "prix": 15}, {"id": 28, "nom": "NEZUKO", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "nezuko", "prix": 15}, {"id": 26, "nom": "NAMI", "cat": "Figurine", "qty": 1, "rub": "figurine", "feuille": "nami", "prix": 15}, {"id": 308, "nom": "LUFFY XL", "cat": "Figurine", "qty": 1, "rub": "xl", "feuille": "luffy xl", "prix": 25}, {"id": 310, "nom": "LILO XL", "cat": "Figurine", "qty": 1, "rub": "xl", "feuille": "loilo xl", "prix": 25}, {"id": 315, "nom": "DRAGON LICORNE", "cat": "Flexible", "qty": 2, "rub": "licorne", "feuille": "dragon licorne", "prix": 15}, {"id": 322, "nom": "AXOLOTL VIOLET", "cat": "Flexible", "qty": 2, "rub": "articule", "feuille": "articulés (axolotl)", "prix": 8}, {"id": 323, "nom": "AXOLOTL ARC-EN-CIEL", "cat": "Flexible", "qty": 2, "rub": "articule", "feuille": "articulés (axolotl)", "prix": 8}, {"id": 324, "nom": "AXOLOTL HIPPIE", "cat": "Flexible", "qty": 2, "rub": "articule", "feuille": "articulés (axolotl)", "prix": 8}, {"id": 325, "nom": "AXOLOTL BLEU", "cat": "Flexible", "qty": 2, "rub": "articule", "feuille": "articulés (axolotl)", "prix": 8}, {"id": 326, "nom": "AXOLOTL PERROQUET", "cat": "Flexible", "qty": 2, "rub": "articule", "feuille": "articulés (axolotl)", "prix": 8}, {"id": 67, "nom": "DRAGON VENT", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulés (dragon)", "prix": 8}, {"id": 44, "nom": "DRAGON FEU", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulés (dragon)", "prix": 8}, {"id": 45, "nom": "DRAGON OCEAN", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulés (dragon)", "prix": 8}, {"id": 227, "nom": "DRAGON GLACE", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulés (dragon)", "prix": 8}, {"id": 228, "nom": "DRAGON FORET", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulés (dragon)", "prix": 8}, {"id": 150, "nom": "CROKMOU", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulés (crockmou)", "prix": 8}, {"id": 348, "nom": "DRAGON AILE BLEU", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulés (dragon ailé)", "prix": 8}, {"id": 349, "nom": "DRAGON AILE ROUGE", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulés (dragon ailé)", "prix": 8}, {"id": 350, "nom": "DRAGON AILE VERT", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulés (dragon ailé)", "prix": 8}, {"id": 157, "nom": "FURY", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulés (furie éclair)", "prix": 8}, {"id": 230, "nom": "DRAGON STITCH", "cat": "Flexible", "qty": 1, "rub": "articule", "feuille": "articulé stitch", "prix": 10}, {"id": 231, "nom": "DRAGON ANGEL", "cat": "Flexible", "qty": 2, "rub": "articule", "feuille": "articulé stitch", "prix": 10}, {"id": 313, "nom": "DRAGON 20€", "cat": "Flexible", "qty": 9, "rub": "articule", "feuille": "articulé long", "prix": 20}, {"id": 107, "nom": "HP + CHATEAU", "cat": "Lampes", "qty": 1, "rub": "lampe", "feuille": "lampe", "prix": 20, "src": "maison"}, {"id": 112, "nom": "ONE PIECE CRANE", "cat": "Lampes", "qty": 1, "rub": "lampe", "feuille": "lampe", "prix": 20}, {"id": 114, "nom": "PIKACHU CARRE", "cat": "Lampes", "qty": 1, "rub": "lampe", "feuille": "lampe", "prix": 20}, {"id": 412, "nom": "ANGEL", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "porte-clés flex", "prix": 6}, {"id": 191, "nom": "DERPY", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "porte-clés flex", "prix": 6}, {"id": 413, "nom": "GROOT", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "porte-clés flex", "prix": 6}, {"id": 414, "nom": "LUTIN", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "porte-clés flex", "prix": 6}, {"id": 206, "nom": "PIKACHU FLEX", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "porte-clés flex", "prix": 6}, {"id": 217, "nom": "STITCH FLEX", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "porte-clés flex", "prix": 6}, {"id": 394, "nom": "CLICKER SQUISHY BLEU", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "squishy / clicker", "prix": 6}, {"id": 393, "nom": "CLICKER SQUISHY JAUNE", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "squishy / clicker", "prix": 6}, {"id": 415, "nom": "CLICKER SQUISHY ROSE", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "squishy / clicker", "prix": 6}, {"id": 395, "nom": "CLICKER SQUISHY ROUGE", "cat": "Porte clefs", "qty": 2, "rub": "portecle", "feuille": "squishy / clicker", "prix": 6}, {"id": 391, "nom": "CLICKER SQUISHY VERT", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "squishy / clicker", "prix": 6}, {"id": 392, "nom": "CLICKER SQUISHY VIOLET", "cat": "Porte clefs", "qty": 3, "rub": "portecle", "feuille": "squishy / clicker", "prix": 6}];
+function transfertVGPlan() {
+  const done = (db.transfertVG && db.transfertVG.lignes) || {};
+  const norm = s => String(s || '').replace(/\s+/g, ' ').trim().toUpperCase();
+  return TRANSFERT_VG.map(l => {
+    const p = (db.products || []).find(x => x.id === l.id && norm(x.name) === norm(l.nom) && x.categorie === l.cat);
+    const deja = Number(done[l.id]) || 0;
+    const reste = Math.max(0, l.qty - deja);
+    const src = l.src || 'marche';
+    const dispo = p ? (Number(p.stocks && p.stocks[src]) || 0) : 0;
+    const n = p ? Math.min(reste, dispo) : 0;
+    const statut = !p ? 'introuvable' : reste === 0 ? 'fait' : n >= reste ? 'ok' : n > 0 ? 'partiel' : 'insuffisant';
+    return {l, p, src, deja, reste, dispo, n, statut};
+  });
+}
+function transfertVGExecute() {
+  if(!db.transfertVG) db.transfertVG = {lignes: {}, historique: []};
+  if(!db.transfertVG.lignes) db.transfertVG.lignes = {};
+  const plan = transfertVGPlan();
+  const rapport = {deplace: 0, manques: [], introuvables: []};
+  plan.forEach(x => {
+    if(x.statut === 'introuvable') { rapport.introuvables.push(x.l.nom); return; }
+    if(x.reste === 0) return;
+    if(x.n > 0) {
+      const p = x.p;
+      if(!p.stocks) p.stocks = {};
+      const avant = Number(p.stocks[x.src]) || 0;
+      p.stocks[x.src] = avant - x.n;
+      p.stocks.videoGamers = (Number(p.stocks.videoGamers) || 0) + x.n;
+      logStockChange(p.id, p.name, x.src, avant, p.stocks[x.src], 'Transfert → Video Gamers (' + x.n + ')');
+      db.transfertVG.lignes[x.l.id] = x.deja + x.n;
+      rapport.deplace += x.n;
+    }
+    if(x.n < x.reste) rapport.manques.push({nom: x.l.nom, voulu: x.reste, deplace: x.n, dispo: x.dispo, src: x.src});
+  });
+  db.transfertVG.historique.push({date: todayISO(), deplace: rapport.deplace, manques: rapport.manques.map(m => m.nom + ' (' + m.deplace + '/' + m.voulu + ')')});
+  return rapport;
+}
+function openTransfertVG() {
+  const plan = transfertVGPlan();
+  const ST = {ok: ['✅ OK', 'var(--success)'], partiel: ['⚠️ partiel', 'var(--accent)'], insuffisant: ['❌ stock marché insuffisant', 'var(--danger)'], fait: ['✔️ déjà transféré', 'var(--muted)'], introuvable: ['❌ introuvable', 'var(--danger)']};
+  const aMoveer = plan.reduce((s, x) => s + x.n, 0), total = plan.reduce((s, x) => s + x.l.qty, 0);
+  const prob = plan.filter(x => x.statut === 'partiel' || x.statut === 'insuffisant' || x.statut === 'introuvable');
+  const rows = plan.map(x => `<tr><td>${x.l.feuille}</td><td style="font-weight:700;">${x.l.nom} <span style="font-size:10px;color:var(--muted);">${x.l.cat}${x.src === 'maison' ? ' · depuis la MAISON' : ''}</span></td><td>${rubriqueNom(boutiqueExtraNom_id_VG(), x.l.rub) || x.l.rub}</td><td style="text-align:center;">${x.l.qty}</td><td style="text-align:center;">${x.dispo}</td><td style="text-align:center;font-weight:800;">${x.n}</td><td style="color:${ST[x.statut][1]};font-size:12px;">${ST[x.statut][0]}${x.statut === 'partiel' ? ' (' + x.n + '/' + x.reste + ')' : ''}</td></tr>`).join('');
+  openModal(`<div class="modal-title">📦 Transfert Marché → Video Gamers</div>
+    <p style="font-size:12px;color:var(--muted);margin-top:0;">${aMoveer} pièce(s) sur ${total} seront déplacées vers le stock Video Gamers (du stock Marché, sauf les lignes marquées « depuis la MAISON »). Une copie de sauvegarde est faite avant. Tout le reste du stock Marché ne bouge pas.</p>
+    ${prob.length ? `<div style="padding:8px 10px;border:1px solid var(--danger);border-radius:8px;font-size:12px;margin-bottom:8px;">⚠️ ${prob.map(x => x.l.nom + ' : ' + x.dispo + ' en stock ' + (x.src === 'maison' ? 'maison' : 'marché') + ' pour ' + x.reste + ' voulu(s)').join(' · ')}. Ces lignes seront signalées après le transfert ; vous pourrez corriger le stock puis relancer.</div>` : ''}
+    <div style="max-height:52vh;overflow:auto;"><table style="font-size:12px;width:100%;"><thead><tr><th>Feuille</th><th>Produit</th><th>Rubrique</th><th>Qté</th><th>Stock</th><th>Déplacé</th><th>Statut</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="validerTransfertVG()" ${aMoveer === 0 ? 'disabled' : ''}>✅ Valider le transfert (${aMoveer} pièces)</button></div>`);
+}
+function boutiqueExtraNom_id_VG() { const b = boutiquesExtra().find(x => String(x.nom).toLowerCase() === 'video gamers'); return b ? b.id : ''; }
+function validerTransfertVG() {
+  // 1. copie de sauvegarde avant toute modification
+  const cle = 'fath3d_backup_transfertVG_' + Date.now();
+  try {
+    localStorage.setItem(cle, JSON.stringify(db));
+    Object.keys(localStorage).filter(k => k.startsWith('fath3d_backup_transfertVG_')).sort().slice(0, -2).forEach(k => localStorage.removeItem(k));
+  } catch(e) {
+    showToast('Sauvegarde impossible : transfert annulé. Exporte d\'abord tes données (Sauvegarder maintenant).', false);
+    return;
+  }
+  // 2. transfert
+  const r = transfertVGExecute();
+  saveData();
+  closeModal();
+  const lignes = [];
+  lignes.push(`<p><strong>${r.deplace} pièce(s)</strong> transférée(s) vers Video Gamers.</p>`);
+  lignes.push(`<p style="font-size:12px;color:var(--muted);">Copie de sauvegarde créée dans ce navigateur avant le transfert.</p>`);
+  if(r.manques.length) lignes.push(`<div style="padding:8px 10px;border:1px solid var(--danger);border-radius:8px;font-size:13px;"><strong>Stock marché insuffisant :</strong><ul style="margin:6px 0 0 18px;">${r.manques.map(m => `<li>${m.nom} : ${m.deplace} transférée(s) sur ${m.voulu} (stock ${m.src === 'maison' ? 'maison' : 'marché'} : ${m.dispo})</li>`).join('')}</ul></div>`);
+  if(r.introuvables.length) lignes.push(`<div style="padding:8px 10px;border:1px solid var(--danger);border-radius:8px;font-size:13px;margin-top:8px;"><strong>Produit introuvable :</strong> ${r.introuvables.join(', ')}</div>`);
+  openModal(`<div class="modal-title">Transfert terminé</div>${lignes.join('')}<div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">OK</button></div>`);
+  if(typeof currentPage !== 'undefined') render(currentPage);
 }
 
 // Helper: prix net Boutique de Véro (boutique archivée) : -1 € par pièce
@@ -14290,7 +14574,7 @@ function renderBoutiques(el, actions) {
                     <span style="width:8px;height:8px;border-radius:50%;background:${v.boutique==='boutA'?'var(--accent)':'var(--accent3)'};display:inline-block;"></span>
                     <span style="font-size:12px;font-weight:600;">${boutiqueNom(v.boutique)}</span>
                   </span></td>
-                  <td style="font-weight:700;">${v.produit}</td>
+                  <td style="font-weight:700;">${v.produit}${rubriqueNom(v.boutique, v.categorie) ? `<div style="font-size:10px;font-weight:600;color:var(--muted);">${rubriqueNom(v.boutique, v.categorie)}</div>` : ''}</td>
                   <td style="text-align:center;font-weight:700;color:var(--accent);">${qty}</td>
                   <td style="text-align:right;">${v.prixVente.toFixed(2)} €</td>
                   <td style="text-align:right;color:var(--danger);">-${comm.toFixed(2)} €</td>
@@ -14311,54 +14595,92 @@ function renderBoutiques(el, actions) {
   `;
 }
 
-function openAddBoutiqueVente() {
-  const lastMois = window._lastBoutiqueMois || MOIS_ORDER[0];
-  openModal(`
-    <div class="modal-title">Nouvelle vente boutique</div>
+// Formulaires de saisie boutique (ajout 'bv' / édition 'bve') : même code, préfixe différent.
+function formYm(p) {
+  const mois = document.getElementById(p + '-mois')?.value;
+  const yEl = document.getElementById(p + '-year');
+  const annee = Number(yEl && yEl.value) || window.managerRecapYear || new Date().getFullYear();
+  return moisYM(annee, mois);
+}
+function commManuelle(p) { const c = document.getElementById(p + '-comm'); if(c) c.dataset.manuel = '1'; refreshBoutiqueForm(p); }
+function boutiqueFormChange(p) { const c = document.getElementById(p + '-comm'); if(c) c.dataset.manuel = ''; refreshBoutiqueForm(p); }
+function refreshBoutiqueForm(p) {
+  const boutique = document.getElementById(p + '-boutique')?.value;
+  const commInput = document.getElementById(p + '-comm');
+  if(!commInput) return;
+  const prix = +document.getElementById(p + '-prix')?.value || 0;
+  const qty = Math.max(1, parseInt(document.getElementById(p + '-qty')?.value) || 1);
+  const netDiv = document.getElementById(p + '-net-preview');
+  const ym = formYm(p);
+  // rubriques (Video Gamers) : le taux est proposé selon la rubrique, modifiable à la main
+  const wrap = document.getElementById(p + '-rub-wrap'), sel = document.getElementById(p + '-rubrique');
+  const rubs = boutiqueRubriques(boutique);
+  let rub = '';
+  if(wrap && sel) {
+    if(!rubs.length) { wrap.style.display = 'none'; sel.innerHTML = ''; }
+    else {
+      const cur = sel.value || sel.dataset.init || rubs[0].id;
+      sel.innerHTML = rubs.map(r => `<option value="${r.id}">${r.nom} — ${boutiqueCommPct(boutique, ym, r.id)} %</option>`).join('');
+      sel.value = rubs.some(r => r.id === cur) ? cur : rubs[0].id;
+      wrap.style.display = '';
+      rub = sel.value;
+    }
+  }
+  const brut = prix * qty;
+  if(commInput.dataset.manuel !== '1') {
+    let c = calcBoutiqueComm(boutique, brut, ym, rub);
+    if(c === null) c = +commInput.value || 0;   // boutique archivée : on ne recalcule pas l'historique
+    commInput.value = c.toFixed(2);
+  }
+  const comm = +commInput.value || 0;
+  if(netDiv) netDiv.innerHTML = `${qty} × ${prix.toFixed(2)}€ = ${brut.toFixed(2)}€ — Prix net : <strong style="color:var(--accent2);">${(brut - comm).toFixed(2)} €</strong>`;
+}
+function updateCommField() { refreshBoutiqueForm('bv'); }
+function updateCommFieldEdit() { refreshBoutiqueForm('bve'); }
+
+function boutiqueFormHtml(p, v) {
+  const lastMois = v ? v.mois : (window._lastBoutiqueMois || MOIS_ORDER[0]);
+  const bq = v ? v.boutique : 'boutB';
+  return `
     <div class="grid-2">
       <div class="form-group"><label class="form-label">Boutique</label>
-        <select class="form-select" id="bv-boutique" onchange="updateCommField()">
-          ${boutiqueOptions('boutB')}
+        <select class="form-select" id="${p}-boutique" onchange="boutiqueFormChange('${p}')">
+          ${boutiqueOptions(bq)}
         </select>
       </div>
       <div class="form-group"><label class="form-label">Mois</label>
-        <select class="form-select" id="bv-mois">
-          ${MOIS_ORDER.map(m=>`<option value="${m}" ${m===lastMois?'selected':''}>${m.charAt(0)+m.slice(1).toLowerCase()}</option>`).join('')}
+        <select class="form-select" id="${p}-mois" onchange="boutiqueFormChange('${p}')">
+          ${MOIS_ORDER.map(m => `<option value="${m}" ${m === lastMois ? 'selected' : ''}>${m.charAt(0) + m.slice(1).toLowerCase()}</option>`).join('')}
         </select>
       </div>
     </div>
-    <div class="form-group"><label class="form-label">Produit</label><input class="form-input" id="bv-produit" placeholder="Ex: DRAGON CHINOIS"></div>
-    <div class="grid-2">
-      <div class="form-group"><label class="form-label">Quantité</label><input type="number" class="form-input" id="bv-qty" value="1" min="1" step="1" oninput="updateCommField()"></div>
-      <div class="form-group"><label class="form-label">Prix de vente unitaire (€)</label><input type="number" class="form-input" id="bv-prix" value="0" min="0" step="0.50" oninput="updateCommField()"></div>
+    <div class="form-group"><label class="form-label">Produit</label><input class="form-input" id="${p}-produit" ${v ? `value="${v.produit || ''}"` : 'placeholder="Ex: DRAGON CHINOIS"'}></div>
+    <div class="form-group" id="${p}-rub-wrap" style="display:none;"><label class="form-label">Rubrique (détermine le taux de commission)</label>
+      <select class="form-select" id="${p}-rubrique" data-init="${v ? (v.categorie || '') : ''}" onchange="boutiqueFormChange('${p}')"></select>
     </div>
     <div class="grid-2">
-      <div class="form-group"><label class="form-label">Commission (€)</label><input type="number" class="form-input" id="bv-comm" value="0" min="0" step="0.01"></div>
+      <div class="form-group"><label class="form-label">Quantité</label><input type="number" class="form-input" id="${p}-qty" value="${v ? (v.qty || 1) : 1}" min="1" step="1" oninput="refreshBoutiqueForm('${p}')"></div>
+      <div class="form-group"><label class="form-label">Prix de vente unitaire (€)</label><input type="number" class="form-input" id="${p}-prix" value="${v ? (v.prixVente || 0) : 0}" min="0" step="0.50" oninput="refreshBoutiqueForm('${p}')"></div>
+    </div>
+    <div class="grid-2">
+      <div class="form-group"><label class="form-label">Commission (€)</label><input type="number" class="form-input" id="${p}-comm" value="${v ? (v.comm || 0) : 0}" min="0" step="0.01" oninput="commManuelle('${p}')"></div>
       <div class="form-group"><label class="form-label">&nbsp;</label>
-        <div style="font-size:12px;color:var(--muted);padding:9px 0;">Commission calculée selon la boutique (Arts Complices : 10 %, Minimaux compris)</div>
+        <div style="font-size:12px;color:var(--muted);padding:9px 0;">Calculée selon la boutique et le mois (Arts Complices : 10 % partout). Modifiable à la main pour les autres boutiques.</div>
       </div>
     </div>
-    <div id="bv-net-preview" style="padding:10px;background:var(--bg);border-radius:8px;font-size:13px;color:var(--muted);margin-bottom:4px;">Prix net : —</div>
+    <div id="${p}-net-preview" style="padding:10px;background:var(--bg);border-radius:8px;font-size:13px;color:var(--muted);margin-bottom:4px;">Prix net : ${v ? ((v.prixVente || 0) * (v.qty || 1) - (v.comm || 0)).toFixed(2) + ' €' : '—'}</div>`;
+}
+
+function openAddBoutiqueVente() {
+  openModal(`
+    <div class="modal-title">Nouvelle vente boutique</div>
+    ${boutiqueFormHtml('bv', null)}
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="doAddBoutiqueVente()">Ajouter</button>
     </div>
   `);
-  updateCommField();
-}
-
-function updateCommField() {
-  const boutique = document.getElementById('bv-boutique')?.value;
-  const prix = +document.getElementById('bv-prix')?.value || 0;
-  const qty = Math.max(1, parseInt(document.getElementById('bv-qty')?.value)||1);
-  const commInput = document.getElementById('bv-comm');
-  const netDiv = document.getElementById('bv-net-preview');
-  if(!commInput) return;
-  const brut = prix*qty;
-  let comm = calcBoutiqueComm(boutique, brut);   // même taux pour tous les produits (Minimaux compris)
-  if(comm === null) comm = +commInput.value || 0; // boutique archivée : on ne recalcule pas
-  commInput.value = comm.toFixed(2);
-  if(netDiv) netDiv.innerHTML = `${qty} × ${prix.toFixed(2)}€ = ${brut.toFixed(2)}€ — Prix net : <strong style="color:var(--accent2);">${(brut-comm).toFixed(2)} €</strong>`;
+  refreshBoutiqueForm('bv');
 }
 
 function doAddBoutiqueVente() {
@@ -14366,20 +14688,22 @@ function doAddBoutiqueVente() {
   if(!produit) { showToast('Produit requis !', false); return; }
   const boutiqueVal = document.getElementById('bv-boutique').value;
   const moisVal = document.getElementById('bv-mois').value;
-  const qty = Math.max(1, parseInt(document.getElementById('bv-qty').value)||1);
+  const qty = Math.max(1, parseInt(document.getElementById('bv-qty').value) || 1);
   const prixVal = +document.getElementById('bv-prix').value;
-  const categorie = '';
-  // Commission recalculée proprement (×quantité) : même taux pour tous les produits
-  let commVal = calcBoutiqueComm(boutiqueVal, prixVal*qty);
-  if(commVal === null) commVal = +document.getElementById('bv-comm').value || 0;
+  const rub = boutiqueRubriques(boutiqueVal).length ? (document.getElementById('bv-rubrique').value || '') : '';
+  const commInput = document.getElementById('bv-comm');
+  const manuel = commInput.dataset.manuel === '1';
+  // Taux proposé selon boutique / mois / rubrique ; saisie manuelle respectée sauf pour Arts Complices (10 % partout)
+  let commVal = calcBoutiqueComm(boutiqueVal, prixVal * qty, formYm('bv'), rub);
+  if(commVal === null || (manuel && boutiqueVal !== 'boutB')) commVal = +commInput.value || 0;
   window._lastBoutiqueMois = moisVal;   // mémorise le dernier mois choisi
   const v = {
-    annee:Number(document.getElementById("bv-year").value), recapEligible:true,
+    annee: Number(document.getElementById("bv-year").value), recapEligible: true,
     id: db.nextBoutiqueVenteId++,
     boutique: boutiqueVal,
     mois: moisVal,
     produit,
-    categorie,
+    categorie: rub,
     qty,
     prixVente: prixVal,
     comm: commVal,
@@ -14400,49 +14724,20 @@ function openEditBoutiqueVente(id) {
   if(!v) return;
   openModal(`
     <div class="modal-title">✏️ Modifier la vente</div>
-    <div class="grid-2">
-      <div class="form-group"><label class="form-label">Boutique</label>
-        <select class="form-select" id="bve-boutique" onchange="updateCommFieldEdit()">
-          ${boutiqueOptions(v.boutique)}
-        </select>
-      </div>
-      <div class="form-group"><label class="form-label">Mois</label>
-        <select class="form-select" id="bve-mois">
-          ${MOIS_ORDER.map(m=>`<option value="${m}" ${v.mois===m?'selected':''}>${m.charAt(0)+m.slice(1).toLowerCase()}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-    <div class="form-group"><label class="form-label">Produit</label><input class="form-input" id="bve-produit" value="${v.produit||''}"></div>
-    <div class="grid-2">
-      <div class="form-group"><label class="form-label">Quantité</label><input type="number" class="form-input" id="bve-qty" value="${v.qty||1}" min="1" step="1" oninput="updateCommFieldEdit()"></div>
-      <div class="form-group"><label class="form-label">Prix de vente unitaire (€)</label><input type="number" class="form-input" id="bve-prix" value="${v.prixVente||0}" min="0" step="0.50" oninput="updateCommFieldEdit()"></div>
-    </div>
-    <div class="grid-2">
-      <div class="form-group"><label class="form-label">Commission (€)</label><input type="number" class="form-input" id="bve-comm" value="${v.comm||0}" min="0" step="0.01"></div>
-      <div class="form-group"><label class="form-label">&nbsp;</label>
-        <div style="font-size:12px;color:var(--muted);padding:9px 0;">Commission calculée selon la boutique (Arts Complices : 10 %, Minimaux compris)</div>
-      </div>
-    </div>
-    <div id="bve-net-preview" style="padding:10px;background:var(--bg);border-radius:8px;font-size:13px;color:var(--muted);margin-bottom:4px;">Prix net : ${((v.prixVente||0)*(v.qty||1)-(v.comm||0)).toFixed(2)} €</div>
+    ${boutiqueFormHtml('bve', v)}
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="doEditBoutiqueVente(${id})">Enregistrer</button>
     </div>
   `);
-}
-
-function updateCommFieldEdit() {
-  const boutique = document.getElementById('bve-boutique')?.value;
-  const prix = +document.getElementById('bve-prix')?.value || 0;
-  const qty = Math.max(1, parseInt(document.getElementById('bve-qty')?.value)||1);
-  const commInput = document.getElementById('bve-comm');
-  const netDiv = document.getElementById('bve-net-preview');
-  if(!commInput) return;
-  const brut = prix*qty;
-  let comm = calcBoutiqueComm(boutique, brut);   // même taux pour tous les produits (Minimaux compris)
-  if(comm === null) comm = +commInput.value || 0; // boutique archivée : on ne recalcule pas l'historique
-  commInput.value = comm.toFixed(2);
-  if(netDiv) netDiv.innerHTML = `${qty} × ${prix.toFixed(2)}€ = ${brut.toFixed(2)}€ — Prix net : <strong style="color:var(--accent2);">${(brut-comm).toFixed(2)} €</strong>`;
+  // la liste des rubriques est affichée sans recalculer la commission enregistrée
+  const wrap = document.getElementById('bve-rub-wrap'), sel = document.getElementById('bve-rubrique');
+  const rubs = boutiqueRubriques(v.boutique);
+  if(wrap && sel && rubs.length) {
+    sel.innerHTML = rubs.map(r => `<option value="${r.id}">${r.nom} — ${boutiqueCommPct(v.boutique, moisYM(Number(v.annee) || 2026, v.mois), r.id)} %</option>`).join('');
+    sel.value = rubs.some(r => r.id === v.categorie) ? v.categorie : rubs[0].id;
+    wrap.style.display = '';
+  }
 }
 
 function doEditBoutiqueVente(id) {
@@ -14455,6 +14750,7 @@ function doEditBoutiqueVente(id) {
   v.qty = Math.max(1, parseInt(document.getElementById('bve-qty').value)||1);
   v.prixVente = +document.getElementById('bve-prix').value;
   v.comm = +document.getElementById('bve-comm').value;
+  if(boutiqueRubriques(v.boutique).length) v.categorie = document.getElementById('bve-rubrique').value || '';
   saveData(); closeModal(); showToast('Vente mise à jour ✅', true); render('boutiques');
 }
 
@@ -14620,7 +14916,7 @@ function exportRecettesPDF() {
 // ===================== HISTORIQUE STOCK =====================
 function logStockChange(productId, productName, field, before, after, reason) {
   if(!db.stockHistory) db.stockHistory = [];
-  const depotNames = {maison:'Maison', marche:'Marché', artComplices:'Arts Complices', btvero:'Btq de Véro'};
+  const depotNames = {maison:'Maison', marche:'Marché', artComplices:'Arts Complices', btvero:'Btq de Véro', videoGamers:'Video Gamers'};
   const prod = db.products.find(x=>x.id===productId);
   db.stockHistory.push({
     date: todayISO(),
@@ -19215,9 +19511,13 @@ body.solaire :is(input,select,textarea,button):focus-visible{outline:3px solid #
   function dateFor(g){const d=new Date(Number(g.annee),MOIS_ORDER.indexOf(g.mois)+1,3,12);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-03`;}
   function groupRows(g,undated=false){return (db.boutiquesVentes||[]).filter(v=>v.boutique===g.boutique&&v.mois===g.mois&&(Number(v.annee)===Number(g.annee)||(undated&&!v.annee)));}
   function netRows(rows){return money(rows.reduce((s,v)=>s+money(Number(v.prixVente||0)*Number(v.qty||1))-money(v.comm),0));}
+  function brutRows(rows){return money(rows.reduce((s,v)=>s+money(Number(v.prixVente||0)*Number(v.qty||1)),0));}
+  // Livre de recettes = BRUT (prix payé par le client, commission comprise) à partir de septembre 2026 ; avant : net, inchangé.
+  function recapBrut(g){return Number(g.annee)*12+MOIS_ORDER.indexOf(g.mois)>=MOIS_RECAP_BRUT;}
+  function recapMontant(g,rows){return recapBrut(g)?brutRows(rows):netRows(rows);}
   // Doublon possible = vente historique datée du mois où le récap serait posé (mois suivant), ou de même montant.
   // Une vente datée du mois des ventes lui-même est le récap du mois PRÉCÉDENT (ex. vente du 04/09 = récap d'août) : pas un doublon.
-  function conflicts(g,rows){const next=dateFor(g).slice(0,7);return (db.sales||[]).filter(s=>!s.autoBoutiqueRecap&&s.depot===g.boutique&&(String(s.date||'').slice(0,7)===next||(money(s.total)===netRows(rows)&&String(s.date||'').startsWith(String(g.annee)))));}
+  function conflicts(g,rows){const next=dateFor(g).slice(0,7);return (db.sales||[]).filter(s=>!s.autoBoutiqueRecap&&s.depot===g.boutique&&(String(s.date||'').slice(0,7)===next||(money(s.total)===recapMontant(g,rows)&&String(s.date||'').startsWith(String(g.annee)))));}
   // Migration unique (septembre 2026) : année sur les anciens détails, Minimaux à 10 %, ligne OCTOBRE redatée au 03/11.
   function migrateRecapV2(){
     if(db.migrRecapV2)return;
@@ -19230,8 +19530,31 @@ body.solaire :is(input,select,textarea,button):focus-visible{outline:3px solid #
     (db.sales||[]).forEach(s=>{if(s.autoBoutiqueRecap&&s.boutiqueRecapKey==='boutB|2026|OCTOBRE'&&s.date==='2026-10-03')s.date='2026-11-03';});
     db.migrRecapV2=true;
   }
+  // Migration unique V3 : Video Gamers, réglages loyers/taux, prix des 3 lampes du dépôt à 20 €.
+  function migrateBoutV3(){
+    if(db.migrBoutV3)return;
+    if(!db.boutiquesConfig)db.boutiquesConfig={};
+    boutiqueCfgStore('boutB');
+    let vg=boutiquesExtra().find(b=>String(b.nom).toLowerCase()==='video gamers');
+    if(!vg){
+      const id=boutiqueIdLibre();
+      if(id){
+        if(!Array.isArray(db.boutiquesExtra))db.boutiquesExtra=[];
+        vg={id,nom:'Video Gamers',ville:'Ambérieu-en-Bugey',commPct:20,couleur:'#378add'};
+        db.boutiquesExtra.push(vg);
+      }
+    }
+    if(vg&&!db.boutiquesConfig[vg.id]){
+      const rub={};VG_RUBRIQUES.forEach(r=>{rub[r.id]=r.pct;});
+      db.boutiquesConfig[vg.id]={rubriques:VG_RUBRIQUES.map(r=>({id:r.id,nom:r.nom})),loyers:[{depuis:'2026-11',montant:25}],taux:[{depuis:'2026-11',defaut:20,rubriques:rub}]};
+    }
+    const norm=s=>String(s||'').replace(/\s+/g,' ').trim().toUpperCase();
+    TRANSFERT_VG.filter(l=>l.rub==='lampe').forEach(l=>{const p=(db.products||[]).find(x=>x.id===l.id&&norm(x.name)===norm(l.nom)&&x.categorie===l.cat);if(p&&Number(p.price)!==20)p.price=20;});
+    db.migrBoutV3=true;
+  }
   window.managerSyncBoutiques=function(){
     migrateRecapV2();
+    migrateBoutV3();
     const groups=new Map();
     (db.boutiquesVentes||[]).filter(v=>v.recapEligible&&validGroup(v)).forEach(v=>groups.set(groupKey(v),v));
     (db.sales||[]).filter(s=>s.autoBoutiqueRecap).forEach(s=>groups.set(s.boutiqueRecapKey,{boutique:s.depot,annee:s.boutiqueRecapYear,mois:s.boutiqueRecapMonth}));
@@ -19239,43 +19562,46 @@ body.solaire :is(input,select,textarea,button):focus-visible{outline:3px solid #
       if((db.recapProtectedKeys||[]).includes(key))return;
       const rows=groupRows(g),lines=db.sales.filter(s=>s.autoBoutiqueRecap&&s.boutiqueRecapKey===key);
       if(lines.length>1)return;
-      if(lines.length===1){lines[0].total=netRows(rows);return;}
+      if(lines.length===1){lines[0].total=recapMontant(g,rows);return;}
       // An unresolved old detail or a plausible historic receipt blocks automatic creation.
       if(!rows.length||groupRows(g,true).some(v=>!v.annee||!v.recapEligible)||conflicts(g,rows).length)return;
       db.nextId.sale=Math.max(Number(db.nextId.sale)||1,...db.sales.map(s=>(Number(s.id)||0)+1));
-      db.sales.push({id:db.nextId.sale++,date:dateFor(g),productId:0,productName:`AUTO — Récap ${g.mois} ${g.annee}`,client:boutiqueNom(g.boutique),qty:1,total:netRows(rows),depot:g.boutique,payment:'VRT',autoBoutiqueRecap:true,boutiqueRecapKey:key,boutiqueRecapMonth:g.mois,boutiqueRecapYear:Number(g.annee)});
+      db.sales.push({id:db.nextId.sale++,date:dateFor(g),productId:0,productName:`AUTO — Récap ${g.mois} ${g.annee}`,client:boutiqueNom(g.boutique),qty:1,total:recapMontant(g,rows),depot:g.boutique,payment:'VRT',autoBoutiqueRecap:true,boutiqueRecapKey:key,boutiqueRecapMonth:g.mois,boutiqueRecapYear:Number(g.annee)});
     });
   };
   window.openNouvelleBoutique=function(){
-    openModal(`<div class="modal-title">Nouvelle boutique</div><p>Les boutiques archivées (Véro, La Créatique) restent consultables. Une nouvelle boutique apparaît dans les saisies, le récap AUTO et le livre de recettes.</p><div class="form-group"><label class="form-label" for="nb-nom">Nom</label><input class="form-input" id="nb-nom" maxlength="40"></div><div class="form-group"><label class="form-label" for="nb-pct">Commission (%)</label><input class="form-input" id="nb-pct" type="number" min="0" max="100" step="0.5" value="10"></div><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="confirmNouvelleBoutique()">Créer</button></div>`);
+    openModal(`<div class="modal-title">Nouvelle boutique</div><p>Les boutiques archivées (Véro, La Créatique) restent consultables. Une nouvelle boutique apparaît dans les saisies, le récap AUTO, le livre de recettes et le récap loyer. Les changements de taux ou de loyer se font ensuite dans « Réglages boutiques », avec une date de départ.</p><div class="form-group"><label class="form-label" for="nb-nom">Nom</label><input class="form-input" id="nb-nom" maxlength="40"></div><div class="form-group"><label class="form-label" for="nb-ville">Ville (optionnel)</label><input class="form-input" id="nb-ville" maxlength="40"></div><div class="grid-2"><div class="form-group"><label class="form-label" for="nb-pct">Commission (%)</label><input class="form-input" id="nb-pct" type="number" min="0" max="100" step="0.5" value="10"></div><div class="form-group"><label class="form-label" for="nb-loyer">Loyer mensuel (€)</label><input class="form-input" id="nb-loyer" type="number" min="0" step="0.5" value="0"></div></div><div class="form-group"><label class="form-label" for="nb-depuis">À partir de</label><input class="form-input" id="nb-depuis" type="month" value="${ymCourant()}"></div><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="confirmNouvelleBoutique()">Créer</button></div>`);
   };
   window.confirmNouvelleBoutique=function(){
-    const nom=document.getElementById('nb-nom').value.replace(/[<>&"'`]/g,' ').replace(/\s+/g,' ').trim(),pct=Number(document.getElementById('nb-pct').value);
-    const used=new Set(['boutA','boutB','boutC',...boutiquesExtra().map(b=>b.id)]);
+    const clean=s=>String(s||'').replace(/[<>&"'`]/g,' ').replace(/\s+/g,' ').trim();
+    const nom=clean(document.getElementById('nb-nom').value),ville=clean(document.getElementById('nb-ville').value);
+    const pct=Number(document.getElementById('nb-pct').value),loyer=Number(document.getElementById('nb-loyer').value),depuis=document.getElementById('nb-depuis').value;
     const names=['La Boutique de Véro','Arts Complices','La Créatique',...boutiquesExtra().map(b=>b.nom)].map(n=>n.toLowerCase());
-    const letter='DEFGHIJKLMNOPQRSTUVWXYZ'.split('').find(l=>!used.has('bout'+l));
-    if(!nom||!Number.isFinite(pct)||pct<0||pct>100){showToast('Vérifie le nom et la commission (0 à 100 %)',false);return;}
+    const id=boutiqueIdLibre();
+    if(!nom||!Number.isFinite(pct)||pct<0||pct>100||!Number.isFinite(loyer)||loyer<0||!/^\d{4}-\d{2}$/.test(depuis)){showToast('Vérifie le nom, la commission (0 à 100 %), le loyer et le mois',false);return;}
     if(names.includes(nom.toLowerCase())){showToast('Ce nom existe déjà',false);return;}
-    if(!letter){showToast('Nombre maximum de boutiques atteint',false);return;}
+    if(!id){showToast('Nombre maximum de boutiques atteint',false);return;}
     if(!Array.isArray(db.boutiquesExtra))db.boutiquesExtra=[];
-    db.boutiquesExtra.push({id:'bout'+letter,nom,commPct:pct,couleur:COULEURS_EXTRA[db.boutiquesExtra.length%COULEURS_EXTRA.length]});
+    db.boutiquesExtra.push({id,nom,ville,commPct:pct,couleur:COULEURS_EXTRA[db.boutiquesExtra.length%COULEURS_EXTRA.length]});
+    if(!db.boutiquesConfig)db.boutiquesConfig={};
+    db.boutiquesConfig[id]={rubriques:[],loyers:loyer>0?[{depuis,montant:loyer}]:[],taux:[{depuis:'2000-01',defaut:pct,rubriques:{}}]};
     saveData();closeModal();render('boutiques');showToast('Boutique ajoutée ✅',true);
   };
   function migrationGroup(){return {boutique:document.getElementById('sync-shop').value,mois:document.getElementById('sync-month').value,annee:Number(document.getElementById('sync-year').value)};}
   window.openBoutiqueFirstSync=function(){
     openModal(`<div class="modal-title">Première synchronisation des anciens récapitulatifs</div><p>Choisis l’année réelle des anciens détails sans année. Les ventes historiques existantes seront conservées exactement.</p><label class="form-label" for="sync-shop">Boutique</label><select class="form-select" id="sync-shop" onchange="previewBoutiqueSync()">${boutiqueOptions('boutB')}</select><label class="form-label" for="sync-month">Mois du récap</label><select class="form-select" id="sync-month" onchange="previewBoutiqueSync()">${MOIS_ORDER.map(m=>`<option ${m==='SEPTEMBRE'?'selected':''}>${m}</option>`).join('')}</select><label class="form-label" for="sync-year">Année du récap</label><input class="form-input" id="sync-year" type="number" min="2020" max="2100" value="2026" oninput="previewBoutiqueSync()"><div id="sync-preview"></div><p>Si ces ventes sont déjà enregistrées à une autre date, choisis « Déjà comptabilisé » pour empêcher une création automatique.</p><div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-secondary" onclick="protectBoutiqueHistory()">Déjà comptabilisé : préserver l’historique</button><button id="sync-create" class="btn btn-primary" onclick="confirmBoutiqueFirstSync()">Créer la ligne manquante</button></div>`);previewBoutiqueSync();
   };
-  window.previewBoutiqueSync=function(){const g=migrationGroup(),rows=groupRows(g,true),existing=validGroup(g)?conflicts(g,rows):[];document.getElementById('sync-preview').textContent=!validGroup(g)?'Année invalide':`${rows.length} détails — net ${netRows(rows).toFixed(2)} € — date proposée ${dateFor(g)}. `+(existing.length?`${existing.length} vente(s) historique(s) possible(s) : création bloquée. ${existing.map(s=>s.date+' : '+money(s.total).toFixed(2)+' €').join(' ; ')}`:'Aucune vente correspondante détectée.');document.getElementById('sync-create').disabled=!validGroup(g)||!rows.length||existing.length>0||(db.recapProtectedKeys||[]).includes(groupKey(g));};
+  window.previewBoutiqueSync=function(){const g=migrationGroup(),rows=groupRows(g,true),existing=validGroup(g)?conflicts(g,rows):[];document.getElementById('sync-preview').textContent=!validGroup(g)?'Année invalide':`${rows.length} détails — ${recapBrut(g)?'brut':'net'} ${recapMontant(g,rows).toFixed(2)} € — date proposée ${dateFor(g)}. `+(existing.length?`${existing.length} vente(s) historique(s) possible(s) : création bloquée. ${existing.map(s=>s.date+' : '+money(s.total).toFixed(2)+' €').join(' ; ')}`:'Aucune vente correspondante détectée.');document.getElementById('sync-create').disabled=!validGroup(g)||!rows.length||existing.length>0||(db.recapProtectedKeys||[]).includes(groupKey(g));};
   window.protectBoutiqueHistory=function(){const g=migrationGroup();if(!validGroup(g))return;if(!db.recapProtectedKeys)db.recapProtectedKeys=[];if(!db.recapProtectedKeys.includes(groupKey(g)))db.recapProtectedKeys.push(groupKey(g));saveData();closeModal();render('boutiques');showToast('Historique préservé : aucune ligne ajoutée ni modifiée',true);};
-  window.confirmBoutiqueFirstSync=function(){const g=migrationGroup(),rows=groupRows(g,true);if(!validGroup(g)||!rows.length||conflicts(g,rows).length||(db.recapProtectedKeys||[]).includes(groupKey(g)))return;if(!confirm(`Confirmer que ${g.mois} ${g.annee} n’est pas déjà comptabilisé ? Une ligne de ${netRows(rows).toFixed(2)} € sera créée le ${dateFor(g)}.`))return;rows.forEach(v=>{v.annee=g.annee;v.recapEligible=true;});saveData();closeModal();render('boutiques');showToast('Récapitulatif synchronisé',true);};
-  const baseRenderBoutiques=renderBoutiques;window.renderBoutiques=function(el,actions){baseRenderBoutiques(el,actions);actions.insertAdjacentHTML('beforeend',' <button class="btn btn-secondary btn-sm" onclick="openBoutiqueFirstSync()">Première synchronisation</button> <button class="btn btn-secondary btn-sm" onclick="openNouvelleBoutique()">+ Nouvelle boutique</button>');const year=document.createElement('input');year.type='number';year.min=2020;year.max=2100;year.className='form-input';year.style.width='110px';year.value=window.managerRecapYear||new Date().getFullYear();year.setAttribute('aria-label','Année du récap');year.onchange=()=>{if(year.checkValidity()){window.managerRecapYear=Number(year.value);render('boutiques');}};actions.appendChild(year);const p=document.createElement('p');p.textContent='Les nouveaux détails créent une ligne AUTO au net. Les anciens détails nécessitent la première synchronisation. Une vente historique possible bloque la création pour éviter un doublon.';el.prepend(p);};
-  function addYear(prefix,year){const div=document.createElement('div');div.className='form-group';div.innerHTML=`<label class="form-label" for="${prefix}-year">Année du récap</label><input class="form-input" id="${prefix}-year" type="number" min="2020" max="2100" value="${year||''}" required>`;document.querySelector('#modal-content .modal-actions').before(div);}
+  window.confirmBoutiqueFirstSync=function(){const g=migrationGroup(),rows=groupRows(g,true);if(!validGroup(g)||!rows.length||conflicts(g,rows).length||(db.recapProtectedKeys||[]).includes(groupKey(g)))return;if(!confirm(`Confirmer que ${g.mois} ${g.annee} n’est pas déjà comptabilisé ? Une ligne de ${recapMontant(g,rows).toFixed(2)} € (${recapBrut(g)?'brut':'net'}) sera créée le ${dateFor(g)}.`))return;rows.forEach(v=>{v.annee=g.annee;v.recapEligible=true;});saveData();closeModal();render('boutiques');showToast('Récapitulatif synchronisé',true);};
+  const baseRenderBoutiques=renderBoutiques;window.renderBoutiques=function(el,actions){baseRenderBoutiques(el,actions);{const fc=el.querySelector('.card');const h=htmlLoyerReste(Number(window.managerRecapYear)||new Date().getFullYear());if(fc)fc.insertAdjacentHTML('beforebegin',h);else el.insertAdjacentHTML('beforeend',h);}actions.insertAdjacentHTML('beforeend',' <button class="btn btn-secondary btn-sm" onclick="openBoutiqueFirstSync()">Première synchronisation</button> <button class="btn btn-secondary btn-sm" onclick="openNouvelleBoutique()">+ Nouvelle boutique</button> <button class="btn btn-secondary btn-sm" onclick="openReglagesBoutiques()">⚙️ Réglages boutiques</button> <button class="btn btn-secondary btn-sm" onclick="openTransfertVG()">📦 Transfert Marché → Video Gamers</button>');const year=document.createElement('input');year.type='number';year.min=2020;year.max=2100;year.className='form-input';year.style.width='110px';year.value=window.managerRecapYear||new Date().getFullYear();year.setAttribute('aria-label','Année du récap');year.onchange=()=>{if(year.checkValidity()){window.managerRecapYear=Number(year.value);render('boutiques');}};actions.appendChild(year);const p=document.createElement('p');p.textContent='Les nouveaux détails créent une ligne AUTO au brut (prix payé par le client, commission comprise). Les anciens détails nécessitent la première synchronisation. Une vente historique possible bloque la création pour éviter un doublon.';el.prepend(p);};
+  function addYear(prefix,year){const div=document.createElement('div');div.className='form-group';div.innerHTML=`<label class="form-label" for="${prefix}-year">Année du récap</label><input class="form-input" id="${prefix}-year" type="number" min="2020" max="2100" value="${year||''}" oninput="boutiqueFormChange('${prefix}')" required>`;document.querySelector('#modal-content .modal-actions').before(div);}
   const baseOpenAdd=openAddBoutiqueVente;window.openAddBoutiqueVente=function(){baseOpenAdd();addYear('bv',window.managerRecapYear||new Date().getFullYear());};
   const baseOpenEdit=openEditBoutiqueVente;window.openEditBoutiqueVente=function(id){baseOpenEdit(id);addYear('bve',(db.boutiquesVentes||[]).find(v=>v.id===id)?.annee);};
   function validDetail(prefix){const year=Number(document.getElementById(prefix+'-year').value),qty=Number(document.getElementById(prefix+'-qty').value),price=Number(document.getElementById(prefix+'-prix').value),comm=Number(document.getElementById(prefix+'-comm').value);if(!Number.isInteger(year)||year<2020||year>2100||!Number.isInteger(qty)||qty<1||![price,comm].every(n=>Number.isFinite(n)&&n>=0)||comm>price*qty){showToast('Vérifie année, quantité, prix et commission',false);return false;}return true;}
   const baseAdd=doAddBoutiqueVente;window.doAddBoutiqueVente=function(){if(validDetail('bv'))baseAdd();};
   const baseEdit=doEditBoutiqueVente;window.doEditBoutiqueVente=function(id){if(validDetail('bve'))baseEdit(id);};
-  const baseSaleEdit=openEditSale;window.openEditSale=function(id){baseSaleEdit(id);const s=db.sales.find(s=>s.id===id);if(s?.autoBoutiqueRecap){document.getElementById('s-total').readOnly=true;document.getElementById('s-depot').disabled=true;const note=document.createElement('p');note.textContent='Ligne AUTO : montant net calculé depuis le récap. La date reste modifiable.';document.getElementById('modal-content').prepend(note);}};
+  const baseSaleEdit=openEditSale;window.openEditSale=function(id){baseSaleEdit(id);const s=db.sales.find(s=>s.id===id);if(s?.autoBoutiqueRecap){document.getElementById('s-total').readOnly=true;document.getElementById('s-depot').disabled=true;const note=document.createElement('p');note.textContent='Ligne AUTO : montant calculé depuis le récap (brut depuis septembre 2026). La date reste modifiable.';document.getElementById('modal-content').prepend(note);}};
   const baseDeleteSale=deleteSale;window.deleteSale=function(id){const sale=db.sales.find(s=>s.id===id);if(!sale?.autoBoutiqueRecap)return baseDeleteSale(id);if(!confirm('Supprimer cette ligne AUTO et arrêter sa synchronisation ?'))return;(db.recapProtectedKeys||= []).push(sale.boutiqueRecapKey);db.sales=db.sales.filter(s=>s.id!==id);saveData();render('sales');};
 
   function exterior(){ try{return {...{size:'grand',contrast:'renforce',background:'anthracite'},...JSON.parse(localStorage.getItem(TEST_SETTINGS)||'{}')};}catch(e){return {size:'grand',contrast:'renforce',background:'anthracite'};} }
@@ -19284,8 +19610,8 @@ body.solaire :is(input,select,textarea,button):focus-visible{outline:3px solid #
   window.saveExteriorSettings=function(){localStorage.setItem(TEST_SETTINGS,JSON.stringify({size:document.getElementById('outside-size').value,contrast:document.getElementById('outside-contrast').value,background:document.getElementById('outside-background').value}));applyExterior();closeModal();showToast('Réglages extérieur mémorisés ✅',true);};
   function exteriorButton(){document.querySelectorAll('.solaire-btn').forEach(btn=>{let b=btn.nextElementSibling;if(!b?.classList.contains('outside-settings-btn')){b=document.createElement('button');b.className='btn btn-secondary outside-settings-btn';b.textContent='Réglages extérieur';b.onclick=openExteriorSettings;btn.insertAdjacentElement('afterend',b);}const on=document.body.classList.contains('solaire');btn.textContent=on?'Mode normal':'Mode extérieur';btn.setAttribute('aria-pressed',String(on));});}
   const baseToggle=toggleSolaire; window.toggleSolaire=function(){baseToggle();applyExterior();exteriorButton();};
-  const baseRender=render; window.render=function(page){if(db&&!db.migrRecapV2){try{managerSyncBoutiques();saveData();}catch(e){console.warn('[migration récap]',e);}}baseRender(page);exteriorButton();};
-  const ready=()=>{applyExterior();exteriorButton();};
+  const baseRender=render; window.render=function(page){if(db&&(!db.migrRecapV2||!db.migrBoutV3)){try{managerSyncBoutiques();saveData();}catch(e){console.warn('[migration récap]',e);}}baseRender(page);exteriorButton();};
+  const ready=()=>{applyExterior();exteriorButton();if(db&&(!db.migrRecapV2||!db.migrBoutV3)){try{managerSyncBoutiques();saveData();render(currentPage);}catch(e){console.warn('[migration récap]',e);}}};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready);else ready();
 })();
 
@@ -19715,7 +20041,7 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     if(actionId==='stock.adjust'){
       const productIdType=typeof input.productId;
       if((productIdType!=='string'&&productIdType!=='number')||String(input.productId).trim()===''||Array.isArray(input.productId))throw new Error('PRODUCT_AMBIGUOUS');
-      if(!['maison','marche','artComplices','btvero'].includes(input.location))throw new Error('LOCATION_AMBIGUOUS');
+      if(!['maison','marche','artComplices','btvero','videoGamers'].includes(input.location))throw new Error('LOCATION_AMBIGUOUS');
       if(!Number.isInteger(Number(input.newQuantity))||Number(input.newQuantity)<0)throw new Error('NEGATIVE_STOCK');
       const products=Array.isArray(currentData&&currentData.products)?currentData.products:[];
       const matches=products.filter(p=>String(p&&p.id)===String(input.productId));
@@ -19792,7 +20118,7 @@ Les écritures réelles restent volontairement désactivées jusqu'aux étapes a
     const productId=proposal.parameters&&proposal.parameters.productId,location=proposal.parameters&&proposal.parameters.location;
     const products=Array.isArray(currentData&&currentData.products)?currentData.products:[];
     const product=products.find(item=>String(item&&item.id)===String(productId));
-    if(!product||!['maison','marche','artComplices','btvero'].includes(location))throw new Error('SCOPED_TARGET_INVALID');
+    if(!product||!['maison','marche','artComplices','btvero','videoGamers'].includes(location))throw new Error('SCOPED_TARGET_INVALID');
     return {ok:true,neutralized:true,realDataChanged:false,actionId,proposalId:proposal.proposalId,productId,location,beforeValue:Number(product.stocks&&product.stocks[location]),afterValue:Number(candidateData.products.find(item=>String(item&&item.id)===String(productId)).stocks[location]),firebaseWritePerformed:false};
   }
   async function executeConfirmedAsync(proposalId,currentData){
@@ -20040,7 +20366,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
   const VERSION='5.1.0-step5a';
   const ALLOWED_ACTIONS=Object.freeze(['consult.catalog','consult.stocks','consult.stock_needs','consult.filaments']);
   const MAX_FACTS=12;
-  const LOCATION_LABELS=Object.freeze({maison:'Maison',marche:'Marché',artComplices:'Arts Complices',btvero:'Boutique de Véro'});
+  const LOCATION_LABELS=Object.freeze({maison:'Maison',marche:'Marché',artComplices:'Arts Complices',btvero:'Boutique de Véro',videoGamers:'Video Gamers'});
   const STOP_WORDS=new Set('a ai au aux avec ce ces combien dans de des du elle en est et il je j le la les leur ma mes mon ne nos on ou pour que quel quelle quels quelles qu reste se si son sont sous sur ta tes ton tu un une vos votre y jai j ai catalogue catalog produit produits stock stocks piece pieces article articles coute cout prix categorie categories emplacement emplacements filament filaments bobine bobines marque matiere couleur poids gramme grammes maison marche art arts complices boutique vero btvero chez moi total tout tous ensemble global montre montres affiche afficher voir cherche recherche trouve'.split(' '));
 
   function clone(value){ return value===undefined?undefined:JSON.parse(JSON.stringify(value)); }
@@ -20188,7 +20514,7 @@ Aucun chemin dynamique, aucune écriture et aucune persistance de conversation.
   function extractLocation(message,available){
     const q=normalize(message);
     if(/\b(total|tout|tous|ensemble|global)\b/.test(q)) return 'total';
-    const aliases={maison:['maison','chez moi'],marche:['marche'],artComplices:['arts complices','art complices'],btvero:['boutique de vero','chez vero','btvero']};
+    const aliases={maison:['maison','chez moi'],marche:['marche'],artComplices:['arts complices','art complices'],btvero:['boutique de vero','chez vero','btvero'],videoGamers:['video gamers','video gamer','videogamers']};
     for(const key of available){
       const candidates=[key,locationLabel(key),...(aliases[key]||[])].map(normalize);
       if(candidates.some(value=>value&&q.includes(value))) return key;
@@ -20541,7 +20867,7 @@ validées; les règles persistantes et leurs écritures attendent le bloc 9A-3.
     if(scope==='maison_marche')return ['maison','marche'];
     if(scope==='maison')return ['maison'];
     if(scope==='marche')return ['marche'];
-    if(Array.isArray(scope)&&scope.length&&scope.every(item=>['maison','marche','artComplices','btvero'].includes(item)))return [...new Set(scope)];
+    if(Array.isArray(scope)&&scope.length&&scope.every(item=>['maison','marche','artComplices','btvero','videoGamers'].includes(item)))return [...new Set(scope)];
     return null;
   }
   function calculateProduct(product,rule){
@@ -21299,7 +21625,7 @@ L'interface intégrée ne reçoit jamais l'adaptateur Firebase capable d'écrire
       alertSection.append(element('p',decisionStorageText,'r9-status','r9-decision-storage'));
       const decisionGroups={undecided:[],reprint:[],deferred:[],stopped:[]};
       let alertCount=0,unconfiguredCount=0,unknownCount=0,excludedCount=0;
-      const scopeLabel=scope=>scope==='maison_marche'?'Maison + Marché':scope==='maison'?'Maison':scope==='marche'?'Marché':Array.isArray(scope)?scope.map(key=>({maison:'Maison',marche:'Marché',artComplices:'Arts Complices',btvero:'Boutique de Véro'}[key]||key)).join(' + '):'portée non définie';
+      const scopeLabel=scope=>scope==='maison_marche'?'Maison + Marché':scope==='maison'?'Maison':scope==='marche'?'Marché':Array.isArray(scope)?scope.map(key=>({maison:'Maison',marche:'Marché',artComplices:'Arts Complices',btvero:'Boutique de Véro',videoGamers:'Video Gamers'}[key]||key)).join(' + '):'portée non définie';
       const todayLocal=()=>{const date=new Date();return date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');};
       const byId=new Map();products.forEach(product=>{const id=String(product&&product.id);if(!byId.has(id))byId.set(id,[]);byId.get(id).push(product);});
       products.forEach(product=>{
@@ -22317,7 +22643,7 @@ métier lue automatiquement et aucune fonction d'exécution ne sont présentes.
     if(!match){match=q.match(/^(retire|retirer|enleve|enlever)\s+(\d+)\b/);if(match){mode='remove';amount=Number(match[2]);}}
     if(!match){match=q.match(/^(mets|met|mettre|passe|passer|fixe|fixer)\b[\s\S]*?\b(?:a|à)\s*(\d+)\s*(?:au?\s+stock[\s\S]*)?$/);if(match){mode='set';target=Number(match[2]);}}
     if(!mode) return null;
-    const location=q.includes('maison')?'maison':(q.includes('marche')?'marche':(q.includes('arts complices')?'artComplices':(q.includes('vero')||q.includes('bt vero')?'btvero':null)));
+    const location=q.includes('maison')?'maison':(q.includes('marche')?'marche':(q.includes('arts complices')?'artComplices':(q.includes('video gamer')?'videoGamers':(q.includes('vero')||q.includes('bt vero')?'btvero':null))));
     if(!location) return {kind:'clarification',answer:'Pour quel emplacement veux-tu modifier le stock : Maison, Marché, Arts Complices ou Véro ?'};
     const products=Array.isArray(currentData&&currentData.products)?currentData.products:[];
     // Le résolveur est privé dans le courtier de consultation : on passe par
