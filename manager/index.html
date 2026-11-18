@@ -128,29 +128,46 @@ if ('serviceWorker' in navigator) {
   let isSyncingFromCloud = false;
   let lastSaveHash = '';
 
-  // Save to Firebase
-  window.saveToFirebase = async function(data) {
-    if(!DOC_REF) return;
-    try {
-      const payload = JSON.stringify(data);
-      if(payload === lastSaveHash) return;
-      lastSaveHash = payload;
-      await setDoc(DOC_REF, { payload: payload, updated: new Date().toISOString() });
-    } catch(e) {
-      console.warn('Firebase save error:', e);
-    }
-  };
+  // (ancien saveToFirebase / loadFromFirebase supprimés : la synchro passe maintenant par FSync = fusion, jamais d'écrasement)
+  window.saveToFirebase = async function() {};
 
-  // Load from Firebase
-  window.loadFromFirebase = async function() {
-    if(!DOC_REF) return null;
-    try {
-      const snap = await getDoc(DOC_REF);
-      if(snap.exists()) return JSON.parse(snap.data().payload);
-    } catch(e) {
-      console.warn('Firebase load error:', e);
-    }
-    return null;
+  // Écriture "fusion" : lecture + fusion + écriture en une seule opération (transaction).
+  // La fusion elle-même est faite par l'application (FSync) : ici on ne fait que lire/écrire.
+  function withTimeout(p, ms) {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('TIMEOUT')), ms);
+      p.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+    });
+  }
+  window.cloudMergeWrite = async function(mergeFn, timeoutMs) {
+    if(!DOC_REF) throw new Error('NO_DOC');
+    const run = runTransaction(db_firebase, async (tx) => {
+      const snap = await tx.get(DOC_REF);
+      let raw = null, cloud = null;
+      if(snap.exists()) { raw = snap.data().payload; cloud = JSON.parse(raw); }
+      const out = mergeFn(cloud);
+      let payload = raw;
+      if(out.write) {
+        payload = JSON.stringify(out.merged);
+        tx.set(DOC_REF, { payload: payload, updated: new Date().toISOString(), v: 2 });
+      }
+      return { merged: out.merged, write: !!out.write, payload: payload };
+    });
+    return await withTimeout(run, timeoutMs || 25000);
+  };
+  let _unsubDoc = null;
+  window.cloudUnsubscribe = function() { if(_unsubDoc) { try { _unsubDoc(); } catch(e) {} _unsubDoc = null; } };
+  // UN SEUL écouteur temps réel (l'ancien se désabonne avant d'en créer un nouveau)
+  window.cloudSubscribe = function(cb) {
+    window.cloudUnsubscribe();
+    if(!DOC_REF) return;
+    _unsubDoc = onSnapshot(DOC_REF, (snap) => {
+      try {
+        const meta = { fromCache: snap.metadata.fromCache, pending: snap.metadata.hasPendingWrites };
+        if(!snap.exists()) { cb(null, meta); return; }
+        cb(snap.data().payload, meta);
+      } catch(e) { console.warn('listener', e); }
+    }, (err) => { console.warn('Firebase listener error:', err); });
   };
 
   // Pont strict pour l'exécution future de stock.adjust. Le mode neutralisé
@@ -209,20 +226,7 @@ if ('serviceWorker' in navigator) {
     return {ok:true,neutralized:false,actionId:'stock.adjust',proposalId:proposal.proposalId||null,productId,location,beforeValue:result.beforeValue,afterValue:result.afterValue,firebaseWritePerformed:true};
   };
 
-  // Real-time listener
-  window.startFirebaseSync = function(onUpdate) {
-    if(!DOC_REF) return;
-    onSnapshot(DOC_REF, (snap) => {
-      if(snap.exists() && !isSyncingFromCloud) {
-        isSyncingFromCloud = true;
-        try {
-          const data = JSON.parse(snap.data().payload);
-          onUpdate(data);
-        } catch(e) {}
-        setTimeout(() => { isSyncingFromCloud = false; }, 1000);
-      }
-    });
-  };
+  window.startFirebaseSync = function() {};
 
   // Sign in with Google
   window.signInGoogle = async function() {
@@ -901,31 +905,31 @@ if ('serviceWorker' in navigator) {
         <div style="font-size:12px;opacity:.8;margin-top:4px;">Cotisations sociales 2026</div>
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,.2);">
           <div style="font-size:12px;opacity:.8;">CA total 2026</div>
-          <div style="font-size:22px;font-weight:800;">4291 €</div>
-          <div style="font-size:12px;opacity:.8;margin-top:4px;">Cotisations dues : <strong>528 €</strong></div>
+          <div style="font-size:22px;font-weight:800;">4355 €</div>
+          <div style="font-size:12px;opacity:.8;margin-top:4px;">Cotisations dues : <strong>536 €</strong></div>
         </div>
       </div>
       <div class="card">
         <div class="card-title">Simulation cotisations</div>
         <div style="margin-bottom:12px;">
           <label class="form-label">CA à déclarer (€)</label>
-          <input type="number" class="form-input" id="urssaf-ca" value="4291.02" oninput="updateURSSAF()" min="0" step="1">
+          <input type="number" class="form-input" id="urssaf-ca" value="4355.12" oninput="updateURSSAF()" min="0" step="1">
         </div>
         <div id="urssaf-result">
     <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
-      <span style="color:var(--muted);">CA saisi</span><strong>4291 €</strong>
+      <span style="color:var(--muted);">CA saisi</span><strong>4355 €</strong>
     </div>
     <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="color:var(--muted);">Taux cotisations</span><strong>12.3%</strong>
     </div>
     <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
-      <span style="color:var(--muted);">Cotisations (12.3%)</span><strong>528 €</strong>
+      <span style="color:var(--muted);">Cotisations (12.3%)</span><strong>536 €</strong>
     </div>
     <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="color:var(--muted);">CFP (0.3%)</span><strong>13 €</strong>
     </div>
     <div style="display:flex;justify-content:space-between;padding:12px 0;background:rgba(255,107,53,.08);border-radius:8px;padding-left:8px;padding-right:8px;margin-top:8px;">
-      <span style="font-weight:700;">Total à payer</span><strong style="color:var(--accent);font-size:18px;">541 €</strong>
+      <span style="font-weight:700;">Total à payer</span><strong style="color:var(--accent);font-size:18px;">549 €</strong>
     </div>
   </div>
       </div>
@@ -1003,21 +1007,21 @@ if ('serviceWorker' in navigator) {
                   <td style="text-align:right;font-size:11px;color:var(--muted);">15/10/26</td>
                 </tr><tr style="">
                   <td style="font-weight:700;color:var(--text);">Octobre</td>
-                  <td style="text-align:right;font-weight:700;color:var(--accent2);">415 €</td>
-                  <td style="text-align:right;font-weight:700;color:var(--accent);">51 €</td>
+                  <td style="text-align:right;font-weight:700;color:var(--accent2);">347 €</td>
+                  <td style="text-align:right;font-weight:700;color:var(--accent);">43 €</td>
                   <td style="text-align:right;font-weight:600;color:var(--muted);">1 €</td>
-                  <td style="text-align:right;font-weight:800;color:var(--text);">52 €</td>
+                  <td style="text-align:right;font-weight:800;color:var(--text);">44 €</td>
                   <td style="text-align:right;font-size:11px;color:var(--muted);">15/11/26</td>
                 </tr><tr style="background:rgba(255,229,0,.05)">
                   <td style="font-weight:700;color:var(--text);">Novembre</td>
-                  <td style="text-align:right;font-weight:700;color:var(--accent2);">43 €</td>
-                  <td style="text-align:right;font-weight:700;color:var(--accent);">5 €</td>
-                  <td style="text-align:right;font-weight:600;color:var(--muted);">0 €</td>
-                  <td style="text-align:right;font-weight:800;color:var(--text);">5 €</td>
+                  <td style="text-align:right;font-weight:700;color:var(--accent2);">174 €</td>
+                  <td style="text-align:right;font-weight:700;color:var(--accent);">21 €</td>
+                  <td style="text-align:right;font-weight:600;color:var(--muted);">1 €</td>
+                  <td style="text-align:right;font-weight:800;color:var(--text);">22 €</td>
                   <td style="text-align:right;font-size:11px;color:var(--muted);">15/12/26</td>
                 </tr><tr style="">
                   <td style="font-weight:700;color:var(--text);">Décembre</td>
-                  <td style="text-align:right;font-weight:700;color:var(--accent2);">9 €</td>
+                  <td style="text-align:right;font-weight:700;color:var(--accent2);">10 €</td>
                   <td style="text-align:right;font-weight:700;color:var(--accent);">1 €</td>
                   <td style="text-align:right;font-weight:600;color:var(--muted);">0 €</td>
                   <td style="text-align:right;font-weight:800;color:var(--text);">1 €</td>
@@ -1025,10 +1029,10 @@ if ('serviceWorker' in navigator) {
                 </tr>
               <tr style="background:rgba(0,212,170,.08);border-top:2px solid var(--accent2);">
                 <td style="font-weight:800;">Total</td>
-                <td style="text-align:right;font-weight:800;color:var(--accent2);">4291 €</td>
-                <td style="text-align:right;font-weight:800;color:var(--accent);">528 €</td>
+                <td style="text-align:right;font-weight:800;color:var(--accent2);">4355 €</td>
+                <td style="text-align:right;font-weight:800;color:var(--accent);">536 €</td>
                 <td style="text-align:right;font-weight:800;color:var(--muted);">3 €</td>
-                <td style="text-align:right;font-weight:800;color:var(--text);">531 €</td>
+                <td style="text-align:right;font-weight:800;color:var(--text);">539 €</td>
                 <td></td>
               </tr>
             </tbody>
@@ -1051,7 +1055,7 @@ if ('serviceWorker' in navigator) {
         <div class="grid-3" style="gap:10px;">
           <div style="padding:14px;background:var(--bg);border-radius:8px;text-align:center;border-left:3px solid var(--accent);">
             <div style="font-size:11px;color:var(--muted);">CA estimé fin d'année</div>
-            <div style="font-size:22px;font-weight:800;color:var(--accent);">9 310€</div>
+            <div style="font-size:22px;font-weight:800;color:var(--accent);">9 325€</div>
             <div style="font-size:10px;color:var(--muted);">Toutes sources confondues</div>
           </div>
           <div style="padding:14px;background:var(--bg);border-radius:8px;text-align:center;border-left:3px solid var(--warn);">
@@ -1061,7 +1065,7 @@ if ('serviceWorker' in navigator) {
           </div>
           <div style="padding:14px;background:var(--bg);border-radius:8px;text-align:center;border-left:3px solid #9b59b6;">
             <div style="font-size:11px;color:var(--muted);">URSSAF estimée</div>
-            <div style="font-size:22px;font-weight:800;color:#9b59b6;">1 145€</div>
+            <div style="font-size:22px;font-weight:800;color:#9b59b6;">1 147€</div>
             <div style="font-size:10px;color:var(--muted);">12.3% du CA · payé mensuel</div>
           </div>
         </div>
@@ -1076,10 +1080,10 @@ if ('serviceWorker' in navigator) {
 
 <!-- MODALS -->
 <div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
-  <div class="modal" id="modal-content"></div>
+  <div class="modal" id="modal-content"><div class="modal-title">Transfert terminé</div><p><strong>115 pièce(s)</strong> transférée(s) vers Video Gamers.</p><p style="font-size:12px;color:var(--muted);">Copie de sauvegarde créée dans ce navigateur avant le transfert.</p><div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">OK</button></div></div>
 </div>
 
-<div class="toast" id="toast">✅ Données exportées : FATH3D_2026-11-16_21-30.json</div>
+<div class="toast" id="toast">✅ Données exportées : FATH3D_2026-11-18_11-17.json</div>
 
 
 
@@ -1424,18 +1428,15 @@ let pendingSaves = 0;
 
 function saveData() {
   if(window.managerSyncBoutiques)managerSyncBoutiques();
-  localStorage.setItem(DB_KEY, JSON.stringify(db));
-  // 🛡️ Sécurité : ne pas pousser vers Firebase tant qu'on n'a pas chargé ses données
-  // Sinon on risque d'écraser les modifs faites depuis un autre appareil
-  if(!firebaseDataLoaded) {
-    console.warn('[SAVE] Firebase pas encore chargé, sauvegarde locale seulement');
-    pendingSaves++;
-    return;
+  // Étiquette les fiches modifiées (identité + date), puis enregistre ici ; l'envoi au cloud est une FUSION (FSync)
+  if(window.FSync) FSync.beforeSave();
+  try {
+    localStorage.setItem(DB_KEY, JSON.stringify(db));
+  } catch(e) {
+    console.warn('[SAVE] stockage local impossible', e);
+    try { showToast('⚠️ Stockage local plein : fais un export de tes données', false); } catch(_) {}
   }
-  // Sync to Firebase if available
-  if(window.saveToFirebase) {
-    window.saveToFirebase(db);
-  }
+  if(window.FSync) FSync.afterSave();
 }
 
 let db = loadData();
@@ -2583,7 +2584,7 @@ function addQuickSale(categorie, prix) {
 }
 
 function openDetailQuickSale(ticketId) {
-  const ticket = (db.caisseHistory||[]).find(t => t.id === ticketId);
+  const ticket = ticketByRef(ticketId);
   if(!ticket) return;
   const qsItems = ticket.items.filter(i => i._isQuickSale && !i._quickSaleDetailed);
   if(qsItems.length === 0) { showToast('Aucun article rapide à détailler', false); return; }
@@ -2657,7 +2658,7 @@ function validerQuickSaleDetail() {
   const total = Object.values(window._qsSelection).reduce((s,v) => s+v, 0);
   if(total !== window._qsDetailQty) return;
 
-  const ticket = (db.caisseHistory||[]).find(t => t.id === window._qsDetailTicketId);
+  const ticket = ticketByRef(window._qsDetailTicketId);
   if(!ticket) return;
 
   const item = ticket.items.find(i => i._quickSaleKey === window._qsDetailItemKey && !i._quickSaleDetailed);
@@ -2694,6 +2695,7 @@ function validerQuickSaleDetail() {
 const _DETAIL_BORNE = '2026-06-14';
 // Un ticket "à détailler" = vente rapide OU pack OU minimau unité non encore détaillé
 function _ticketADetailler(h) {
+  if(h.detailClasse) return false;
   if((h.date||'') < _DETAIL_BORNE) return false;
   return (h.items||[]).some(i =>
     (i._isQuickSale && !i._quickSaleDetailed) ||
@@ -2702,6 +2704,7 @@ function _ticketADetailler(h) {
   );
 }
 function _ticketMinimauxADetailler(h) {
+  if(h.detailClasse) return false;
   if((h.date||'') < _DETAIL_BORNE) return false;
   return (h.items||[]).some(i =>
     (i._isPack && !i._packDetailed) ||
@@ -2710,7 +2713,7 @@ function _ticketMinimauxADetailler(h) {
 }
 
 function openDetaillerMinimaux(ticketId) {
-  const ticket = (db.caisseHistory||[]).find(t => t.id === ticketId);
+  const ticket = ticketByRef(ticketId);
   if(!ticket) return;
   // Combien de minimaux à attribuer ? (pack = 3 chacun, unité = sa quantité)
   let need = 0;
@@ -2783,7 +2786,7 @@ function minDetailAdj(productId, delta) {
 function validerDetailMinimaux() {
   const total = Object.values(window._minSelection||{}).reduce((s,v) => s+v, 0);
   if(total !== window._minDetailNeed) return;
-  const ticket = (db.caisseHistory||[]).find(t => t.id === window._minDetailTicketId);
+  const ticket = ticketByRef(window._minDetailTicketId);
   if(!ticket) return;
 
   // Décrémenter le stock des minimaux choisis (priorité Marché puis Maison)
@@ -4886,6 +4889,14 @@ function cloturerMarche() {
   }
   setTimeout(() => renderRetraitsListCloture(), 50);
 
+  // Les tickets du jour sont calculés ici (avant : variables inexistantes -> le bouton plantait)
+  const tickets = (db.caisseHistory||[]).filter(h => h.date === today);
+  const r2 = n => Math.round((Number(n)||0)*100)/100;
+  const totalJour = r2(tickets.reduce((s,h) => s + (Number(h.total)||0), 0));
+  const totalESP = r2(tickets.filter(h => h.payment === 'ESP').reduce((s,h) => s + (Number(h.total)||0), 0));
+  const totalCB = r2(tickets.filter(h => h.payment === 'CB').reduce((s,h) => s + (Number(h.total)||0), 0));
+  const totalAutres = r2(totalJour - totalESP - totalCB);
+
   if(tickets.length===0) { showToast("Aucune vente aujourd'hui !", false); return; }
 
   openModal(`
@@ -4906,6 +4917,7 @@ function cloturerMarche() {
         <div style="font-size:18px;font-weight:800;color:#6496ff;">${totalCB.toFixed(2)}€</div>
       </div>
     </div>
+    <div style="text-align:center;font-size:13px;color:var(--muted);margin:-10px 0 16px;">🧾 <strong style="color:var(--text);">${tickets.length} ticket${tickets.length>1?'s':''}</strong>${Math.abs(totalAutres) > 0.004 ? ' · autres paiements : <strong style="color:var(--text);">'+totalAutres.toFixed(2)+'€</strong>' : ''}</div>
 
     <div style="margin-bottom:16px;">
       <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px;">TRANSFERT VERS VENTES MARCHÉ</div>
@@ -4983,7 +4995,8 @@ function doCloturerMarche(total, date) {
 
   openModal(`
     <div class="modal-title">🎉 Bilan du marché</div>
-    <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">${marche} · ${formatDateMarche(date)}</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:6px;">${marche} · ${formatDateMarche(date)}</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">🧾 ${tickets.length} ticket${tickets.length>1?'s':''}</div>
     <div class="grid-3" style="margin-bottom:16px;">
       <div style="padding:12px;background:var(--bg);border-radius:8px;text-align:center;border-left:3px solid var(--accent);">
         <div style="font-size:11px;color:var(--muted);">CA Total</div>
@@ -5434,9 +5447,9 @@ function rushUndo(){
   const today = vocalToday();
   const rush = (db.caisseHistory||[]).filter(t=>t.rush && t.date===today);
   if(!rush.length){ showToast('Aucune vente Rush à annuler', false); return; }
-  const last = rush.reduce((a,b)=> (Number(b.id)>Number(a.id)?b:a));
+  const last = rush[rush.length-1];
   if(!confirm(`Annuler la dernière vente Rush de ${(last.total||0).toFixed(2)}€ ?`)) return;
-  db.caisseHistory = db.caisseHistory.filter(t=>t.id!==last.id);
+  db.caisseHistory = db.caisseHistory.filter(t=>t!==last);
   saveData();
   showToast(`Vente annulée (-${(last.total||0).toFixed(2)}€)`, true);
   renderModeRush();
@@ -6153,6 +6166,7 @@ function openReservations() {
         </div>`;
       }).join('')
     }
+    ${(() => { const L = (db.reservations||[]).filter(r => r.livre).slice(-5).reverse(); return L.length ? '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin:14px 0 6px;">Dernières livrées</div>' + L.map(r => '<div style="font-size:12px;padding:6px 8px;background:var(--bg);border-radius:6px;margin-bottom:4px;">✅ <strong>' + r.nom + '</strong> · ' + fmtEur(r.total) + ' · livrée le ' + (r.dateLivraisonReelle || '') + (r.noteLivraison ? '<div style="font-size:11px;color:var(--muted);">' + r.noteLivraison + '</div>' : '') + '</div>').join('') : ''; })()}
     <div style="font-size:11px;color:var(--muted);margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;">
       💡 Stock Maison bloqué jusqu'à la livraison. CA et déduction stock comptabilisés à la livraison.
     </div>
@@ -6364,7 +6378,7 @@ function doLivrerReservation(id) {
   r.modeSolde = mode;
   // Le stock Maison était déjà bloqué (retiré) à la création → rien à déduire de plus, c'est déjà fait
   // Encaisser le solde (ou total si pas d'acompte)
-  const montant = solde > 0 ? solde : 0;
+  const montant = r.payeeParAcompte ? 0 : (solde > 0 ? solde : 0);   // déjà payée par un acompte : aucun argent en plus
   if(montant > 0) {
     if(!db.caisseHistory) db.caisseHistory = [];
     if(!db.nextId.caisseHistory) db.nextId.caisseHistory = ((db.caisseHistory||[]).reduce((m,t)=>Math.max(m, Number(t.id)||0), 0))+1;
@@ -6786,7 +6800,7 @@ function removeRetraitJour(idx) {
 }
 
 function openDetaillerPack(ticketId) {
-  const ticket = (db.caisseHistory||[]).find(t => t.id === ticketId);
+  const ticket = ticketByRef(ticketId);
   if(!ticket) return;
   const packItem = ticket.items.find(i => i._isPack && !i._packDetailed);
   if(!packItem) return;
@@ -6829,7 +6843,7 @@ function openDetaillerPack(ticketId) {
 
     <div style="display:flex;gap:8px;">
       <button class="btn btn-secondary" onclick="closeModal()" style="flex:1;">Annuler</button>
-      <button id="pack-valider" class="btn" onclick="validerPackDetail(${ticketId})" style="flex:1;background:#9b59b6;color:#fff;opacity:0.5;" disabled>Valider</button>
+      <button id="pack-valider" class="btn" onclick="validerPackDetail('${ticketId}')" style="flex:1;background:#9b59b6;color:#fff;opacity:0.5;" disabled>Valider</button>
     </div>
   `);
 }
@@ -6878,7 +6892,7 @@ function togglePackMinimau(productId) {
 
 function validerPackDetail(ticketId) {
   if(window._packSelection.length !== 3) return;
-  const ticket = (db.caisseHistory||[]).find(t => t.id === ticketId);
+  const ticket = ticketByRef(ticketId);
   if(!ticket) return;
   const packItem = ticket.items.find(i => i._isPack && !i._packDetailed);
   if(!packItem) return;
@@ -7202,6 +7216,7 @@ function openCaisseHistory() {
   const today = todayISO();
   const totalJour = history.filter(h=>h.date===today).reduce((s,h)=>s+h.total,0);
   const nbADetailler = history.filter(_ticketADetailler).length;
+  const nbClasses = history.filter(h => h.detailClasse).length;
   openModal(`
     <div class="modal-title">📋 Historique Caisse Marché</div>
     ${nbADetailler > 0
@@ -7209,7 +7224,7 @@ function openCaisseHistory() {
           <span style="color:#c89bff;font-size:13px;font-weight:800;">⚠ ${nbADetailler} ticket${nbADetailler>1?'s':''} à détailler</span>
           <span style="color:var(--muted);font-size:11px;">stock à finaliser</span>
         </div>`
-      : `<div style="padding:8px 12px;background:rgba(68,204,136,.12);border:1px solid rgba(68,204,136,.4);border-radius:8px;margin-bottom:12px;color:var(--success);font-size:12px;font-weight:800;">✅ Tout est détaillé — stock à jour</div>`}
+      : `<div style="padding:8px 12px;background:rgba(68,204,136,.12);border:1px solid rgba(68,204,136,.4);border-radius:8px;margin-bottom:12px;color:var(--success);font-size:12px;font-weight:800;">✅ ${nbClasses > 0 ? 'Rien à détailler — ' + nbClasses + ' ticket' + (nbClasses>1?'s':'') + ' classé' + (nbClasses>1?'s':'') + ' sans détail (stock non modifié)' : 'Tout est détaillé — stock à jour'}</div>`}
     <div style="padding:10px;background:var(--bg);border-radius:8px;margin-bottom:12px;display:flex;justify-content:space-between;">
       <span style="color:var(--muted);font-size:13px;">CA aujourd'hui</span>
       <strong style="color:var(--accent);font-size:16px;">${totalJour.toFixed(2)}€</strong>
@@ -7220,26 +7235,26 @@ function openCaisseHistory() {
           <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
             <span style="font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);">${h.date} ${h.time}</span>
             <div style="display:flex;align-items:center;gap:8px;">
-              ${_ticketADetailler(h) ? `<span style="font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;background:rgba(155,89,182,.2);color:#c89bff;">⚠ À DÉTAILLER</span>` : ''}
+              ${_ticketADetailler(h) ? `<span style="font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;background:rgba(155,89,182,.2);color:#c89bff;">⚠ À DÉTAILLER</span>` : (h.detailClasse ? `<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;background:rgba(150,150,150,.15);color:var(--muted);">classé</span>` : '')}
               <span class="badge ${h.payment==='ESP'?'badge-green':'badge-orange'}">${h.payment}</span>
-              <span onclick="toggleTicketPayment(${h.id})" style="cursor:pointer;font-size:14px;color:#5af;" title="Basculer Espèces ⇄ Carte">⇄</span>
+              <span onclick="toggleTicketPayment('${tkRef(h)}')" style="cursor:pointer;font-size:14px;color:#5af;" title="Basculer Espèces ⇄ Carte">⇄</span>
               <strong style="color:var(--accent);">${h.total.toFixed(2)}€</strong>
-              <span onclick="deleteTicketCaisse(${h.id})" style="color:var(--danger);cursor:pointer;font-size:14px;" title="Supprimer le ticket entier">🗑️</span>
+              <span onclick="deleteTicketCaisse('${tkRef(h)}')" style="color:var(--danger);cursor:pointer;font-size:14px;" title="Supprimer le ticket entier">🗑️</span>
             </div>
           </div>
           <div style="background:var(--bg);border-radius:6px;overflow:hidden;">
             ${(h.items||[]).map((it, idx)=>`
               <div style="display:flex;align-items:center;padding:6px 9px;${idx < h.items.length-1?'border-bottom:1px solid var(--border);':''}">
                 <span style="flex:1;font-size:12px;">${it.qty}× ${it.name} <span style="color:var(--muted);font-size:11px;">· ${(it.price||0).toFixed(2)}€</span></span>
-                <span onclick="editTicketLine(${h.id},${idx})" style="color:#5af;cursor:pointer;margin-right:10px;font-size:13px;" title="Modifier">✏️</span>
-                <span onclick="deleteTicketLine(${h.id},${idx})" style="color:var(--danger);cursor:pointer;font-size:13px;" title="Supprimer cette ligne">🗑️</span>
+                <span onclick="editTicketLine('${tkRef(h)}',${idx})" style="color:#5af;cursor:pointer;margin-right:10px;font-size:13px;" title="Modifier">✏️</span>
+                <span onclick="deleteTicketLine('${tkRef(h)}',${idx})" style="color:var(--danger);cursor:pointer;font-size:13px;" title="Supprimer cette ligne">🗑️</span>
               </div>
             `).join('')}
           </div>
           ${h.promosDiscount > 0 ? `<div style="font-size:11px;color:var(--success);font-weight:700;margin-top:4px;">🎁 ${(h.promosApplied||[]).map(p => p.name).join(', ')} → -${h.promosDiscount.toFixed(2)}€ (brut ${(h.totalBrut||h.total).toFixed(2)}€)</div>` : ''}
           ${(h.corrections||[]).map(c=>`<div style="font-size:11px;color:#5af;margin-top:4px;padding:5px 8px;background:rgba(90,170,255,.1);border-left:3px solid #5af;border-radius:4px;">✏️ ${c}</div>`).join('')}
-          ${(h.date||'') >= _DETAIL_BORNE && h.items.some(i => i._isQuickSale && !i._quickSaleDetailed) ? `<button onclick="openDetailQuickSale(${h.id})" class="btn btn-sm" style="margin-top:4px;border-color:#9b59b6;color:#9b59b6;font-size:11px;">🏷️ Détailler le produit</button>` : ''}
-          ${_ticketMinimauxADetailler(h) ? `<button onclick="openDetaillerMinimaux(${h.id})" class="btn btn-sm" style="margin-top:4px;margin-left:6px;border-color:#9b59b6;color:#9b59b6;font-size:11px;">🐾 Détailler les minimaux</button>` : ''}
+          ${!h.detailClasse && (h.date||'') >= _DETAIL_BORNE && h.items.some(i => i._isQuickSale && !i._quickSaleDetailed) ? `<button onclick="openDetailQuickSale('${tkRef(h)}')" class="btn btn-sm" style="margin-top:4px;border-color:#9b59b6;color:#9b59b6;font-size:11px;">🏷️ Détailler le produit</button>` : ''}
+          ${_ticketMinimauxADetailler(h) ? `<button onclick="openDetaillerMinimaux('${tkRef(h)}')" class="btn btn-sm" style="margin-top:4px;margin-left:6px;border-color:#9b59b6;color:#9b59b6;font-size:11px;">🐾 Détailler les minimaux</button>` : ''}
         </div>
       `).join('') || '<div class="empty"><div class="empty-text">Aucune vente enregistrée</div></div>'}
     </div>
@@ -7266,7 +7281,7 @@ function addTicketCorrection(t, texte) {
 }
 
 function deleteTicketLine(ticketId, idx) {
-  const t = (db.caisseHistory||[]).find(x => x.id === ticketId);
+  const t = ticketByRef(ticketId);
   if(!t || !t.items[idx]) return;
   const it = t.items[idx];
   if(!confirm(`Supprimer "${it.qty}× ${it.name}" du ticket ?\nLe stock sera remis automatiquement.`)) return;
@@ -7281,7 +7296,7 @@ function deleteTicketLine(ticketId, idx) {
   t.items.splice(idx, 1);
   // Si le ticket est vide, on le supprime
   if(t.items.length === 0) {
-    db.caisseHistory = db.caisseHistory.filter(x => x.id !== ticketId);
+    db.caisseHistory = db.caisseHistory.filter(x => x !== t);
     showToast('Ticket vidé et supprimé', true);
   } else {
     recalcTicketTotal(t);
@@ -7292,7 +7307,7 @@ function deleteTicketLine(ticketId, idx) {
 }
 
 function deleteTicketCaisse(ticketId) {
-  const t = (db.caisseHistory||[]).find(x => x.id === ticketId);
+  const t = ticketByRef(ticketId);
   if(!t) return;
   if(!confirm(`Supprimer TOUT le ticket de ${t.total.toFixed(2)}€ ?\nLe stock de tous les articles sera remis.`)) return;
   (t.items||[]).forEach(it => {
@@ -7307,14 +7322,14 @@ function deleteTicketCaisse(ticketId) {
     sachetMove(sachetProd('unite'), +(t.sachets.unite||0), 'Sachet unité (suppr ticket)');
     sachetMove(sachetProd('promo'), +(t.sachets.promo||0), 'Sachet promo (suppr ticket)');
   }
-  db.caisseHistory = db.caisseHistory.filter(x => x.id !== ticketId);
+  db.caisseHistory = db.caisseHistory.filter(x => x !== t);
   saveData();
   showToast('Ticket supprimé, stock remis ✅', true);
   openCaisseHistory();
 }
 
 function editTicketLine(ticketId, idx) {
-  const t = (db.caisseHistory||[]).find(x => x.id === ticketId);
+  const t = ticketByRef(ticketId);
   if(!t || !t.items[idx]) return;
   const it = t.items[idx];
   const prodsOptions = db.products.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''))
@@ -7332,13 +7347,13 @@ function editTicketLine(ticketId, idx) {
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px;padding:6px;background:var(--bg);border-radius:6px;">⚠️ Le stock sera ajusté automatiquement (ancien produit remis, nouveau déduit).</div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="openCaisseHistory()">Annuler</button>
-      <button class="btn btn-primary" onclick="doEditTicketLine(${ticketId},${idx})" style="background:#5af;border-color:#5af;">Enregistrer</button>
+      <button class="btn btn-primary" onclick="doEditTicketLine('${ticketId}',${idx})" style="background:#5af;border-color:#5af;">Enregistrer</button>
     </div>
   `);
 }
 
 function doEditTicketLine(ticketId, idx) {
-  const t = (db.caisseHistory||[]).find(x => x.id === ticketId);
+  const t = ticketByRef(ticketId);
   if(!t || !t.items[idx]) return;
   const old = t.items[idx];
   const newProdId = +document.getElementById('edit-line-prod').value;
@@ -11884,6 +11899,7 @@ function deleteDepense(id) {
 function renderURSSAF(el, actions) {
   actions.innerHTML = `<button class="btn btn-secondary btn-sm" onclick="exportURSSAFPDF()">📄 Export PDF</button>`;
   const taux = 12.3;
+  const YR = new Date().getFullYear();
 
   // CA URSSAF = Ventes Boutiques + Recettes Manuelles (pas ventesLigne)
   const currentYear = new Date().getFullYear().toString();
@@ -11898,7 +11914,7 @@ function renderURSSAF(el, actions) {
   for(let i=1;i<=12;i++) caByMonth[i] = 0;
   const addToMonth = (date, total) => {
     const m = parseInt(date.slice(5,7));
-    if(date.startsWith('2026')) caByMonth[m] += total;
+    if(date.startsWith(String(YR))) caByMonth[m] += total;
   };
   db.sales.forEach(s => addToMonth(s.date, s.total));
   (db.recettesManuelles||[]).forEach(r => addToMonth(r.date, r.total));
@@ -11907,12 +11923,12 @@ function renderURSSAF(el, actions) {
 
   // Périodes bimestrielles
   const periodes = [
-    {label:'Jan–Fév 2026', months:[1,2], echeance:'2026-04-30'},
-    {label:'Mar–Avr 2026', months:[3,4], echeance:'2026-06-30'},
-    {label:'Mai–Juin 2026', months:[5,6], echeance:'2026-08-31'},
-    {label:'Jul–Aoû 2026', months:[7,8], echeance:'2026-10-31'},
-    {label:'Sep–Oct 2026', months:[9,10], echeance:'2026-12-31'},
-    {label:'Nov–Déc 2026', months:[11,12], echeance:'2027-02-28'},
+    {label:'Jan–Fév '+YR, months:[1,2], echeance:YR+'-04-30'},
+    {label:'Mar–Avr '+YR, months:[3,4], echeance:YR+'-06-30'},
+    {label:'Mai–Juin '+YR, months:[5,6], echeance:YR+'-08-31'},
+    {label:'Jul–Aoû '+YR, months:[7,8], echeance:YR+'-10-31'},
+    {label:'Sep–Oct '+YR, months:[9,10], echeance:YR+'-12-31'},
+    {label:'Nov–Déc '+YR, months:[11,12], echeance:(YR+1)+'-02-28'},
   ];
 
   el.innerHTML = `
@@ -11920,9 +11936,9 @@ function renderURSSAF(el, actions) {
       <div class="urssaf-rate" style="border-radius:12px;padding:20px;">
         <div style="font-size:12px;font-weight:700;opacity:.8;margin-bottom:8px;">TAUX APPLICABLE — Vente de marchandises</div>
         <div class="rate-big">${taux}%</div>
-        <div style="font-size:12px;opacity:.8;margin-top:4px;">Cotisations sociales 2026</div>
+        <div style="font-size:12px;opacity:.8;margin-top:4px;">Cotisations sociales ${YR}</div>
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,.2);">
-          <div style="font-size:12px;opacity:.8;">CA total 2026</div>
+          <div style="font-size:12px;opacity:.8;">CA total ${YR}</div>
           <div style="font-size:22px;font-weight:800;">${Math.round(totalYear)} €</div>
           <div style="font-size:12px;opacity:.8;margin-top:4px;">Cotisations dues : <strong>${Math.round(totalYear*taux/100)} €</strong></div>
         </div>
@@ -11939,7 +11955,7 @@ function renderURSSAF(el, actions) {
 
     <div class="grid-2" style="margin-bottom:16px;">
       <div class="card">
-        <div class="card-title">Déclarations mensuelles 2026</div>
+        <div class="card-title">Déclarations mensuelles ${YR}</div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Mois</th><th style="text-align:right;">CA</th><th style="text-align:right;">Cotis. 12,3%</th><th style="text-align:right;">CFP 0,3%</th><th style="text-align:right;">Total</th><th style="text-align:right;">Échéance</th></tr></thead>
@@ -11948,7 +11964,7 @@ function renderURSSAF(el, actions) {
                 const ca = caByMonth[i+1];
                 const cotis = Math.round(ca * taux / 100);
                 const mNum = String(i+2).padStart(2,'0');
-                const echeance = i < 11 ? `2026-${mNum}-15` : '2027-01-15';
+                const echeance = i < 11 ? `${YR}-${mNum}-15` : `${YR+1}-01-15`;
                 const isCurrentMonth = (i+1) === new Date().getMonth()+1;
                 const cfp = ca > 0 ? Math.round(ca * 0.003) : 0;
                 const total = cotis + cfp;
@@ -11958,15 +11974,15 @@ function renderURSSAF(el, actions) {
                   <td style="text-align:right;font-weight:700;color:${ca>0?'var(--accent)':'var(--muted)'};">${ca>0?cotis+' €':'—'}</td>
                   <td style="text-align:right;font-weight:600;color:${ca>0?'var(--muted)':'var(--muted)'};">${ca>0?cfp+' €':'—'}</td>
                   <td style="text-align:right;font-weight:800;color:${ca>0?'var(--text)':'var(--muted)'};">${ca>0?total+' €':'—'}</td>
-                  <td style="text-align:right;font-size:11px;color:var(--muted);">15/${String(i+2).padStart(2,'0')}${i<11?'/26':'/27'}</td>
+                  <td style="text-align:right;font-size:11px;color:var(--muted);">${urssafEchTxt(i,YR)}</td>
                 </tr>`;
               }).join('')}
               <tr style="background:rgba(0,212,170,.08);border-top:2px solid var(--accent2);">
                 <td style="font-weight:800;">Total</td>
                 <td style="text-align:right;font-weight:800;color:var(--accent2);">${Math.round(totalYear)} €</td>
                 <td style="text-align:right;font-weight:800;color:var(--accent);">${Math.round(totalYear*taux/100)} €</td>
-                <td style="text-align:right;font-weight:800;color:var(--muted);">${monthNames.reduce((s,_,i)=>s+(caByMonth[i+1]>0?Math.round(caByMonth[i+1]*0.001):0),0)} €</td>
-                <td style="text-align:right;font-weight:800;color:var(--text);">${Math.round(totalYear*taux/100) + monthNames.reduce((s,_,i)=>s+(caByMonth[i+1]>0?Math.round(caByMonth[i+1]*0.001):0),0)} €</td>
+                <td style="text-align:right;font-weight:800;color:var(--muted);">${monthNames.reduce((s,_,i)=>s+(caByMonth[i+1]>0?Math.round(caByMonth[i+1]*0.003):0),0)} €</td>
+                <td style="text-align:right;font-weight:800;color:var(--text);">${Math.round(totalYear*taux/100) + monthNames.reduce((s,_,i)=>s+(caByMonth[i+1]>0?Math.round(caByMonth[i+1]*0.003):0),0)} €</td>
                 <td></td>
               </tr>
             </tbody>
@@ -11975,7 +11991,7 @@ function renderURSSAF(el, actions) {
         <div style="margin-top:12px;padding:10px;background:rgba(124,92,252,.08);border-radius:8px;border:1px solid rgba(124,92,252,.2);">
           <div style="font-size:12px;color:var(--muted);line-height:1.8;">
             🌐 <strong style="color:var(--text);">autoentrepreneur.urssaf.fr</strong><br>
-            📊 Seuil marchandises 2026 : <strong style="color:var(--text);">188 700 €</strong><br>
+            📊 Seuil marchandises ${YR} : <strong style="color:var(--text);">188 700 €</strong><br>
             💡 TVA franchise jusqu'à <strong style="color:var(--text);">85 000 €</strong><br>
             ⚠️ Déclarer même si CA = 0 — avant le 15 du mois suivant
           </div>
@@ -12045,7 +12061,7 @@ function renderURSSAF(el, actions) {
           </div>
         </div>
         <div style="margin-top:10px;padding:8px 12px;background:rgba(150,150,150,.05);border-radius:6px;font-size:11px;color:var(--muted);font-style:italic;">
-          Projection linéaire au rythme actuel. Seuils CFE : 5 000€ (exonération) · 10 000€ (palier supérieur). L'impact CFE intervient toujours 2 ans après (CA 2026 → CFE 2028).
+          Projection linéaire au rythme actuel. Seuils CFE : 5 000€ (exonération) · 10 000€ (palier supérieur). L'impact CFE intervient toujours 2 ans après (CA ${YR} → CFE ${YR+2}).
         </div>
       </div>
       `;
@@ -13981,52 +13997,6 @@ function boutiqueOptions(selected) {
   return list.map(b => `<option value="${b.id}" ${b.id === selected ? 'selected' : ''}>${b.nom}</option>`).join('');
 }
 
-// ----- Récap Boutiques : Brut / Commission / Loyer / Reste réel (information seulement, hors livre de recettes et URSSAF)
-function htmlLoyerReste(year) {
-  const act = [{id: 'boutB', nom: BOUTIQUE_NAMES.boutB, couleur: '#e63030'}].concat(boutiquesExtra().map(b => ({id: b.id, nom: b.nom, couleur: b.couleur || '#888'})));
-  const now = ymCourant();
-  const eur = n => (Number(n) || 0).toFixed(2) + ' €';
-  const neg = n => (n > 0 ? '-' : '') + eur(n);
-  const blocs = act.map(b => {
-    // lignes sans année = 2026 (même hypothèse que la première synchronisation)
-    const rows = (db.boutiquesVentes || []).filter(v => v.boutique === b.id && (Number(v.annee) || 2026) === year);
-    const T = {brut: 0, comm: 0, loyer: 0, reste: 0};
-    const lignes = [];
-    MOIS_ORDER.forEach((m, i) => {
-      const ym = year + '-' + String(i + 1).padStart(2, '0');
-      const rm = rows.filter(v => v.mois === m);
-      const loyer = boutiqueLoyer(b.id, ym);
-      if(!rm.length && !(loyer > 0 && ym <= now)) return;
-      const brut = moneyB(rm.reduce((s, v) => s + (Number(v.prixVente) || 0) * (Number(v.qty) || 1), 0));
-      const comm = moneyB(rm.reduce((s, v) => s + (Number(v.comm) || 0), 0));
-      const reste = moneyB(brut - comm - loyer);
-      T.brut += brut; T.comm += comm; T.loyer += loyer; T.reste += reste;
-      lignes.push(`<tr><td style="font-weight:700;">${m.charAt(0) + m.slice(1).toLowerCase()}</td><td style="text-align:right;">${eur(brut)}</td><td style="text-align:right;color:var(--danger);">${neg(comm)}</td><td style="text-align:right;color:var(--danger);">${neg(loyer)}</td><td style="text-align:right;font-weight:800;color:${reste < 0 ? 'var(--danger)' : 'var(--accent2)'};">${eur(reste)}</td></tr>`);
-    });
-    if(!lignes.length) return '';
-    const cur = boutiqueLoyer(b.id, now);
-    return `<div style="margin-bottom:14px;">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap;">
-        <span style="width:10px;height:10px;border-radius:50%;background:${b.couleur};display:inline-block;"></span>
-        <strong>${b.nom}</strong>
-        <span style="font-size:12px;color:var(--muted);">Loyer actuel : ${eur(cur)} / mois</span>
-      </div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Mois</th><th style="text-align:right;">Brut</th><th style="text-align:right;">Commission</th><th style="text-align:right;">Loyer</th><th style="text-align:right;">Reste réel</th></tr></thead>
-        <tbody>${lignes.join('')}
-          <tr style="border-top:2px solid var(--border);"><td style="font-weight:800;">Total ${year}</td><td style="text-align:right;font-weight:800;">${eur(T.brut)}</td><td style="text-align:right;font-weight:800;color:var(--danger);">${neg(T.comm)}</td><td style="text-align:right;font-weight:800;color:var(--danger);">${neg(T.loyer)}</td><td style="text-align:right;font-weight:900;color:${T.reste < 0 ? 'var(--danger)' : 'var(--accent2)'};">${eur(T.reste)}</td></tr>
-        </tbody>
-      </table></div>
-    </div>`;
-  }).join('');
-  if(!blocs) return '';
-  return `<div class="card" style="margin-bottom:16px;">
-    <div class="card-title">Loyer & reste réel — ${year}</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Reste réel = Brut − Commission − Loyer. Information seulement : le loyer n'entre ni dans le livre de recettes ni dans l'URSSAF.</div>
-    ${blocs}
-  </div>`;
-}
-
 // ----- Réglages boutiques : loyers et taux avec date de départ
 function openReglagesBoutiques() {
   const bs = [{id: 'boutB', nom: BOUTIQUE_NAMES.boutB}].concat(boutiquesExtra().map(b => ({id: b.id, nom: b.nom, ville: b.ville})));
@@ -14545,22 +14515,24 @@ function renderBoutiques(el, actions) {
     <!-- Tableau détail par mois -->
     <div class="card">
       <div class="card-title">Détail des ventes par mois</div>
-      ${MOIS_ORDER.filter(m => ventesByMois[m]).map(m => {
-        const lignes = ventesByMois[m];
+      ${MOIS_ORDER.filter(m => ventesByMois[m] || (loyerMois(m) > 0 && recapYM(m) <= ymCourant())).map(m => {
+        const lignes = ventesByMois[m] || [];
         const totalMoisBrut = lignes.reduce((s,v)=>s+v.prixVente*(v.qty||1),0);
         const totalMoisComm = lignes.reduce((s,v)=>s+Number(v.comm||0),0);
-        const totalMoisNet  = totalMoisBrut - totalMoisComm;
+        const loyerM = loyerMois(m);
+        const totalMoisNet  = totalMoisBrut - totalMoisComm - loyerM;
         return `
         <div style="margin-bottom:16px;">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg);border-radius:8px;margin-bottom:4px;">
             <strong style="font-size:14px;">${m.charAt(0)+m.slice(1).toLowerCase()}</strong>
             <div style="display:flex;gap:16px;font-size:12px;">
+              <span style="color:var(--muted);">Loyer : <strong style="color:var(--danger);">${loyerM > 0 ? '-' : ''}${loyerM.toFixed(2)}€</strong></span>
               <span style="color:var(--muted);">Brut : <strong style="color:var(--text);">${totalMoisBrut.toFixed(2)}€</strong></span>
               <span style="color:var(--muted);">Comm : <strong style="color:var(--danger);">-${totalMoisComm.toFixed(2)}€</strong></span>
               <span style="color:var(--muted);">Net : <strong style="color:var(--accent2);">${totalMoisNet.toFixed(2)}€</strong></span>
             </div>
           </div>
-          <div class="table-wrap">
+          ${lignes.length ? `<div class="table-wrap">
             <table>
               <thead><tr><th>Boutique</th><th>Produit</th><th style="text-align:center;">Qté</th><th style="text-align:right;">Prix unit.</th><th style="text-align:right;">Commission</th><th style="text-align:right;">Prix net</th><th></th></tr></thead>
               <tbody>
@@ -14588,7 +14560,7 @@ function renderBoutiques(el, actions) {
                 </tr>`;}).join('')}
               </tbody>
             </table>
-          </div>
+          </div>` : ''}
         </div>`;
       }).join('')}
     </div>
@@ -14606,6 +14578,7 @@ function commManuelle(p) { const c = document.getElementById(p + '-comm'); if(c)
 function boutiqueFormChange(p) { const c = document.getElementById(p + '-comm'); if(c) c.dataset.manuel = ''; refreshBoutiqueForm(p); }
 function refreshBoutiqueForm(p) {
   const boutique = document.getElementById(p + '-boutique')?.value;
+  vgRefreshPicker(p, boutique);
   const commInput = document.getElementById(p + '-comm');
   if(!commInput) return;
   const prix = +document.getElementById(p + '-prix')?.value || 0;
@@ -14655,6 +14628,9 @@ function boutiqueFormHtml(p, v) {
       </div>
     </div>
     <div class="form-group"><label class="form-label">Produit</label><input class="form-input" id="${p}-produit" ${v ? `value="${v.produit || ''}"` : 'placeholder="Ex: DRAGON CHINOIS"'}></div>
+    <div class="form-group" id="${p}-vgprod-wrap" style="display:none;"><label class="form-label">Produit du stock Video Gamers <span style="color:var(--muted);font-size:10px;">(le stock baisse à l'enregistrement)</span></label>
+      <select class="form-select" id="${p}-vgprod" data-init="${v ? (v.productId || '') : ''}" onchange="vgPickProduct('${p}')"></select>
+    </div>
     <div class="form-group" id="${p}-rub-wrap" style="display:none;"><label class="form-label">Rubrique (détermine le taux de commission)</label>
       <select class="form-select" id="${p}-rubrique" data-init="${v ? (v.categorie || '') : ''}" onchange="boutiqueFormChange('${p}')"></select>
     </div>
@@ -14708,6 +14684,11 @@ function doAddBoutiqueVente() {
     prixVente: prixVal,
     comm: commVal,
   };
+  { // stock Video Gamers
+    const _sel = document.getElementById('bv-vgprod');
+    const _pid = (_sel && boutiqueVal === vgBoutiqueId()) ? (Number(_sel.value) || 0) : 0;
+    if(_pid) { const _r = vgApplySale(_pid, qty, produit); if(!_r) return; v.productId = _pid; v.stockQty = _r.done; }
+  }
   if(!db.boutiquesVentes) db.boutiquesVentes = [];
   db.boutiquesVentes.push(v);
   saveData(); closeModal(); showToast('Vente ajoutée ✅', true); render('boutiques');
@@ -14715,6 +14696,7 @@ function doAddBoutiqueVente() {
 
 function deleteBoutiqueVente(id) {
   if(!confirm('Supprimer cette ligne ?')) return;
+  vgRestoreLine(db.boutiquesVentes.find(x=>x.id===id));
   db.boutiquesVentes = db.boutiquesVentes.filter(x=>x.id!==id);
   saveData(); render('boutiques');
 }
@@ -14738,11 +14720,19 @@ function openEditBoutiqueVente(id) {
     sel.value = rubs.some(r => r.id === v.categorie) ? v.categorie : rubs[0].id;
     wrap.style.display = '';
   }
+  vgRefreshPicker('bve', v.boutique);
 }
 
 function doEditBoutiqueVente(id) {
   const v = db.boutiquesVentes.find(x=>x.id===id);
   if(!v) return;
+  { // stock Video Gamers : remet l'ancien, applique le nouveau (ou annule tout si refusé)
+    const _b = document.getElementById('bve-boutique').value;
+    const _sel = document.getElementById('bve-vgprod');
+    const _q = Math.max(1, parseInt(document.getElementById('bve-qty').value) || 1);
+    const _pid = (_sel && _b === vgBoutiqueId()) ? (Number(_sel.value) || 0) : 0;
+    if(!vgEdit(v, _pid, _q, document.getElementById('bve-produit').value.trim().toUpperCase())) return;
+  }
   v.annee=Number(document.getElementById("bve-year").value);
   v.boutique = document.getElementById('bve-boutique').value;
   v.mois = document.getElementById('bve-mois').value;
@@ -14758,6 +14748,7 @@ function adjBoutiqueVente(id, delta) {
   const v = db.boutiquesVentes.find(x=>x.id===id);
   if(!v) return;
   const oldQty=Number(v.qty)||1, oldComm=Number(v.comm)||0;
+  { const _nq = Math.max(1, (v.qty||1) + delta); if(_nq !== oldQty && vgAdj(v, oldQty, _nq) === false) return; }
   v.qty = Math.max(1, (v.qty||1) + delta);
   v.comm=Math.round(oldComm/oldQty*v.qty*100)/100;
   saveData(); render('boutiques');
@@ -14935,12 +14926,13 @@ function logStockChange(productId, productName, field, before, after, reason) {
 // ===================== EXPORT URSSAF PDF =====================
 function exportURSSAFPDF() {
   const taux = 12.3;
+  const YR = new Date().getFullYear();
   const monthNames = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
   const caByMonth = {};
   for(let i=1;i<=12;i++) caByMonth[i]=0;
   const addToMonth = (date, total) => {
     const m = parseInt(date.slice(5,7));
-    if(date.startsWith('2026')) caByMonth[m] += total;
+    if(date.startsWith(String(YR))) caByMonth[m] += total;
   };
   db.sales.forEach(s=>addToMonth(s.date,s.total));
   (db.ventesLigne||[]).forEach(v=>addToMonth(v.date,v.total));
@@ -14951,7 +14943,7 @@ function exportURSSAFPDF() {
   const rows = monthNames.map((name,i) => {
     const ca = caByMonth[i+1];
     const cotis = Math.round(ca*taux/100);
-    const ech = `15/${String(i+2).padStart(2,'0')}${i<11?'/26':'/27'}`;
+    const ech = urssafEchTxt(i,YR);
     return `<tr style="${ca>0?'':'color:#aaa'}">
       <td>${name}</td>
       <td style="text-align:right;font-weight:${ca>0?'bold':'normal'}">${ca>0?Math.round(ca)+' €':'—'}</td>
@@ -14962,7 +14954,7 @@ function exportURSSAFPDF() {
 
   const html = `<!DOCTYPE html>
 <html lang="fr"><head><meta charset="UTF-8">
-<title>URSSAF 2026 — FATH 3D</title>
+<title>URSSAF ${YR} — FATH 3D</title>
 <style>
   * { box-sizing:border-box; margin:0; padding:0; }
   body { font-family:Arial,sans-serif; font-size:11px; color:#111; padding:24px; }
@@ -14986,7 +14978,7 @@ function exportURSSAFPDF() {
 <div class="header">
   <div>
     <div class="logo">FATH <span>3D</span></div>
-    <div style="font-size:16px;font-weight:bold;margin-top:6px;">Récapitulatif URSSAF 2026</div>
+    <div style="font-size:16px;font-weight:bold;margin-top:6px;">Récapitulatif URSSAF ${YR}</div>
     <div style="font-size:11px;color:#666;margin-top:2px;">Auto-entrepreneur · Vente de marchandises · Déclaration mensuelle</div>
   </div>
   <div style="text-align:right;font-size:11px;color:#555;">
@@ -14997,7 +14989,7 @@ function exportURSSAFPDF() {
 
 <div class="summary">
   <div class="box">
-    <div class="label">CA Total 2026</div>
+    <div class="label">CA Total ${YR}</div>
     <div class="value">${Math.round(totalYear)} €</div>
   </div>
   <div class="box">
@@ -15012,7 +15004,7 @@ function exportURSSAFPDF() {
 
 <div class="info-box">
   🌐 <strong>autoentrepreneur.urssaf.fr</strong> &nbsp;|&nbsp;
-  📊 Seuil marchandises 2026 : <strong>188 700 €</strong> &nbsp;|&nbsp;
+  📊 Seuil marchandises ${YR} : <strong>188 700 €</strong> &nbsp;|&nbsp;
   💡 Franchise TVA jusqu'à <strong>85 000 €</strong> &nbsp;|&nbsp;
   ⚠️ Déclarer avant le <strong>15 du mois suivant</strong>, même si CA = 0
 </div>
@@ -15029,7 +15021,7 @@ function exportURSSAFPDF() {
   <tbody>
     ${rows}
     <tr class="total-row">
-      <td><strong>TOTAL 2026</strong></td>
+      <td><strong>TOTAL ${YR}</strong></td>
       <td style="text-align:right">${Math.round(totalYear)} €</td>
       <td style="text-align:right;color:#e74c3c;">${cotisYear} €</td>
       <td></td>
@@ -15037,7 +15029,7 @@ function exportURSSAFPDF() {
   </tbody>
 </table>
 
-<div class="footer">FATH 3D — Récapitulatif URSSAF 2026 · Généré le ${new Date().toLocaleDateString('fr-FR')}</div>
+<div class="footer">FATH 3D — Récapitulatif URSSAF ${YR} · Généré le ${new Date().toLocaleDateString('fr-FR')}</div>
 <script>window.onload=function(){window.print();}<\/script>
 </body></html>`;
 
@@ -15570,7 +15562,7 @@ function deleteVenteMarche(id) {
 
 // === EDIT/SUPPRESSION TICKETS CAISSE ===
 function openEditCaisseTicket(id) {
-  const t = (db.caisseHistory||[]).find(x => x.id === id);
+  const t = ticketByRef(id);
   if(!t) { showToast('Ticket introuvable', false); return; }
   const totalArticles = t.items.map(i => `${i.qty}× ${i.name} (${i.price}€)`).join(', ');
   openModal(`
@@ -15594,13 +15586,13 @@ function openEditCaisseTicket(id) {
     </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="doEditCaisseTicket(${id})">Sauvegarder</button>
+      <button class="btn btn-primary" onclick="doEditCaisseTicket('${id}')">Sauvegarder</button>
     </div>
   `);
 }
 
 function toggleTicketPayment(id){
-  const t=(db.caisseHistory||[]).find(x=>x.id===id);
+  const t=ticketByRef(id);
   if(!t)return;
   const ancien=t.payment;
   const nouveau= ancien==='ESP' ? 'CB' : 'ESP';
@@ -15614,7 +15606,7 @@ function toggleTicketPayment(id){
 }
 
 function doEditCaisseTicket(id) {
-  const t = db.caisseHistory.find(x => x.id === id);
+  const t = ticketByRef(id);
   if(!t) return;
   t.date = document.getElementById('ct-date').value;
   t.time = document.getElementById('ct-time').value;
@@ -15625,7 +15617,7 @@ function doEditCaisseTicket(id) {
 }
 
 function deleteCaisseTicket(id) {
-  const t = (db.caisseHistory||[]).find(x => x.id === id);
+  const t = ticketByRef(id);
   if(!t) return;
   const articlesStr = t.items.map(i => `${i.qty}× ${i.name}`).join(', ');
   if(!confirm(`Supprimer ce ticket ?\n\nDate : ${t.date}\nMontant : ${t.total.toFixed(2)}€\nArticles : ${articlesStr}\n\n✅ Le stock marché sera re-crédité automatiquement.`)) return;
@@ -15637,7 +15629,7 @@ function deleteCaisseTicket(id) {
       logStockChange(p.id, p.name, 'marche', avant, p.stocks.marche, 'Annulation ticket caisse');
     }
   });
-  db.caisseHistory = db.caisseHistory.filter(x => x.id !== id);
+  db.caisseHistory = db.caisseHistory.filter(x => x !== t);
   saveData();
   showToast('Ticket supprimé — stock re-crédité ✅', true);
   renderVentesMarche(document.getElementById('content'), document.getElementById('topbar-actions'));
@@ -15872,48 +15864,804 @@ function closeSidebar() {
   document.getElementById('sidebar').classList.remove('open');
 }
 
+// ===================== FUSION DES DONNÉES (FSyncCore) =====================
+// Partie "calcul" de la synchro : aucune lecture d'écran, aucun accès réseau.
+// Principe : on compare 3 versions (photo de la dernière synchro = B, copie de cet appareil = L,
+// copie du cloud = C) et on garde le meilleur de chaque côté, fiche par fiche.
+const FSyncCore = (function(){
+  'use strict';
+  const LOG_KEYS = ['stockHistory','reassortHistory','stockTagLog'];
+  const KEYED_FORCE = ['products','filaments','sales','depenses','marches','ventesMarche','ventesLigne','boutiquesVentes','recettesManuelles','notes','caisseHistory','hfTemplates','acomptes','tachesRecurrentes','reservations','plansLibres','printQueue','reimpressions','boutiquesExtra','comm','planningJobs'];
+  const META = {_del:1,_tm:1};
+  // [objet parent ('' = racine), nom du compteur, liste concernée]
+  const COUNTERS = [
+    ['nextId','product','products'],['nextId','sale','sales'],['nextId','marche','marches'],
+    ['nextId','caisseHistory','caisseHistory'],['nextId','filament','filaments'],['nextId','acompte','acomptes'],
+    ['nextId','reservation','reservations'],['nextId','depense','depenses'],
+    ['','nextVenteMarcheId','ventesMarche'],['','nextBoutiqueVenteId','boutiquesVentes'],['','nextRecetteId','recettesManuelles'],
+    ['','nextNoteId','notes'],['','nextVenteLigneId','ventesLigne'],['','nextPrintQueueId','printQueue'],['','nextHfTemplateId','hfTemplates']
+  ];
+  const TOMB_MAX_AGE = 120*24*3600*1000;
+
+  const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  function stable(v){
+    if(v === undefined) return 'U';
+    if(v === null || typeof v !== 'object') return JSON.stringify(v);
+    if(Array.isArray(v)) return '['+v.map(stable).join(',')+']';
+    const ks = Object.keys(v).filter(k => k !== '_m' && v[k] !== undefined).sort();
+    return '{'+ks.map(k => JSON.stringify(k)+':'+stable(v[k])).join(',')+'}';
+  }
+  function h(s){ let x = 2166136261; for(let i=0;i<s.length;i++){ x ^= s.charCodeAt(i); x = Math.imul(x,16777619); } return (x>>>0).toString(36); }
+  const eq = (a,b) => stable(a) === stable(b);
+  const clone = o => JSON.parse(JSON.stringify(o));
+  function newUid(){ return 'u'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+
+  function isKeyedList(k, arr){
+    if(!Array.isArray(arr) || LOG_KEYS.includes(k)) return false;
+    if(KEYED_FORCE.includes(k)) return true;
+    const first = arr.find(x => x !== null && x !== undefined);
+    return !!(first && isObj(first) && ('id' in first));
+  }
+
+  // Identité "ancienne" calculée de la même façon sur tous les appareils (pour les fiches créées avant la mise à jour)
+  function legacyUid(k, el, used){
+    let base;
+    if(k === 'caisseHistory') base = 't:'+el.id+':'+el.date+':'+(el.time||'');
+    else if(el.id !== undefined && el.id !== null) base = k+':'+el.id;
+    else base = k+'#'+h(stable(el));
+    let u = base, n = 1;
+    while(used.has(u)) u = base+'~'+(++n);
+    return u;
+  }
+
+  // Donne une identité cachée (_uid) à chaque fiche qui n'en a pas.
+  function ensureUids(d, det){
+    for(const k of Object.keys(d)){
+      if(META[k]) continue;
+      const v = d[k];
+      if(!isKeyedList(k, v)) continue;
+      const used = new Set(), todo = [];
+      for(const el of v){
+        if(!isObj(el)) continue;
+        if(el._uid && !used.has(el._uid)) used.add(el._uid); else { el._uid = null; todo.push(el); }
+      }
+      for(const el of todo) { el._uid = det ? legacyUid(k, el, used) : newUid(); used.add(el._uid); }
+    }
+  }
+
+  // ----- suivi des modifications faites sur cet appareil -----
+  let lastItem = new Map(), lastTop = new Map(), ready = false;
+  function track(d, now){
+    if(!d._del) d._del = {};
+    if(!d._tm) d._tm = {};
+    const seen = new Map();
+    for(const k of Object.keys(d)){
+      if(META[k] || LOG_KEYS.includes(k)) continue;
+      const v = d[k];
+      if(isKeyedList(k, v)){
+        for(const el of v){
+          if(!isObj(el)) continue;
+          const key = k+'|'+el._uid, hh = h(stable(el));
+          seen.set(key, hh);
+          if(ready){
+            const prev = lastItem.get(key);
+            if(prev === undefined || prev !== hh) el._m = now;
+          }
+        }
+      } else {
+        const hh = h(stable(v));
+        if(ready && lastTop.get(k) !== hh) d._tm[k] = now;
+        lastTop.set(k, hh);
+      }
+    }
+    if(ready){
+      for(const key of lastItem.keys()) if(!seen.has(key)) d._del[key] = now;
+    }
+    lastItem = seen; ready = true;
+    for(const key of Object.keys(d._del)) if(now - d._del[key] > TOMB_MAX_AGE) delete d._del[key];
+  }
+  // Reprend le suivi à zéro (après avoir appliqué une fusion), sans marquer de modification
+  function resetTrack(d){ ready = false; lastItem = new Map(); lastTop = new Map(); track(d, Date.now()); }
+
+  // ----- fusion -----
+  const DELTA = path => path.includes('stocks') || path[path.length-1] === 'weightLeft';
+  function mergeValue(b, l, c, tie, path){
+    if(eq(l, c)) return l;
+    const bk = b !== undefined;
+    if(bk){ if(eq(l, b)) return c; if(eq(c, b)) return l; }
+    if(l === undefined) return c;
+    if(c === undefined) return l;
+    const last = path[path.length-1];
+    if(typeof l === 'number' && typeof c === 'number'){
+      if(/^next/.test(String(last)) || path[0] === 'nextId') return Math.max(l, c);
+      if(bk && typeof b === 'number' && DELTA(path)) return Math.max(0, c + (l - b));
+      return tie === 'L' ? l : c;
+    }
+    if(typeof l === 'boolean' && typeof c === 'boolean' && /^(migr|resine|pjFile)/.test(String(last))) return l || c;
+    if(isObj(l) && isObj(c)){
+      const o = {}, ks = new Set([...Object.keys(l), ...Object.keys(c)]);
+      for(const k of ks){
+        if(k === '_m') continue;
+        const v = mergeValue(bk && isObj(b) ? b[k] : undefined, l[k], c[k], tie, path.concat(k));
+        if(v !== undefined) o[k] = v;
+      }
+      return o;
+    }
+    if(last === 'customCategories' && Array.isArray(l) && Array.isArray(c)) return [...new Set([...c, ...l])];
+    return tie === 'L' ? l : c;
+  }
+
+  function mergeKeyed(k, b, l, c, delL, delC){
+    const mp = a => { const m = new Map(); (a||[]).forEach(el => { if(isObj(el) && el._uid) m.set(el._uid, el); }); return m; };
+    const mb = mp(b), ml = mp(l), mc = mp(c);
+    const order = [], seen = new Set();
+    for(const a of [c, l]) a.forEach(el => { if(isObj(el) && el._uid && !seen.has(el._uid)){ seen.add(el._uid); order.push(el._uid); } });
+    const out = [];
+    for(const u of order){
+      const li = ml.get(u), ci = mc.get(u), bi = mb.get(u), dk = k+'|'+u;
+      let r;
+      if(li && ci){
+        if(eq(li, ci)) r = (li._m||0) >= (ci._m||0) ? li : ci;
+        else {
+          const tie = (li._m||0) > (ci._m||0) ? 'L' : 'C';
+          r = mergeValue(bi, li, ci, tie, [k,'_item']);
+          if(isObj(r)){ r = Object.assign({}, r); r._uid = u; r._m = Math.max(li._m||0, ci._m||0); }
+        }
+      } else if(li){
+        const tomb = delC[dk];
+        if(tomb && ((bi && eq(li, bi)) || (li._m||0) <= tomb)) continue;   // supprimée ailleurs
+        r = li;
+      } else {
+        const tomb = delL[dk];
+        if(bi && eq(ci, bi)) continue;                                      // supprimée ici
+        if(tomb && (ci._m||0) <= tomb) continue;
+        r = ci;
+      }
+      out.push(r);
+    }
+    return out;
+  }
+
+  function mergeLog(k, b, l, c){
+    const idOf = a => { const m = new Map(), cnt = {}; (a||[]).forEach(e => { const s = stable(e); cnt[s] = (cnt[s]||0)+1; m.set(s+'#'+cnt[s], e); }); return m; };
+    const mb = idOf(b), ml = idOf(l), mc = idOf(c);
+    const keys = [...new Set([...mc.keys(), ...ml.keys()])];
+    let out = [];
+    for(const key of keys){
+      const li = ml.get(key), ci = mc.get(key);
+      if(li && ci) out.push(ci);
+      else if(li) out.push(li);                       // nouveau ici (ou jamais supprimé par erreur)
+      else if(!mb.has(key)) out.push(ci);             // nouveau ailleurs
+      // sinon : supprimé ici -> on ne le remet pas
+    }
+    const kk = e => String(e && e.date || '')+' '+String(e && e.time || '');
+    out = out.map((e,i) => [e,i]).sort((x,y) => { const a = kk(x[0]), b2 = kk(y[0]); return a < b2 ? -1 : a > b2 ? 1 : x[1]-y[1]; }).map(x => x[0]);
+    if(k === 'stockHistory' && out.length > 500) out = out.slice(-500);
+    return out;
+  }
+
+  function repairCounters(o){
+    for(const [par, name, list] of COUNTERS){
+      const arr = o[list];
+      if(!Array.isArray(arr) || !arr.length) continue;
+      const mx = arr.reduce((m, x) => Math.max(m, isObj(x) ? (Number(x.id)||0) : 0), 0);
+      const holder = par ? (o[par] || (o[par] = {})) : o;
+      holder[name] = Math.max(Number(holder[name])||0, mx+1);
+    }
+  }
+  // Deux fiches avec le même numéro (créées sur 2 appareils hors ligne) : la plus récente reçoit un nouveau numéro
+  function dedupeIds(o){
+    for(const [par, name, list] of COUNTERS){
+      if(list === 'caisseHistory' || list === 'products') continue;
+      const arr = o[list]; if(!Array.isArray(arr)) continue;
+      const g = new Map();
+      arr.forEach(x => { if(isObj(x) && typeof x.id === 'number'){ (g.get(x.id) || g.set(x.id, []).get(x.id)).push(x); } });
+      const holder = par ? (o[par] || (o[par] = {})) : o;
+      for(const [, grp] of g){
+        if(grp.length < 2) continue;
+        grp.sort((a,b2) => ((a._m||0)-(b2._m||0)) || String(a._uid).localeCompare(String(b2._uid)));
+        for(let i = 1; i < grp.length; i++){ grp[i].id = Number(holder[name]) || 1; holder[name] = grp[i].id + 1; }
+      }
+    }
+  }
+
+  function mergeDb(B, L, C, opts){
+    opts = opts || {};
+    L = clone(L); C = clone(C); ensureUids(L, false); ensureUids(C, true);
+    const out = {}, delL = L._del || {}, delC = C._del || {};
+    const keys = new Set([...Object.keys(L), ...Object.keys(C)]);
+    for(const k of keys){
+      if(META[k]) continue;
+      const l = L[k], c = C[k], b = B ? B[k] : undefined;
+      let v;
+      if(LOG_KEYS.includes(k)) v = mergeLog(k, b, l, c);
+      else if(isKeyedList(k, l) || isKeyedList(k, c)) v = mergeKeyed(k, b, l || [], c || [], delL, delC);
+      else {
+        const tl = (L._tm && L._tm[k]) || 0, tc = (C._tm && C._tm[k]) || 0;
+        v = mergeValue(b, l, c, tl > tc ? 'L' : 'C', [k]);
+      }
+      if(v !== undefined) out[k] = v;
+    }
+    out._del = Object.assign({}, delC, delL);
+    for(const key of Object.keys(delC)) out._del[key] = Math.max(delC[key]||0, delL[key]||0);
+    out._tm = Object.assign({}, C._tm || {}, L._tm || {});
+    for(const key of Object.keys(out._tm)) out._tm[key] = Math.max((C._tm||{})[key]||0, (L._tm||{})[key]||0);
+    const now = Date.now();
+    for(const key of Object.keys(out._del)) if(now - out._del[key] > TOMB_MAX_AGE) delete out._del[key];
+    dedupeIds(out);
+    repairCounters(out);
+    normalizeTickets(out);
+    // garde-fou : jamais de disparition massive sans accord explicite
+    const issues = [];
+    for(const k of Object.keys(out)){
+      if(!Array.isArray(out[k])) continue;
+      const nl = Array.isArray(L[k]) ? L[k].length : 0, nc = Array.isArray(C[k]) ? C[k].length : 0, mx = Math.max(nl, nc);
+      if(mx >= 10 && out[k].length < mx*0.8 && !(opts.allowShrink && (opts.allowShrink === true || opts.allowShrink[k]))) issues.push({key:k, from:mx, to:out[k].length});
+    }
+    if(issues.length){ const e = new Error('GARDE_FOU'); e.guard = issues; throw e; }
+    return out;
+  }
+
+  // Numéros de tickets : jamais deux fois le même. Avant 2027 : numéro libre suivant. Dès 2027 : même numéro + lettre (217B).
+  function normalizeTickets(d){
+    const arr = d.caisseHistory; if(!Array.isArray(arr)) return 0;
+    const parse = t => { const m = String(t.id == null ? '' : t.id).match(/^(\d+)([A-Z]*)$/); return m ? {n:+m[1], s:m[2]} : null; };
+    const sk = t => String(t.date||'')+' '+String(t.time||'')+' '+String(t._uid||'');
+    let maxN = Math.max(0, ((d.nextId && Number(d.nextId.caisseHistory)) || 1) - 1);
+    const used = new Set();
+    arr.forEach(t => { const p = parse(t); if(p){ if(p.n > maxN) maxN = p.n; used.add(String(t.id)); } });
+    const groups = new Map(), todo = [];
+    arr.forEach(t => {
+      const p = parse(t);
+      if(!p || p.n === 0){ todo.push(t); return; }
+      const key = String(t.id);
+      (groups.get(key) || groups.set(key, []).get(key)).push(t);
+    });
+    for(const [, grp] of groups){
+      if(grp.length < 2) continue;
+      grp.sort((a,b) => sk(a) < sk(b) ? -1 : 1);
+      for(let i = 1; i < grp.length; i++) todo.push(grp[i]);
+    }
+    if(!todo.length) return 0;
+    todo.sort((a,b) => sk(a) < sk(b) ? -1 : sk(a) > sk(b) ? 1 : 0);
+    const letters = n => { let s = ''; n++; while(n > 0){ const r = (n-1) % 26; s = String.fromCharCode(65+r)+s; n = Math.floor((n-1)/26); } return s; };
+    for(const t of todo){
+      const p = parse(t);
+      if(p && p.n > 0 && String(t.date||'') >= '2027-01-01'){
+        let i = 1, cand;
+        do { cand = p.n + letters(i++); } while(used.has(cand));
+        t.id = cand; used.add(cand);
+      } else {
+        t.id = ++maxN; used.add(String(t.id));
+      }
+    }
+    if(!d.nextId) d.nextId = {};
+    d.nextId.caisseHistory = Math.max(Number(d.nextId.caisseHistory)||0, maxN+1);
+    return todo.length;
+  }
+
+  // Résumé "ce que la fusion a changé" entre deux versions
+  function diffStats(a, b){
+    const st = {added:0, updated:0, removed:0};
+    for(const k of Object.keys(b)){
+      if(META[k] || !isKeyedList(k, b[k])) continue;
+      const ma = new Map((a[k]||[]).filter(isObj).map(x => [x._uid, h(stable(x))]));
+      const mb = new Map(b[k].filter(isObj).map(x => [x._uid, h(stable(x))]));
+      mb.forEach((hh,u) => { if(!ma.has(u)) st.added++; else if(ma.get(u) !== hh) st.updated++; });
+      ma.forEach((hh,u) => { if(!mb.has(u)) st.removed++; });
+    }
+    return st;
+  }
+  // Nombre de modifications de cet appareil pas encore confirmées par le cloud
+  function countPending(d, base){
+    if(!base) return null;
+    const st = diffStats(base, d);
+    let n = st.added + st.updated + st.removed;
+    for(const k of Object.keys(d)){
+      if(META[k] || LOG_KEYS.includes(k) || isKeyedList(k, d[k]) || /^next/.test(k) || k === 'nextId') continue;
+      if(!eq(d[k], base[k])) n++;
+    }
+    return n;
+  }
+
+  return {stable, h, eq, clone, newUid, isKeyedList, ensureUids, track, resetTrack, mergeDb, mergeValue, normalizeTickets, diffStats, countPending, repairCounters, LOG_KEYS};
+})();
+
+// ===================== SYNCHRO (FSync) : chef d'orchestre =====================
+// Remplace l'ancien "le cloud écrase tout". Ici : on fusionne, on sauvegarde avant, on renvoie en cas d'échec,
+// et on affiche l'état à l'écran.
+const FSync = (function(){
+  'use strict';
+  const C = FSyncCore;
+  const LS_STAMPED = 'fath3d_fsync_stamped', LS_DIRTY = 'fath3d_fsync_dirty', LS_OWNER = 'fath3d_fsync_owner', LS_LOG = 'fath3d_fsync_log', LS_LASTBK = 'fath3d_fsync_lastbk';
+  const RETRY = [5, 15, 60, 120, 300];
+  let attached = false, running = false, queued = false, base = null, status = 'init', info = {};
+  let timer = null, retryN = 0, lastOk = 0, lastCloudHash = '', lastSnapHash = '', pendingRender = false;
+  let syncedHash = '', consec = 0, allowShrink = null, forceDet = false, firstSyncPromise = null, acctChanged = false, pendingCount = null, pendingAt = 0, sizeWarned = false;
+
+  // ---------- petit coffre local (IndexedDB) : photo de la dernière synchro + sauvegardes ----------
+  let _idb = null;
+  function idb(){
+    if(_idb) return _idb;
+    _idb = new Promise((res, rej) => {
+      try {
+        const r = indexedDB.open('fath3d_safety', 1);
+        r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('kv'); d.createObjectStore('backups', {keyPath:'ts'}); };
+        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+      } catch(e){ rej(e); }
+    });
+    return _idb;
+  }
+  async function idbTx(store, mode, fn){
+    const d = await idb();
+    return new Promise((res, rej) => { const t = d.transaction(store, mode); const s = t.objectStore(store); const r = fn(s); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); });
+  }
+  const idbGet = (s,k) => idbTx(s, 'readonly', st => st.get(k));
+  const idbPut = (s,v,k) => idbTx(s, 'readwrite', st => k === undefined ? st.put(v) : st.put(v, k));
+  const idbDel = (s,k) => idbTx(s, 'readwrite', st => st.delete(k));
+  const idbAll = (s) => idbTx(s, 'readonly', st => st.getAll());
+
+  const lsGet = k => { try { return localStorage.getItem(k); } catch(e){ return null; } };
+  const lsSet = (k,v) => { try { localStorage.setItem(k, v); } catch(e){} };
+  const getDirty = () => lsGet(LS_DIRTY) === '1';
+  const setDirty = v => { try { v ? localStorage.setItem(LS_DIRTY, '1') : localStorage.removeItem(LS_DIRTY); } catch(e){} };
+  function logEvt(msg){
+    let l = []; try { l = JSON.parse(lsGet(LS_LOG) || '[]'); } catch(e){}
+    l.push({t: Date.now(), m: msg}); if(l.length > 40) l = l.slice(-40);
+    lsSet(LS_LOG, JSON.stringify(l));
+  }
+
+  async function saveBase(){
+    const uid = window.firebaseUser && window.firebaseUser.uid; if(!uid || !base) return;
+    try { await idbPut('kv', JSON.stringify(base), 'base:'+uid); } catch(e){ console.warn('[FSync] photo non enregistrée', e); }
+  }
+  async function loadBase(){
+    const uid = window.firebaseUser && window.firebaseUser.uid; if(!uid) return null;
+    try { const s = await idbGet('kv', 'base:'+uid); return s ? JSON.parse(s) : null; } catch(e){ return null; }
+  }
+  async function backupNow(reason, force){
+    const last = Number(lsGet(LS_LASTBK)) || 0;
+    if(!force && Date.now() - last < 120000) return;
+    try {
+      const payload = JSON.stringify(db);
+      await idbPut('backups', {ts: Date.now(), reason, size: payload.length, payload});
+      lsSet(LS_LASTBK, String(Date.now()));
+      const all = await idbAll('backups');
+      all.sort((a,b) => b.ts - a.ts);
+      for(const old of all.slice(10)) await idbDel('backups', old.ts);
+    } catch(e){ console.warn('[FSync] sauvegarde locale impossible', e); logEvt('Sauvegarde locale impossible'); }
+  }
+
+  // ---------- état à l'écran ----------
+  function fmtT(ts){ const d = new Date(ts); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+  function setStatus(s, i){ status = s; info = i || {}; updatePill(); }
+  function pending(){
+    const now = Date.now();
+    if(now - pendingAt > 4000){ try { pendingCount = base ? C.countPending(db, base) : null; } catch(e){ pendingCount = null; } pendingAt = now; }
+    return pendingCount;
+  }
+  function pillText(){
+    const n = pending(), nTxt = n === null ? (getDirty() ? 'des modifications' : '') : (n > 0 ? n+' modification'+(n>1?'s':'') : '');
+    const cd = info.retryAt ? Math.max(0, Math.round((info.retryAt - Date.now())/1000)) : 0;
+    switch(status){
+      case 'syncing': return ['sync', '🔄 Synchronisation…'];
+      case 'ok': return getDirty() ? ['sync', '🔄 Envoi en cours…'] : ['ok', '☁️ Synchronisé · '+fmtT(lastOk)+(pendingRender ? ' · ↻ nouveautés' : '')];
+      case 'offline': return ['off', '📴 Hors ligne'+(nTxt ? ' · '+nTxt+' en attente' : '')];
+      case 'error': return ['err', '⚠️ Envoi raté'+(nTxt ? ' · '+nTxt+' en attente' : '')+' · nouvel essai dans '+cd+' s'];
+      case 'blocked': return ['err', '🛑 Fusion bloquée par sécurité'];
+      default: return ['off', '📴 Mode local'+(nTxt ? ' · '+nTxt+' en attente' : '')];
+    }
+  }
+  function buildUi(){
+    if(document.getElementById('fsync-pill')) return;
+    const st = document.createElement('style');
+    st.textContent = '#fsync-pill{position:fixed;right:20px;bottom:76px;z-index:9000;padding:6px 12px;border-radius:16px;font:700 12px "Exo 2",sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35);color:#fff;max-width:92vw}'
+      + '#fsync-pill.ok{background:#1f6f4a}#fsync-pill.sync{background:#2866b8}#fsync-pill.off{background:#b86b00}#fsync-pill.err{background:#b3261e}'
+      + '#fsync-banner{position:fixed;top:0;left:0;right:0;z-index:9500;display:none;background:#b3261e;color:#fff;padding:10px 14px;font:700 13px "Exo 2",sans-serif;align-items:center;gap:10px;flex-wrap:wrap;box-shadow:0 2px 12px rgba(0,0,0,.4)}'
+      + '#fsync-banner button{background:#fff;color:#b3261e;border:0;border-radius:8px;padding:6px 10px;font-weight:800;cursor:pointer}'
+      + '@media(max-width:700px){#fsync-pill{right:10px;bottom:70px;font-size:11px}}';
+    document.head.appendChild(st);
+    const p = document.createElement('div'); p.id = 'fsync-pill'; p.onclick = openPanel; document.body.appendChild(p);
+    const b = document.createElement('div'); b.id = 'fsync-banner'; document.body.appendChild(b);
+  }
+  function updatePill(){
+    const p = document.getElementById('fsync-pill'); if(!p) return;
+    const [cls, txt] = pillText(); p.className = cls; p.textContent = txt;
+    const b = document.getElementById('fsync-banner'); if(!b) return;
+    if(status === 'error'){
+      b.style.display = 'flex';
+      b.innerHTML = '<span>⚠️ Tes dernières modifications ne sont PAS encore dans le cloud (elles restent sur cet appareil). Nouvel essai automatique.</span><button onclick="FSync.syncNowUi()">Réessayer maintenant</button><button onclick="FSync.openPanel()">Détails</button>';
+    } else if(status === 'blocked'){
+      const g = (info.guard || []).map(x => x.key+' : '+x.from+' → '+x.to).join(' ; ');
+      b.style.display = 'flex';
+      b.innerHTML = '<span>🛑 Fusion bloquée : une liste perdrait beaucoup de lignes ('+g+'). Rien n\'a été envoyé.</span><button onclick="FSync.allowShrinkOnce()">C\'est voulu, autoriser</button><button onclick="FSync.openPanel()">Détails</button>';
+    } else b.style.display = 'none';
+  }
+
+  // ---------- étiquetage et suivi à chaque enregistrement ----------
+  function beforeSave(){
+    try { const det = forceDet; forceDet = false; C.ensureUids(db, det); C.track(db, Date.now()); } catch(e){ console.warn('[FSync] suivi', e); }
+  }
+  function afterSave(){
+    // rien de nouveau depuis la dernière synchro réussie (ex. simple réaffichage) : on n'envoie rien
+    try { if(syncedHash && C.h(C.stable(db)) === syncedHash) return; } catch(e){}
+    setDirty(true); pendingAt = 0; updatePill();
+    if(attached) syncSoon(1500, 'save');
+  }
+  function syncSoon(ms, reason){ clearTimeout(timer); timer = setTimeout(() => syncNow(reason), ms); }
+  function scheduleRetry(){
+    const d = RETRY[Math.min(retryN, RETRY.length-1)]; retryN++;
+    info.retryAt = Date.now() + d*1000; updatePill(); syncSoon(d*1000, 'retry');
+  }
+
+  // ---------- fusion ----------
+  async function syncNow(reason){
+    if(!attached) return;
+    if(running){ queued = true; return; }
+    running = true; clearTimeout(timer);
+    setStatus('syncing');
+    let snap = null;
+    try {
+      beforeSave();
+      snap = C.clone(db);
+      const opts = {allowShrink};
+      const res = await window.cloudMergeWrite(cloud => {
+        if(acctChanged) return cloud ? {merged: cloud, write: false} : {merged: snap, write: true};
+        if(!cloud) return {merged: snap, write: true};
+        const merged = C.mergeDb(base, snap, cloud, opts);
+        return {merged, write: C.stable(merged) !== C.stable(cloud)};
+      }, 25000);
+      const merged = res.merged;
+      lastCloudHash = C.h(res.payload || '');
+      if(!C.eq(db, merged) && merged){ await backupNow('avant fusion cloud', true); }
+      else await backupNow('automatique', false);
+      const rep = acctChanged;
+      const stats = applyMerged(snap, merged, rep);
+      acctChanged = false; allowShrink = null;
+      base = C.clone(merged); await saveBase();
+      lastOk = Date.now(); retryN = 0;
+      let n = 0; try { n = C.countPending(db, base) || 0; } catch(e){}
+      setDirty(n > 0); pendingAt = 0;
+      try { syncedHash = n === 0 ? C.h(C.stable(db)) : ''; } catch(e){ syncedHash = ''; }
+      setStatus('ok');
+      if(stats && (stats.added || stats.updated || stats.removed)){
+        const msg = 'Fusion cloud : +'+stats.added+' ajoutée(s), '+stats.updated+' mise(s) à jour, '+stats.removed+' retirée(s)';
+        logEvt(msg); showToast('☁️ '+msg, true);
+        postMerge(); scheduleRender();
+      } else postMerge();
+      if(res.payload && res.payload.length > 850000 && !sizeWarned){ sizeWarned = true; showToast('⚠️ Base proche de la limite du cloud (1 Mo) : fais un export et préviens-moi', false); logEvt('Base proche de la limite de taille'); }
+      if(reason === 'start') logEvt('Première synchro OK');
+      if(n === 0) consec = 0; else if(++consec <= 3) queued = true;
+    } catch(e){
+      if(e && e.guard){ logEvt('Fusion bloquée : '+JSON.stringify(e.guard)); setStatus('blocked', {guard: e.guard}); }
+      else {
+        const off = (typeof navigator !== 'undefined' && navigator.onLine === false) || /offline|unavailable|network|timeout|failed to get/i.test(String(e && (e.code || e.message)));
+        logEvt((off ? 'Hors ligne : ' : 'Échec : ')+String(e && e.message || e));
+        setStatus(off ? 'offline' : 'error', {msg: String(e && e.message || e)});
+        scheduleRetry();
+      }
+    } finally {
+      running = false;
+      if(queued){ queued = false; syncSoon(400, 'queued'); }
+    }
+  }
+  // Applique le résultat de la fusion sur les données en cours (sans perdre ce qui a été saisi pendant l'envoi)
+  function applyMerged(snap, merged, replace){
+    let final;
+    if(replace || C.eq(db, snap)) final = C.clone(merged);
+    else final = C.mergeDb(snap, db, merged, {allowShrink: true});
+    if(C.eq(final, db)) return null;
+    const stats = C.diffStats(db, final);
+    db = final;
+    try { localStorage.setItem(DB_KEY, JSON.stringify(db)); } catch(e){ console.warn('[FSync] stockage local', e); }
+    C.resetTrack(db);
+    return stats;
+  }
+  function postMerge(){
+    let ch = 0;
+    try { ch += C.normalizeTickets(db); } catch(e){ console.warn(e); }
+    try { if(typeof window.fsyncMigrations === 'function' && window.fsyncMigrations()) ch++; } catch(e){ console.warn('[migration]', e); }
+    if(ch) saveData();
+  }
+  function scheduleRender(){
+    const ov = document.getElementById('modal-overlay');
+    const open = !!(ov && ov.classList.contains('open'));
+    const ae = document.activeElement, typing = !!(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName));
+    let selling = false;
+    try { selling = typeof caisseCart !== 'undefined' && Array.isArray(caisseCart) && caisseCart.length > 0 && /caisse/i.test(String(currentPage)); } catch(e){}
+    if(open || typing || selling){ pendingRender = true; updatePill(); return; }
+    pendingRender = false;
+    try { render(currentPage || 'dashboard'); } catch(e){ console.warn(e); }
+    updatePill();
+  }
+  function onCloudSnap(payload, meta){
+    if(meta && meta.fromCache) return;                    // copie du cache du téléphone : on ne s'en sert pas
+    if(payload === undefined || payload === null) return;
+    const hh = C.h(payload);
+    lastSnapHash = hh;
+    if(hh === lastCloudHash) return;                      // c'est l'écho de notre propre envoi
+    if(running) { queued = true; return; }
+    syncSoon(250, 'cloud');
+  }
+
+  // ---------- démarrage ----------
+  function init(){
+    try {
+      const det = forceDet || lsGet(LS_STAMPED) !== '1';
+      C.ensureUids(db, det); forceDet = false;
+      lsSet(LS_STAMPED, '1');
+      C.track(db, Date.now());
+    } catch(e){ console.warn('[FSync] init', e); }
+    const go = () => { buildUi(); updatePill(); };
+    if(document.body) go(); else document.addEventListener('DOMContentLoaded', go);
+    window.addEventListener('online', () => { if(attached) syncSoon(300, 'online'); updatePill(); });
+    window.addEventListener('offline', updatePill);
+    document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && attached && (getDirty() || status !== 'ok')) syncSoon(500, 'visible'); });
+    document.addEventListener('firebase-ready', () => attach());
+    document.addEventListener('firebase-signed-out', detach);
+    setInterval(() => {
+      if(attached && !running && (getDirty() || status === 'error' || status === 'offline')) syncSoon(0, 'heartbeat');
+      updatePill();
+    }, 30000);
+    setInterval(() => { if(status === 'error') updatePill(); if(pendingRender) scheduleRender(); }, 3000);
+  }
+  function attach(){
+    if(attached) return firstSyncPromise;
+    if(!window.firebaseReady || !window.cloudMergeWrite) return null;
+    attached = true;
+    firstSyncPromise = (async () => {
+      const uid = window.firebaseUser && window.firebaseUser.uid;
+      const owner = lsGet(LS_OWNER);
+      acctChanged = !!(owner && uid && owner !== uid);
+      if(uid) lsSet(LS_OWNER, uid);
+      base = await loadBase();
+      if(acctChanged){ await backupNow('avant changement de compte', true); base = null; logEvt('Autre compte Google détecté : données locales non envoyées'); }
+      try { window.cloudSubscribe(onCloudSnap); } catch(e){ console.warn(e); }
+      await syncNow('start');
+    })();
+    return firstSyncPromise;
+  }
+  function detach(){
+    attached = false; firstSyncPromise = null;
+    try { window.cloudUnsubscribe && window.cloudUnsubscribe(); } catch(e){}
+    setStatus('init'); updatePill();
+  }
+  async function start(ms){
+    const p = attach();
+    if(!p){ setStatus('local'); return; }
+    await Promise.race([p.catch(() => {}), new Promise(r => setTimeout(r, ms || 8000))]);
+  }
+  function afterStart(){ postMerge(); updatePill(); }
+
+  // ---------- actions visibles ----------
+  function syncNowUi(){ retryN = 0; syncNow('manuel'); }
+  function allowShrinkOnce(){ allowShrink = true; syncNow('autorisé'); }
+  async function openPanel(){
+    let bks = []; try { bks = (await idbAll('backups')).sort((a,b) => b.ts - a.ts); } catch(e){}
+    let lg = []; try { lg = JSON.parse(lsGet(LS_LOG) || '[]').reverse().slice(0, 12); } catch(e){}
+    const n = pending();
+    const [, txt] = pillText();
+    openModal('<div class="modal-title">☁️ Synchronisation</div>'
+      + '<div style="padding:10px;background:var(--bg);border-radius:8px;margin-bottom:10px;font-size:13px;"><b>'+txt+'</b><br><span style="color:var(--muted);font-size:12px;">Modifications en attente d\'envoi : '+(n === null ? '?' : n)+'</span></div>'
+      + '<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" onclick="FSync.syncNowUi();closeModal()">Synchroniser maintenant</button>'+(pendingRender ? '<button class="btn btn-secondary btn-sm" onclick="closeModal();FSync.renderNow()">↻ Afficher les nouveautés</button>' : '')+'</div>'
+      + '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:4px;">Sauvegardes sur cet appareil</div>'
+      + (bks.length ? bks.map(b => '<div style="display:flex;gap:6px;align-items:center;font-size:12px;padding:4px 0;border-bottom:1px solid var(--border);"><span style="flex:1;">'+new Date(b.ts).toLocaleString('fr-FR')+' · '+b.reason+' · '+Math.round(b.size/1024)+' Ko</span><button class="btn btn-secondary btn-sm" onclick="FSync.downloadBackup('+b.ts+')">⬇️</button><button class="btn btn-secondary btn-sm" onclick="FSync.restoreBackup('+b.ts+')">Restaurer</button></div>').join('') : '<div style="font-size:12px;color:var(--muted);">Aucune pour le moment</div>')
+      + '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin:12px 0 4px;">Journal</div>'
+      + (lg.length ? lg.map(x => '<div style="font-size:11px;color:var(--muted);">'+fmtT(x.t)+' — '+String(x.m).replace(/</g,'&lt;')+'</div>').join('') : '<div style="font-size:12px;color:var(--muted);">Vide</div>')
+      + '<div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');
+  }
+  function renderNow(){ pendingRender = false; try { render(currentPage || 'dashboard'); } catch(e){} updatePill(); }
+  async function downloadBackup(ts){
+    const b = await idbGet('backups', ts); if(!b) return;
+    const blob = new Blob([b.payload], {type: 'application/json'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'FATH3D_sauvegarde_'+new Date(ts).toISOString().slice(0,16).replace(/[:T]/g,'-')+'.json';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+  async function restoreBackup(ts){
+    const b = await idbGet('backups', ts); if(!b) return;
+    if(!confirm('Restaurer la sauvegarde du '+new Date(ts).toLocaleString('fr-FR')+' ?\nCela remplacera les données de cet appareil ET, à la prochaine synchro, celles du cloud.')) return;
+    await backupNow('avant restauration', true);
+    db = JSON.parse(b.payload); allowShrink = true;
+    saveData(); closeModal(); render(currentPage || 'dashboard'); showToast('Sauvegarde restaurée', true);
+  }
+  function markImport(){ forceDet = true; allowShrink = true; }
+
+  init();
+  const api = {start, afterStart, attach, detach, beforeSave, afterSave, syncNow, syncNowUi, allowShrinkOnce, openPanel, renderNow, downloadBackup, restoreBackup, markImport, postMerge,
+    _state: () => ({status, attached, running, base, dirty: getDirty(), info}), _core: C};
+  window.FSync = api;
+  return api;
+})();
+
+// ===================== CORRECTIFS DU 18/11 (tickets, réservation, Video Gamers, loyer, URSSAF) =====================
+// --- tickets : on retrouve un ticket par son identifiant caché, jamais par le numéro affiché ---
+function tkRef(h){
+  if(!h._uid){ try { if(window.FSync) FSync.beforeSave(); } catch(e){} }
+  return h._uid || h.id;
+}
+function ticketByRef(ref){
+  const H = db.caisseHistory || [];
+  return H.find(t => t._uid === ref) || H.find(t => t._uid === undefined && String(t.id) === String(ref)) || null;
+}
+
+// --- URSSAF : échéance affichée (le 15 du mois suivant ; décembre -> janvier de l'année suivante) ---
+function urssafEchTxt(i, y){
+  const m = i < 11 ? i + 2 : 1, yy = (i < 11 ? y : y + 1) % 100;
+  return '15/' + String(m).padStart(2,'0') + '/' + String(yy).padStart(2,'0');
+}
+
+// --- Récap Boutiques : loyer du mois (somme des boutiques actives, selon « Réglages boutiques ») ---
+function recapAnnee(){ return Number(window.managerRecapYear || new Date().getFullYear()); }
+function recapYM(m){ return moisYM(recapAnnee(), m); }
+function loyerMois(m){
+  const ym = recapYM(m);
+  const ids = ['boutB'].concat(boutiquesExtra().map(b => b.id));
+  return moneyB(ids.reduce((s, id) => s + boutiqueLoyer(id, ym), 0));
+}
+
+// --- Video Gamers : la vente d'un produit du catalogue fait baisser le stock Video Gamers ---
+function vgBoutiqueId(){ return (typeof boutiqueExtraNom_id_VG === 'function') ? boutiqueExtraNom_id_VG() : ''; }
+function vgEsc(s){ return String(s == null ? '' : s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+function vgMove(pid, delta, reason){
+  const p = (db.products || []).find(x => x.id === pid);
+  if(!p) return;
+  if(!p.stocks) p.stocks = {};
+  const avant = Number(p.stocks.videoGamers) || 0, apres = Math.max(0, avant + delta);
+  if(apres === avant) return;
+  p.stocks.videoGamers = apres;
+  logStockChange(p.id, p.name, 'videoGamers', avant, apres, reason);
+}
+function vgRefreshPicker(p, boutique){
+  const wrap = document.getElementById(p + '-vgprod-wrap'), sel = document.getElementById(p + '-vgprod');
+  if(!wrap || !sel) return;
+  if(!boutique || boutique !== vgBoutiqueId()){ wrap.style.display = 'none'; sel.innerHTML = ''; sel.dataset.ready = ''; return; }
+  if(!sel.dataset.ready){
+    const cur = sel.dataset.init || '';
+    const list = (db.products || []).filter(x => (x.stocks && Number(x.stocks.videoGamers) > 0) || String(x.id) === String(cur))
+      .sort((a,b) => (a.categorie||'').localeCompare(b.categorie||'') || (a.name||'').localeCompare(b.name||''));
+    sel.innerHTML = '<option value="">— Saisie libre (sans suivi de stock) —</option>'
+      + list.map(x => '<option value="'+x.id+'">'+vgEsc(x.name)+' · '+vgEsc(x.categorie)+' · stock VG : '+(Number(x.stocks && x.stocks.videoGamers)||0)+'</option>').join('');
+    sel.value = cur; sel.dataset.ready = '1';
+  }
+  wrap.style.display = '';
+}
+function vgPickProduct(p){
+  const sel = document.getElementById(p + '-vgprod'); if(!sel) return;
+  const prod = (db.products || []).find(x => String(x.id) === String(sel.value));
+  if(!prod) return;
+  const t = (typeof TRANSFERT_VG !== 'undefined') ? TRANSFERT_VG.find(x => x.id === prod.id) : null;
+  const map = {'Figurine':'figurine','Flexible':'articule','Lampes':'lampe','Porte clefs':'portecle'};
+  const rub = t ? t.rub : (map[prod.categorie] || '');
+  const prix = t ? t.prix : (Number(prod.price) || 0);
+  document.getElementById(p + '-produit').value = String(prod.name || '').toUpperCase();
+  document.getElementById(p + '-prix').value = prix;
+  const rs = document.getElementById(p + '-rubrique');
+  if(rs && rub && [...rs.options].some(o => o.value === rub)) rs.value = rub;
+  boutiqueFormChange(p);
+}
+// Nouvelle vente : retire du stock Video Gamers (avec ligne d'historique). Retourne {done} ou null si annulé.
+function vgApplySale(pid, qty, label){
+  const p = (db.products || []).find(x => x.id === pid);
+  if(!p){ showToast('Produit introuvable', false); return null; }
+  const stock = Number(p.stocks && p.stocks.videoGamers) || 0;
+  if(qty > stock && !confirm('Stock Video Gamers insuffisant pour ' + p.name + ' : ' + stock + ' en stock pour ' + qty + ' vendu(s).\nVendre quand même ? Le stock restera à 0.')) return null;
+  const done = Math.min(qty, stock);
+  vgMove(pid, -done, 'Vente Video Gamers — ' + label);
+  return {done};
+}
+// Modification d'une ligne : remet l'ancien stock puis applique le nouveau. false = annulé.
+function vgEdit(v, newPid, newQty, label){
+  const prevPid = v.productId || 0, prevQty = Number(v.stockQty) || 0;
+  const np = newPid ? (db.products || []).find(x => x.id === newPid) : null;
+  if(newPid && !np){ showToast('Produit introuvable', false); return false; }
+  if(np){
+    const avail = (Number(np.stocks && np.stocks.videoGamers) || 0) + (prevPid === newPid ? prevQty : 0);
+    if(newQty > avail && !confirm('Stock Video Gamers insuffisant pour ' + np.name + ' : ' + avail + ' disponible(s) pour ' + newQty + ' vendu(s).\nVendre quand même ? Le stock restera à 0.')) return false;
+  }
+  if(prevPid && prevQty) vgMove(prevPid, prevQty, 'Vente Video Gamers corrigée (ancien stock remis)');
+  if(np){
+    const stock = Number(np.stocks && np.stocks.videoGamers) || 0, done = Math.min(newQty, stock);
+    vgMove(newPid, -done, 'Vente Video Gamers — ' + label);
+    v.productId = newPid; v.stockQty = done;
+  } else { delete v.productId; delete v.stockQty; }
+  return true;
+}
+// Boutons −/+ : ajuste le stock du même nombre
+function vgAdj(v, oldQty, newQty){
+  if(!v.productId) return true;
+  const d = newQty - oldQty;
+  if(d > 0){
+    const p = (db.products || []).find(x => x.id === v.productId); if(!p) return true;
+    const stock = Number(p.stocks && p.stocks.videoGamers) || 0;
+    if(d > stock && !confirm('Stock Video Gamers insuffisant pour ' + p.name + ' (' + stock + ' en stock). Vendre quand même ?')) return false;
+    const m = Math.min(d, stock);
+    vgMove(p.id, -m, 'Vente Video Gamers (+' + d + ')');
+    v.stockQty = (Number(v.stockQty) || 0) + m;
+  } else if(d < 0){
+    const had = Number(v.stockQty) || 0, keep = Math.min(had, newQty), back = had - keep;   // on ne remet que ce qui avait vraiment été retiré
+    if(back > 0) vgMove(v.productId, back, 'Vente Video Gamers corrigée (−' + (-d) + ')');
+    v.stockQty = keep;
+  }
+  return true;
+}
+function vgRestoreLine(v){
+  if(v && v.productId && Number(v.stockQty) > 0) vgMove(v.productId, Number(v.stockQty), 'Vente Video Gamers supprimée (stock remis)');
+}
+
+// --- Réparations de données (une seule fois, chaque morceau seulement si les données correspondent exactement) ---
+window.fsyncMigrations = function(){
+  if(!db) return false;
+  if(!db.migrFix1118 || typeof db.migrFix1118 !== 'object') db.migrFix1118 = {};
+  const M = db.migrFix1118;
+  let changed = false;
+  try { if(FSyncCore.normalizeTickets(db) > 0) changed = true; } catch(e){ console.warn(e); }
+  const H = db.caisseHistory || [];
+  const stampTxt = 'migration du 18/11/2026';
+  const addNote = (t, txt) => { t.corrections = (t.corrections || []).concat(txt + ' · ' + stampTxt); };
+
+  // 1) Marché de St Rambert : 4 tickets du 24/05 -> 23/05, répartis 368 € espèces / 395 € carte
+  if(!M.stRambert){
+    const may24 = H.filter(t => t.date === '2026-05-24'), may23 = H.filter(t => t.date === '2026-05-23');
+    const vm = (db.ventesMarche || []).find(v => v.date === '2026-05-23' && Number(v.totalEsp) === 368 && Number(v.totalCb) === 395);
+    const tot = may24.reduce((s,t) => s + (Number(t.total) || 0), 0);
+    if(may24.length === 4 && !may23.length && Math.abs(tot - 763) < 0.01 && vm && may24.every(t => t.payment === 'ESP')){
+      const by = a => may24.find(t => Math.abs((Number(t.total)||0) - a) < 0.01);
+      const t40 = by(40), t283 = by(283), t95 = by(95), t345 = by(345);
+      const oiseaux = t95 && (t95.items || []).find(i => /OISEAUX VOLANT/i.test(i.name) && i.qty * i.price === 10);
+      const oeuf = t95 && (t95.items || []).find(i => /OEUF ANTI STRESS/i.test(i.name) && i.qty * i.price === 85);
+      if(t40 && t283 && t345 && oiseaux && oeuf && t95.items.length === 2){
+        const nt = {id: db.nextId.caisseHistory++, _uid: 'mig1118:split-strambert', date: '2026-05-23', time: t95.time, items: [oiseaux], total: 10, payment: 'CB', _saisieGroupee: true, _marche: ''};
+        addNote(nt, 'Ticket scindé (OISEAUX VOLANT payé par carte), date 24/05 → 23/05, marché St Rambert');
+        t95.items = [oeuf]; t95.total = 85;
+        addNote(t95, 'Ticket scindé (OEUF ANTI STRESS reste en espèces), date 24/05 → 23/05, marché St Rambert');
+        [t40, t345].forEach(t => { t.payment = 'CB'; });
+        [t40, t283, t95, t345].forEach(t => { t.date = '2026-05-23'; });
+        addNote(t40, 'Date 24/05 → 23/05 (marché St Rambert), paiement carte');
+        addNote(t283, 'Date 24/05 → 23/05 (marché St Rambert), espèces');
+        addNote(t345, 'Date 24/05 → 23/05 (marché St Rambert), paiement carte');
+        db.caisseHistory.splice(db.caisseHistory.indexOf(t95) + 1, 0, nt);
+        M.stRambert = Date.now(); changed = true;
+      }
+    }
+  }
+  // 2) Réservation n°1 (Johanna) : même commande que l'acompte déjà payé -> livrée, sans argent ni stock en plus
+  if(!M.johanna){
+    const r = (db.reservations || []).find(x => x.id === 1 && !x.livre && /johanna/i.test(x.nom || '') && Number(x.total) === 45);
+    const a = (db.acomptes || []).find(x => x.id === 1 && x.livre && /johanna/i.test(x.nom || '') && Number(x.total) === 45);
+    const okAc = H.some(t => t.acompteId === 1 && Number(t.total) === 15), okSolde = H.some(t => t.acompteSolde === 1 && Number(t.total) === 30);
+    if(r && a && okAc && okSolde){
+      r.livre = true; r.dateLivraisonReelle = a.dateLivraisonReelle || '2026-06-12'; r.modeSolde = a.modeSolde || 'ESP';
+      r.payeeParAcompte = 1;
+      r.noteLivraison = 'Déjà payée : acompte n°1 (15 € le 05/06) + solde (30 € le 12/06). Aucun encaissement ni mouvement de stock ajouté.';
+      M.johanna = Date.now(); changed = true;
+    }
+  }
+  // 3) Tickets « à détailler » depuis le 14/06 : classés (stock non touché)
+  if(!M.classes){
+    const ids = [94,104,121,132,133,187,195,212,213,218,222,223,231,237,239,266,269,270,274];
+    const found = ids.map(i => H.find(t => t.id === i && t.date >= '2026-06-14' && t.date <= '2026-11-18'));
+    if(found.every(Boolean)){
+      found.forEach(t => { if(!t.detailClasse && typeof _ticketADetailler === 'function' && _ticketADetailler(t)){ t.detailClasse = true; } });
+      M.classes = Date.now(); changed = true;
+    }
+  }
+  return changed;
+};
+
 // ===================== INIT =====================
 localStorage.removeItem('fath3d_nav');
 
-// Try to load from Firebase first, fallback to localStorage
+// Démarrage : la synchro FUSIONNE le cloud avec cet appareil (jamais de remplacement complet)
 async function initApp() {
   // 🛡️ Anti double-déclenchement (event + timeout)
   if(window._appStarted) return;
   window._appStarted = true;
-
-  let cloudData = null;
-  if(window.firebaseReady && window.loadFromFirebase) {
-    try {
-      showToast('🔄 Synchronisation en cours...', true);
-      cloudData = await window.loadFromFirebase();
-    } catch(e) {}
-  }
-  
-  if(cloudData) {
-    db = cloudData;
-    localStorage.setItem(DB_KEY, JSON.stringify(db));
-    showToast('☁️ Données synchronisées depuis le cloud !', true);
-  }
-  
-  // 🛡️ Marqueur : Firebase a fini son chargement initial
-  // À partir de maintenant, les saveData() peuvent pousser vers Firebase
+  if(window.firebaseReady) showToast('🔄 Synchronisation en cours...', true);
+  try { await FSync.start(8000); } catch(e) { console.warn('[SAVE] synchro au démarrage', e); }
   firebaseDataLoaded = true;
-  console.log('[SAVE] Firebase chargé, sauvegardes activées');
-  
   buildNav();
   navigate('dashboard');
-  
-  // Start real-time sync
-  if(window.startFirebaseSync) {
-    window.startFirebaseSync((cloudDb) => {
-      db = cloudDb;
-      localStorage.setItem(DB_KEY, JSON.stringify(db));
-      // Re-render current page
-      const page = document.getElementById('page-title')?.textContent;
-      showToast('🔄 Données mises à jour en temps réel', true);
-      setTimeout(() => navigate(Object.keys(pageTitles).find(k=>pageTitles[k]===page)||'dashboard'), 500);
-    });
-  }
+  try { FSync.afterStart(); } catch(e) { console.warn(e); }
 }
 
 // Wait for Firebase or start immediately
@@ -15921,42 +16669,12 @@ if(window.firebaseReady) {
   initApp();
 } else {
   document.addEventListener('firebase-ready', initApp);
-  // Fallback si Firebase prend trop de temps (mode offline ou pas connecté)
-  // Timeout étendu à 15s pour laisser Firebase le temps de se connecter
+  // Connexion lente / hors ligne : on démarre avec les données de cet appareil.
+  // Quand Firebase répond plus tard, FSync fusionne tout seul (rien n'est écrasé).
   setTimeout(() => {
     if(!window._appStarted) {
-      console.log('[SAVE] Firebase timeout → mode local activé (Firebase tentera de se reconnecter en arrière-plan)');
       showToast('⚠️ Connexion lente - démarrage en mode local', false);
       initApp();
-      
-      // 🔄 Si Firebase se connecte APRÈS le timeout, on relance la synchro
-      // pour récupérer les données cloud les plus récentes
-      document.addEventListener('firebase-ready', async () => {
-        if(window._appStarted && window.loadFromFirebase) {
-          console.log('[SAVE] Firebase reconnecté après timeout → resynchronisation');
-          try {
-            const cloudData = await window.loadFromFirebase();
-            if(cloudData) {
-              db = cloudData;
-              localStorage.setItem(DB_KEY, JSON.stringify(db));
-              showToast('☁️ Synchronisation cloud rétablie', true);
-              navigate(currentPage || 'dashboard');
-              
-              // Relancer aussi l'écoute temps réel
-              if(window.startFirebaseSync) {
-                window.startFirebaseSync((cloudDb) => {
-                  db = cloudDb;
-                  localStorage.setItem(DB_KEY, JSON.stringify(db));
-                  showToast('🔄 Données mises à jour en temps réel', true);
-                  setTimeout(() => navigate(currentPage || 'dashboard'), 500);
-                });
-              }
-            }
-          } catch(e) {
-            console.warn('Resync error:', e);
-          }
-        }
-      }, { once: true });
     }
   }, 15000);
 }
@@ -19161,6 +19879,7 @@ function applyImport() {
     while(keys.length > 3) localStorage.removeItem(keys.shift());
     console.log('[BACKUP] Sauvegarde creee avant import');
   } catch(e) { console.warn('[BACKUP] Echec backup avant import:', e); }
+  if(window.FSync) FSync.markImport();
   db = _pendingImport;
   _pendingImport = null;
   if(keepStock){ (db.products||[]).forEach(p=>{ if(p && curStock[p.id]!==undefined) p.stocks=curStock[p.id]; }); }
@@ -19594,7 +20313,7 @@ body.solaire :is(input,select,textarea,button):focus-visible{outline:3px solid #
   window.previewBoutiqueSync=function(){const g=migrationGroup(),rows=groupRows(g,true),existing=validGroup(g)?conflicts(g,rows):[];document.getElementById('sync-preview').textContent=!validGroup(g)?'Année invalide':`${rows.length} détails — ${recapBrut(g)?'brut':'net'} ${recapMontant(g,rows).toFixed(2)} € — date proposée ${dateFor(g)}. `+(existing.length?`${existing.length} vente(s) historique(s) possible(s) : création bloquée. ${existing.map(s=>s.date+' : '+money(s.total).toFixed(2)+' €').join(' ; ')}`:'Aucune vente correspondante détectée.');document.getElementById('sync-create').disabled=!validGroup(g)||!rows.length||existing.length>0||(db.recapProtectedKeys||[]).includes(groupKey(g));};
   window.protectBoutiqueHistory=function(){const g=migrationGroup();if(!validGroup(g))return;if(!db.recapProtectedKeys)db.recapProtectedKeys=[];if(!db.recapProtectedKeys.includes(groupKey(g)))db.recapProtectedKeys.push(groupKey(g));saveData();closeModal();render('boutiques');showToast('Historique préservé : aucune ligne ajoutée ni modifiée',true);};
   window.confirmBoutiqueFirstSync=function(){const g=migrationGroup(),rows=groupRows(g,true);if(!validGroup(g)||!rows.length||conflicts(g,rows).length||(db.recapProtectedKeys||[]).includes(groupKey(g)))return;if(!confirm(`Confirmer que ${g.mois} ${g.annee} n’est pas déjà comptabilisé ? Une ligne de ${recapMontant(g,rows).toFixed(2)} € (${recapBrut(g)?'brut':'net'}) sera créée le ${dateFor(g)}.`))return;rows.forEach(v=>{v.annee=g.annee;v.recapEligible=true;});saveData();closeModal();render('boutiques');showToast('Récapitulatif synchronisé',true);};
-  const baseRenderBoutiques=renderBoutiques;window.renderBoutiques=function(el,actions){baseRenderBoutiques(el,actions);{const fc=el.querySelector('.card');const h=htmlLoyerReste(Number(window.managerRecapYear)||new Date().getFullYear());if(fc)fc.insertAdjacentHTML('beforebegin',h);else el.insertAdjacentHTML('beforeend',h);}actions.insertAdjacentHTML('beforeend',' <button class="btn btn-secondary btn-sm" onclick="openBoutiqueFirstSync()">Première synchronisation</button> <button class="btn btn-secondary btn-sm" onclick="openNouvelleBoutique()">+ Nouvelle boutique</button> <button class="btn btn-secondary btn-sm" onclick="openReglagesBoutiques()">⚙️ Réglages boutiques</button> <button class="btn btn-secondary btn-sm" onclick="openTransfertVG()">📦 Transfert Marché → Video Gamers</button>');const year=document.createElement('input');year.type='number';year.min=2020;year.max=2100;year.className='form-input';year.style.width='110px';year.value=window.managerRecapYear||new Date().getFullYear();year.setAttribute('aria-label','Année du récap');year.onchange=()=>{if(year.checkValidity()){window.managerRecapYear=Number(year.value);render('boutiques');}};actions.appendChild(year);const p=document.createElement('p');p.textContent='Les nouveaux détails créent une ligne AUTO au brut (prix payé par le client, commission comprise). Les anciens détails nécessitent la première synchronisation. Une vente historique possible bloque la création pour éviter un doublon.';el.prepend(p);};
+  const baseRenderBoutiques=renderBoutiques;window.renderBoutiques=function(el,actions){baseRenderBoutiques(el,actions);actions.insertAdjacentHTML('beforeend',' <button class="btn btn-secondary btn-sm" onclick="openBoutiqueFirstSync()">Première synchronisation</button> <button class="btn btn-secondary btn-sm" onclick="openNouvelleBoutique()">+ Nouvelle boutique</button> <button class="btn btn-secondary btn-sm" onclick="openReglagesBoutiques()">⚙️ Réglages boutiques</button> <button class="btn btn-secondary btn-sm" onclick="openTransfertVG()">📦 Transfert Marché → Video Gamers</button>');const year=document.createElement('input');year.type='number';year.min=2020;year.max=2100;year.className='form-input';year.style.width='110px';year.value=window.managerRecapYear||new Date().getFullYear();year.setAttribute('aria-label','Année du récap');year.onchange=()=>{if(year.checkValidity()){window.managerRecapYear=Number(year.value);render('boutiques');}};actions.appendChild(year);const p=document.createElement('p');p.textContent='Les nouveaux détails créent une ligne AUTO au brut (prix payé par le client, commission comprise). Les anciens détails nécessitent la première synchronisation. Une vente historique possible bloque la création pour éviter un doublon.';el.prepend(p);};
   function addYear(prefix,year){const div=document.createElement('div');div.className='form-group';div.innerHTML=`<label class="form-label" for="${prefix}-year">Année du récap</label><input class="form-input" id="${prefix}-year" type="number" min="2020" max="2100" value="${year||''}" oninput="boutiqueFormChange('${prefix}')" required>`;document.querySelector('#modal-content .modal-actions').before(div);}
   const baseOpenAdd=openAddBoutiqueVente;window.openAddBoutiqueVente=function(){baseOpenAdd();addYear('bv',window.managerRecapYear||new Date().getFullYear());};
   const baseOpenEdit=openEditBoutiqueVente;window.openEditBoutiqueVente=function(id){baseOpenEdit(id);addYear('bve',(db.boutiquesVentes||[]).find(v=>v.id===id)?.annee);};
