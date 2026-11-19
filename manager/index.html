@@ -457,6 +457,21 @@ if ('serviceWorker' in navigator) {
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     padding: 12px; cursor: pointer; transition: all .15s; text-align: center;
   }
+  /* Caisse marché — tablette 10 pouces (tactile, 769–1400 px) : tuiles environ deux fois plus grandes */
+  @media (min-width: 769px) and (max-width: 1400px) and (pointer: coarse) {
+    .pc-grid-cat { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)) !important; gap: 12px !important; }
+    .pc-grid-prod { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)) !important; gap: 16px !important; }
+    .pc-grid-cat > div { padding: 20px 12px !important; border-radius: 14px !important; }
+    .pc-grid-prod > div { padding: 24px !important; border-radius: 14px !important; }
+    .pc-grid-cat > div > div:nth-child(1) { font-size: 40px !important; margin-bottom: 8px !important; }
+    .pc-grid-cat > div > div:nth-child(2) { font-size: 22px !important; }
+    .pc-grid-cat > div > div:nth-child(3) { font-size: 18px !important; }
+    .pc-grid-prod > div > div:nth-child(1) { font-size: 48px !important; margin-bottom: 12px !important; }
+    .pc-grid-prod > div > div:nth-child(2) { font-size: 22px !important; }
+    .pc-grid-prod > div > div:nth-child(3) { font-size: 24px !important; margin-top: 8px !important; }
+    .pc-grid-prod > div > div:nth-child(4) { padding: 4px 16px !important; margin-top: 12px !important; }
+    .pc-grid-prod > div > div:nth-child(4) span { font-size: 19px !important; }
+  }
   .pos-product-card:hover { border-color: var(--accent); transform: translateY(-2px); }
   .pos-product-card .p-emoji { font-size: 28px; margin-bottom: 8px; }
   .pos-product-card .p-name { font-size: 12px; font-weight: 700; }
@@ -678,7 +693,7 @@ if ('serviceWorker' in navigator) {
     <div class="mobile-nav-item" onclick="navigateMobile('inventaire')" data-page="inventaire"><span class="mn-icon">📋</span>Inventaire</div>
     <div class="mobile-nav-item" onclick="navigateMobile('inventaireVocal')" data-page="inventaireVocal"><span class="mn-icon">🎤</span>Inventaire Vocal</div>
     <div class="mobile-nav-item" onclick="navigateMobile('inventaireMarche')" data-page="inventaireMarche"><span class="mn-icon">🧾</span>Inventaire Marché</div>
-    <div class="mobile-nav-item" onclick="navigateMobile('stocksBoutiques')" data-page="stocksBoutiques"><span class="mn-icon">🏬</span>Boutiques</div>
+    <div class="mobile-nav-item" onclick="navigateMobile('stocksBoutiques')" data-page="stocksBoutiques"><span class="mn-icon">🏬</span>Stock Boutiques</div>
     <div class="mobile-nav-item" onclick="navigateMobile('products')" data-page="products"><span class="mn-icon">🎨</span>Catalogue</div>
     <div class="mobile-nav-section">Finance</div>
     <div class="mobile-nav-item" onclick="navigateMobile('ventesMarche')" data-page="ventesMarche"><span class="mn-icon">🏪</span>Ventes Marché</div>
@@ -1710,7 +1725,8 @@ function navigate(page, skipHistory) {
   const backBtn = document.getElementById('back-btn');
   if(backBtn) backBtn.style.display = (window._navHistory.length > 0 && window._navHistory[window._navHistory.length-1] !== currentPage) ? 'inline-flex' : 'none';
   
-  render(page);
+  window._navRendering = true;
+  try { render(page); } finally { window._navRendering = false; }
 }
 
 function goBack() {
@@ -1728,7 +1744,22 @@ function goBack() {
   navigate(previous, true);
 }
 
+// Re-dessin de la MÊME page (après une modification, une fermeture de fenêtre, une synchro) : on garde la position
+// de défilement. Un vrai changement de page (navigate) repart comme avant.
 function render(page) {
+  const _c = document.getElementById('content'), _m = document.querySelector('.main');
+  const _keep = (window._lastRenderPage === page && !window._navRendering) ? { c: _c ? _c.scrollTop : 0, m: _m ? _m.scrollTop : 0 } : null;
+  window._lastRenderPage = page;
+  try { renderBase(page); }
+  finally {
+    if(_keep) {
+      const back = () => { if(_c) _c.scrollTop = _keep.c; if(_m) _m.scrollTop = _keep.m; };
+      back();
+      requestAnimationFrame(back);
+    }
+  }
+}
+function renderBase(page) {
   const content = document.getElementById('content');
   const actions = document.getElementById('topbar-actions');
   switch(page) {
@@ -2334,7 +2365,7 @@ function renderCaisseMarche(el, actions) {
             <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;">1 · Choisir une catégorie</div>
             <span onclick="toggleSeasonalCats()" style="font-size:10px;font-weight:700;color:#8ec46b;border:1px solid rgba(142,196,107,.4);border-radius:20px;padding:3px 9px;cursor:pointer;white-space:nowrap;">🎄 ${showSeasonal ? 'Masquer' : 'Afficher'} saisonnier</span>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(95px,1fr));gap:6px;">
+          <div class="pc-grid-cat" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(95px,1fr));gap:6px;">
             ${visibleCats.map(c => {
               const countMarche = db.products.filter(p=>p.categorie===c && (p.stocks.marche||0)>0).length;
               const countTotal = db.products.filter(p=>p.categorie===c).length;
@@ -2366,7 +2397,7 @@ function renderCaisseMarche(el, actions) {
             <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;">2 · Choisir un produit</div>
             <button class="btn btn-secondary btn-sm" onclick="caisseCatFilter=null;renderCaisseMarche(document.getElementById('content'),document.getElementById('topbar-actions'))">✕ Retour</button>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;">
+          <div class="pc-grid-prod" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;">
             ${caisseCatFilter === 'Minimaux' ? `
               <div onclick="addPackMinimaux()"
                 style="background:linear-gradient(135deg,rgba(255,200,50,.20),rgba(255,140,0,.20));border:2px solid var(--accent);
@@ -7391,6 +7422,24 @@ let stockFilter = 'all';
 let stockSearch = '';
 let stockBoutiqueFilter = 'all';
 let stockBoutiqueSearch = '';
+// Filtre « boutiques à afficher » : la Boutique de Véro est archivée, elle n'est donc ni affichée ni proposée.
+const STOCK_BTQ_COLS = [
+  {key:'artComplices', label:'🎨 Arts Complices', color:'#e63030', border:'var(--accent)', valColor:'var(--accent)'},
+  {key:'videoGamers',  label:'🎮 Video Gamers',   color:'#378add', border:'#378add',       valColor:'#378add'}
+];
+let stockBoutiqueSel = (function(){
+  try { const a = JSON.parse(localStorage.getItem('fath3d_stockbtq_sel') || 'null');
+        if(Array.isArray(a)) { const f = a.filter(k => STOCK_BTQ_COLS.some(c => c.key === k)); if(f.length) return f; } } catch(e) {}
+  return STOCK_BTQ_COLS.map(c => c.key);
+})();
+function stockBtqCols() { return STOCK_BTQ_COLS.filter(c => stockBoutiqueSel.includes(c.key)); }
+function toggleStockBoutiqueSel(k) {
+  const on = stockBoutiqueSel.includes(k);
+  if(on && stockBoutiqueSel.length === 1) { showToast('Garde au moins une boutique affichée', false); return; }
+  stockBoutiqueSel = on ? stockBoutiqueSel.filter(x => x !== k) : STOCK_BTQ_COLS.map(c => c.key).filter(x => x === k || stockBoutiqueSel.includes(x));
+  try { localStorage.setItem('fath3d_stockbtq_sel', JSON.stringify(stockBoutiqueSel)); } catch(e) {}
+  renderStocksBoutiques(document.getElementById('content'), document.getElementById('topbar-actions'));
+}
 
 // ===================== STOCK MAISON / MARCHÉ =====================
 // Surlignage de la ligne sélectionnée
@@ -8682,12 +8731,7 @@ function renderStocksBoutiques(el, actions) {
     return a.name.localeCompare(b.name);
   });
 
-  const totalAC  = filtered.reduce((s,p)=>s+(p.stocks.artComplices||0),0);
-  const totalBTV = filtered.reduce((s,p)=>s+(p.stocks.btvero||0),0);
-  const valAC    = filtered.reduce((s,p)=>s+(p.stocks.artComplices||0)*p.price,0);
-  const valBTV   = filtered.reduce((s,p)=>s+(p.stocks.btvero||0)*p.price,0);
-  const totalVG  = filtered.reduce((s,p)=>s+(p.stocks.videoGamers||0),0);
-  const valVG    = filtered.reduce((s,p)=>s+(p.stocks.videoGamers||0)*p.price,0);
+  const cols = stockBtqCols();
 
   el.innerHTML = `
     <!-- Historique réassorts boutiques -->
@@ -8714,22 +8758,17 @@ function renderStocksBoutiques(el, actions) {
       `).join('')}
     </div>`:''}
 
-    <div style="margin-bottom:14px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      <div class="stat" style="border-left:3px solid var(--accent)">
-        <div class="stat-label" style="color:#e63030">🎨 Arts Complices</div>
-        <div class="stat-value" style="color:var(--accent)">${totalAC}</div>
-        <div class="stat-sub">${valAC.toFixed(2)}€ valeur</div>
-      </div>
-      <div class="stat" style="border-left:3px solid #e0a800">
-        <div class="stat-label">💛 La Boutique de Véro</div>
-        <div class="stat-value" style="color:#ff6a00">${totalBTV}</div>
-        <div class="stat-sub">${valBTV.toFixed(2)}€ valeur</div>
-      </div>
-      <div class="stat" style="border-left:3px solid #378add">
-        <div class="stat-label" style="color:#378add">🎮 Video Gamers</div>
-        <div class="stat-value" style="color:#378add">${totalVG}</div>
-        <div class="stat-sub">${valVG.toFixed(2)}€ valeur</div>
-      </div>
+    <div style="margin-bottom:14px;display:grid;grid-template-columns:repeat(${cols.length},1fr);gap:12px;">
+      ${cols.map(c => `<div class="stat" style="border-left:3px solid ${c.border}">
+        <div class="stat-label" style="color:${c.color}">${c.label}</div>
+        <div class="stat-value" style="color:${c.valColor}">${filtered.reduce((t,p)=>t+(p.stocks[c.key]||0),0)}</div>
+        <div class="stat-sub">${filtered.reduce((t,p)=>t+(p.stocks[c.key]||0)*p.price,0).toFixed(2)}€ valeur</div>
+      </div>`).join('')}
+    </div>
+
+    <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+      <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-right:4px;">Boutiques affichées</span>
+      ${STOCK_BTQ_COLS.map(c => `<button class="btn btn-sm ${stockBoutiqueSel.includes(c.key)?'btn-primary':'btn-secondary'}" onclick="toggleStockBoutiqueSel('${c.key}')">${stockBoutiqueSel.includes(c.key)?'✓ ':''}${c.label}</button>`).join('')}
     </div>
 
     <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
@@ -8745,22 +8784,19 @@ function renderStocksBoutiques(el, actions) {
           <thead>
             <tr>
               <th>Catégorie</th><th>Référence</th><th>Prix</th>
-              <th style="text-align:center;color:#e63030">🎨 Arts Complices</th>
-              <th style="text-align:center;color:#ff6a00">🟠 Btq de Véro</th>
-              <th style="text-align:center;color:#378add">🎮 Video Gamers</th>
+              ${cols.map(c => `<th style="text-align:center;color:${c.color}">${c.label}</th>`).join('')}
               <th style="text-align:center;">TOTAL</th><th></th>
             </tr>
           </thead>
           <tbody id="stocks-boutiques-tbody">
             ${filtered.map(p => {
-              const total = (p.stocks.artComplices||0)+(p.stocks.btvero||0)+(p.stocks.videoGamers||0);
+              const total = cols.reduce((t,c)=>t+(p.stocks[c.key]||0),0);
               const sb = (v) => `<span style="display:inline-block;min-width:28px;text-align:center;padding:2px 6px;border-radius:6px;font-weight:700;font-size:12px;background:${v===0?'rgba(255,68,68,.1)':v<3?'rgba(255,229,0,.1)':'rgba(68,204,136,.1)'};color:${v===0?'var(--danger)':v<3?'var(--accent)':'var(--success)'};">${v}</span>`;
               return `<tr>
                 <td><span style="font-size:11px;padding:2px 8px;background:var(--border);border-radius:4px;color:var(--text);font-weight:600;">${p.categorie||'—'}</span></td>
                 <td style="font-weight:700;">${p.emoji} ${p.name}</td>
                 <td style="font-weight:700;color:var(--accent);">${p.price}€</td>
-                <td style="text-align:center;">${sb(p.stocks.artComplices||0)}</td>
-                <td style="text-align:center;">${sb(p.stocks.btvero||0)}</td><td style="text-align:center;">${sb(p.stocks.videoGamers||0)}</td>
+                ${cols.map(c => `<td style="text-align:center;">${sb(p.stocks[c.key]||0)}</td>`).join('')}
                 <td style="text-align:center;font-weight:800;">${total}</td>
                 <td><button class="btn btn-secondary btn-sm" onclick="openAdjustStockBoutique(${p.id})">✏️</button></td>
               </tr>`;
@@ -8782,17 +8818,17 @@ function updateStocksBoutiquesTable() {
     if(catCmp !== 0) return catCmp;
     return a.name.localeCompare(b.name);
   });
+  const cols = stockBtqCols();
   const tbody = document.getElementById('stocks-boutiques-tbody');
   if(!tbody) { renderStocksBoutiques(document.getElementById('content'),document.getElementById('topbar-actions')); return; }
   const sb = (v) => `<span style="display:inline-block;min-width:28px;text-align:center;padding:2px 6px;border-radius:6px;font-weight:700;font-size:12px;background:${v===0?'rgba(255,68,68,.1)':v<3?'rgba(255,229,0,.1)':'rgba(68,204,136,.1)'};color:${v===0?'var(--danger)':v<3?'var(--accent)':'var(--success)'};">${v}</span>`;
   tbody.innerHTML = filtered.map(p => {
-    const total = (p.stocks.artComplices||0)+(p.stocks.btvero||0)+(p.stocks.videoGamers||0);
+    const total = cols.reduce((t,c)=>t+(p.stocks[c.key]||0),0);
     return `<tr>
       <td><span style="font-size:11px;padding:2px 8px;background:var(--border);border-radius:4px;color:var(--text);font-weight:600;">${p.categorie||'—'}</span></td>
       <td style="font-weight:700;">${p.emoji} ${p.name}</td>
       <td style="font-weight:700;color:var(--accent);">${p.price}€</td>
-      <td style="text-align:center;">${sb(p.stocks.artComplices||0)}</td>
-      <td style="text-align:center;">${sb(p.stocks.btvero||0)}</td><td style="text-align:center;">${sb(p.stocks.videoGamers||0)}</td>
+      ${cols.map(c => `<td style="text-align:center;">${sb(p.stocks[c.key]||0)}</td>`).join('')}
       <td style="text-align:center;font-weight:800;">${total}</td>
       <td><button class="btn btn-secondary btn-sm" onclick="openAdjustStockBoutique(${p.id})">✏️</button></td>
     </tr>`;
@@ -14397,10 +14433,10 @@ function renderBoutiques(el, actions) {
   const totalA = Object.values(monthlyA).reduce((a,b)=>a+b,0); // La Boutique de Véro
   const totalB = Object.values(monthlyB).reduce((a,b)=>a+b,0); // Arts Complices
   const totalC = Object.values(monthlyC).reduce((a,b)=>a+b,0); // La Créatique
-  const totalCommB = totalB * 0.10; // 10% commission Arts Complices seulement
+  // Commission d'Arts Complices : seulement sur les lignes envoyées au brut (les plus anciennes sont déjà nettes)
+  const totalCommB = salesBoutiques.filter(s => s.depot === 'boutB').reduce((a, s) => a + boutiqueLigneNet(s).comm, 0);
   const totalNetB = totalB - totalCommB;
-  const extraIds = boutiquesExtra().map(b => b.id);
-  const totalX = (db.sales || []).filter(s => extraIds.includes(s.depot)).reduce((a, s) => a + (Number(s.total) || 0), 0); // boutiques ajoutées
+  const recapNet = recapNetTotal();
 
   // boutiquesVentes pour le tableau détail
   const bv = (db.boutiquesVentes || []).filter(v=>!v.annee||Number(v.annee)===Number(window.managerRecapYear||new Date().getFullYear()));
@@ -14432,8 +14468,8 @@ function renderBoutiques(el, actions) {
       </div>
       <div class="stat stat-green">
         <div class="stat-label">Total Boutiques</div>
-        <div class="stat-value">${(totalA + totalNetB + totalC + totalX).toFixed(2)}€</div>
-        <div class="stat-sub">net encaissé${totalX>0?' · dont autres boutiques '+totalX.toFixed(2)+'€':''}</div>
+        <div class="stat-value">${recapNet.total.toFixed(2)}€</div>
+        <div class="stat-sub">net ${recapAnnee()} · commissions${recapNet.loyers>0?' et loyers ('+recapNet.loyers.toFixed(2)+'€)':''} déduits</div>
       </div>
     </div>
 
@@ -15842,9 +15878,14 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
+// Re-dessine la page en cours (render() garde la position de défilement tout seul).
+function renderKeepScroll(page) { render(page || currentPage || 'dashboard'); }
+
 function closeModal(e) {
   if(!e || e.target === document.getElementById('modal-overlay')) {
     document.getElementById('modal-overlay').classList.remove('open');
+    // Après le suivi des plaques : la liste se met à jour, à la même position de défilement
+    if(window._plaqueDirty) { window._plaqueDirty = false; try { renderKeepScroll(); } catch(err) { console.warn(err); } }
   }
 }
 
@@ -16371,7 +16412,7 @@ const FSync = (function(){
     try { selling = typeof caisseCart !== 'undefined' && Array.isArray(caisseCart) && caisseCart.length > 0 && /caisse/i.test(String(currentPage)); } catch(e){}
     if(open || typing || selling){ pendingRender = true; updatePill(); return; }
     pendingRender = false;
-    try { render(currentPage || 'dashboard'); } catch(e){ console.warn(e); }
+    try { renderKeepScroll(currentPage || 'dashboard'); } catch(e){ console.warn(e); }
     updatePill();
   }
   function onCloudSnap(payload, meta){
@@ -16450,7 +16491,7 @@ const FSync = (function(){
       + (lg.length ? lg.map(x => '<div style="font-size:11px;color:var(--muted);">'+fmtT(x.t)+' — '+String(x.m).replace(/</g,'&lt;')+'</div>').join('') : '<div style="font-size:12px;color:var(--muted);">Vide</div>')
       + '<div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Fermer</button></div>');
   }
-  function renderNow(){ pendingRender = false; try { render(currentPage || 'dashboard'); } catch(e){} updatePill(); }
+  function renderNow(){ pendingRender = false; try { renderKeepScroll(currentPage || 'dashboard'); } catch(e){} updatePill(); }
   async function downloadBackup(ts){
     const b = await idbGet('backups', ts); if(!b) return;
     const blob = new Blob([b.payload], {type: 'application/json'});
@@ -16497,6 +16538,27 @@ function loyerMois(m){
   const ym = recapYM(m);
   const ids = ['boutB'].concat(boutiquesExtra().map(b => b.id));
   return moneyB(ids.reduce((s, id) => s + boutiqueLoyer(id, ym), 0));
+}
+// Net réel d'une ligne boutique du livre : une ligne AUTO envoyée au BRUT (à partir de sept. 2026) perd la commission
+// de ses détails ; toutes les autres lignes (avant sept. 2026, ventes saisies à la main) sont déjà au net : rien à retirer.
+function boutiqueLigneNet(s) {
+  const tot = Number(s.total) || 0;
+  const k = String(s.boutiqueRecapKey || '').split('|');
+  if(!s.autoBoutiqueRecap || k.length !== 3) return { net: tot, comm: 0 };
+  const idx = Number(k[1]) * 12 + MOIS_ORDER.indexOf(k[2]);
+  if(!(idx >= MOIS_RECAP_BRUT)) return { net: tot, comm: 0 };
+  const comm = (db.boutiquesVentes || []).filter(v => v.boutique === k[0] && v.mois === k[2] && Number(v.annee) === Number(k[1]))
+    .reduce((a, v) => a + (Number(v.comm) || 0), 0);
+  const c = Math.min(Math.max(comm, 0), Math.max(tot, 0));
+  return { net: moneyB(tot - c), comm: moneyB(c) };
+}
+// Total « Net » du Récap Boutiques (année affichée) : ventes nettes de commission, moins les loyers déjà échus.
+function recapNetTotal() {
+  const an = String(recapAnnee());
+  const lignes = (db.sales || []).filter(s => String(s.depot || '').indexOf('bout') === 0 && String(s.date || '').slice(0, 4) === an);
+  const net = lignes.reduce((a, s) => a + boutiqueLigneNet(s).net, 0);
+  const loyers = MOIS_ORDER.reduce((a, m) => a + (recapYM(m) <= ymCourant() ? loyerMois(m) : 0), 0);
+  return { net: moneyB(net), loyers: moneyB(loyers), total: moneyB(net - loyers) };
 }
 
 // --- Video Gamers : la vente d'un produit du catalogue fait baisser le stock Video Gamers ---
@@ -17493,11 +17555,13 @@ function plaqueLigneHTML(fiche){
 
 function openSuiviPlaques(productId){
   window._plaquePickerOpen = -1;
+  window._plaqueDirty = false;
   openModal(suiviPlaquesHTML(productId));
 }
 function refreshSuivi(productId){
   const mc = document.getElementById('modal-content');
   if(!mc) return;
+  window._plaqueDirty = true;
   const old = document.getElementById('plaque-scroller');
   const sc = old ? old.scrollTop : 0;
   mc.innerHTML = suiviPlaquesHTML(productId);
@@ -19713,7 +19777,7 @@ function checkBackupReminder(){
   const now = new Date();
   const todayStr = dISO(now);
   const tomorrowStr = dISO(new Date(now.getTime()+86400000));
-  // Prochain marché aujourd'hui ou demain
+  // Marché demain (la veille) — ou aujourd'hui si l'export n'a pas été fait
   const m = db.marches
     .filter(x => x && (x.date===todayStr || x.date===tomorrowStr))
     .sort((a,b)=> (a.date||'').localeCompare(b.date||''))[0];
@@ -19727,8 +19791,8 @@ function checkBackupReminder(){
   banner.style.cssText = "background:#2a1f00;border-bottom:2px solid #ffb300;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-family:'Exo 2',sans-serif;";
   banner.innerHTML =
     '<span style="font-size:18px;">💾</span>'
-    + '<span style="flex:1;min-width:180px;color:#ffd966;font-size:13px;font-weight:700;">Marché ' + (m.ville||'') + ' ' + quand + ' — pense à sauvegarder avant de partir.</span>'
-    + '<button onclick="exportData()" style="background:#ffb300;color:#1a1300;border:none;border-radius:6px;padding:8px 14px;font-weight:800;cursor:pointer;font-size:13px;">Sauvegarder maintenant</button>'
+    + '<span style="flex:1;min-width:180px;color:#ffd966;font-size:13px;font-weight:700;">Marché ' + (m.ville||'') + ' ' + quand + ' — exporte tes données (fichier JSON) avant de partir.</span>'
+    + '<button onclick="exportData()" style="background:#ffb300;color:#1a1300;border:none;border-radius:6px;padding:8px 14px;font-weight:800;cursor:pointer;font-size:13px;">Exporter maintenant (JSON)</button>'
     + '<button onclick="this.parentElement.remove()" title="Masquer" style="background:none;border:none;color:#ffd966;cursor:pointer;font-size:16px;line-height:1;">✕</button>';
   const main = document.querySelector('.main') || document.body;
   main.insertBefore(banner, main.firstChild);
@@ -19900,6 +19964,9 @@ function applyImport() {
     if(typeof db !== 'undefined' && db && Array.isArray(db.marches) && typeof checkBackupReminder === 'function'){
       clearInterval(iv);
       try { checkBackupReminder(); } catch(e){ console.warn('[rappel sauvegarde]', e); }
+      // l'appli reste souvent ouverte plusieurs jours : on revérifie chaque heure et au retour sur l'appli
+      setInterval(function(){ try { checkBackupReminder(); } catch(e){} }, 3600000);
+      document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible'){ try { checkBackupReminder(); } catch(e){} } });
     } else if(tries > 40){
       clearInterval(iv);
     }
