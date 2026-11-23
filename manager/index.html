@@ -893,7 +893,7 @@ if ('serviceWorker' in navigator) {
       <button onclick="localStorage.removeItem('fath3d_nav');location.reload();" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">🔄 Réinitialiser les menus</button>
       <button onclick="toggleTheme()" id="theme-toggle-btn" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">☀️ Thème clair</button>
       <input type="file" id="import-input" accept=".json" style="display:none" onchange="importData(event)">
-      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.21 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
+      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.22 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
     </div>
   </nav>
 
@@ -8000,6 +8000,7 @@ function planRender(){
     topRight=`<span style="color:var(--muted);font-size:12px;">✏️ Édition — titres, temps, couleurs, imprimante</span>`;
   }
 
+  const hfOn=pjpIsHF(pid);
   const rowsHTML=plan.plateaux.map((x,i)=>{
     const pn=`P${i+1}`;
     const swatches=(x.colors||[]).map((c,ci)=> _planMode==='edit'
@@ -8011,7 +8012,7 @@ function planRender(){
       return `<div style="display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:9px 11px;margin-bottom:7px;${x.done?'opacity:.5;':''}">
         <span onclick="planLaunchPlateau(${i})" title="Lancer sur une imprimante" style="flex-shrink:0;width:30px;height:30px;border-radius:8px;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#7c5cff;cursor:pointer;">${pn}</span>
         <div onclick="planLaunchPlateau(${i})" style="flex:1;min-width:0;cursor:pointer;"><div style="font-weight:700;text-transform:capitalize;${x.done?'text-decoration:line-through;':''}">${x.part||'—'} <span style="font-size:10px;color:#7c5cff;font-weight:700;">▶ lancer</span></div>
-          ${swatches?`<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:4px;">${swatches}</div>`:''}</div>
+          ${swatches?`<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:4px;">${swatches}</div>`:''}${planningSwapBadgesHtml(pjpNormSwaps(x.swaps),{showLabels:true})}</div>
         <span style="font-size:13px;color:var(--accent);font-weight:700;white-space:nowrap;">${planParseDur(x.dur)>0?x.dur:'<span style="color:#ff5c5c;">⚠ durée manquante</span>'}</span>
         ${impBadge}
         <span onclick="planToggleCheck(${i})" style="flex-shrink:0;width:28px;height:28px;border-radius:7px;border:2px solid ${x.done?'var(--success)':'var(--border)'};background:${x.done?'var(--success)':'transparent'};color:${x.done?'#062':'transparent'};display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;cursor:pointer;">✓</span>
@@ -8042,8 +8043,13 @@ function planRender(){
       </div>
       <span onclick="planDupRow(${i})" title="Dupliquer ce plateau" style="flex-shrink:0;width:28px;height:28px;border-radius:7px;background:rgba(124,92,255,.14);border:1px solid #7c5cff;color:#7c5cff;font-size:14px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-top:14px;">⧉</span>
       <span onclick="planDelRow(${i})" title="Supprimer ce plateau" style="flex-shrink:0;width:28px;height:28px;border-radius:7px;background:#2a1414;border:1px solid #5a2222;color:#e0786a;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-top:14px;">🗑</span>
+      ${hfOn?pjpSwapEditorHTML('plan',i,x):''}
     </div>`;
   }).join('');
+  const editBar=_planMode==='edit'?`<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px;">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:800;"><input type="checkbox" ${hfOn?'checked':''} onchange="planSetHF(this.checked)" style="width:20px;height:20px;"> HueForge <span style="font-weight:600;font-size:11px;color:var(--muted);">(coche pour gérer les swaps de filament)</span></label>
+    <span style="margin-left:auto;font-size:13px;color:var(--muted);">Nombre de plateaux <input type="number" min="0" max="40" value="${plan.plateaux.length}" onchange="planSetCount(this.value)" style="width:58px;background:var(--bg);border:1px solid var(--border);color:var(--accent);font-weight:800;text-align:center;border-radius:7px;padding:5px;"></span>
+  </div>`:'';
 
   openModal(`
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
@@ -8057,6 +8063,7 @@ function planRender(){
       <span style="font-size:13px;color:var(--muted);">Lot <input type="number" min="1" value="${plan.lot||1}" oninput="planGet(${pidJS(pid)}).lot=parseInt(this.value)||1" onchange="planSave()" style="width:54px;background:var(--bg);border:1px solid var(--border);color:var(--accent);font-weight:800;text-align:center;border-radius:7px;padding:5px;font-size:14px;"> figs</span>
       <span style="margin-left:auto;font-size:13px;">${topRight}</span>
     </div>
+    ${editBar}
     <div style="max-height:52vh;overflow-y:auto;">${rowsHTML || '<div style="text-align:center;color:var(--muted);padding:18px;">Aucun plateau. Ajoute-en un.</div>'}</div>
     ${_planMode==='edit'?`<button onclick="planAddRow()" style="width:100%;background:var(--bg);border:1px dashed var(--border);color:var(--muted);border-radius:10px;padding:11px;font-size:14px;font-weight:700;cursor:pointer;margin-top:4px;">+ Ajouter un plateau</button>`:''}
     <div class="modal-actions"><button class="btn btn-sm" onclick="planSendToPlanning()" style="background:#16a085;border:1px solid #16a085;color:#fff;font-weight:700;">📅 Envoyer au Planning</button><button class="btn btn-secondary" onclick="openPlanSearch()">← Liste</button><button class="btn btn-primary" onclick="closeModal()">Fermer</button></div>
@@ -8067,7 +8074,7 @@ function planSetLot(){ planSave(); }
 function planAddRow(){ const pl=planGet(_planPid); pl.plateaux.push({part:'',dur:'',colors:[],imp:'',done:false}); planSave(); planRender(); const idx=pl.plateaux.length-1; setTimeout(()=>{const el=document.getElementById('plan-part-'+idx); if(el){ el.scrollIntoView({behavior:'smooth',block:'center'}); el.focus(); }},90); }
 function planDupRow(i){
   const pl=planGet(_planPid); const src=pl.plateaux[i]; if(!src) return;
-  const copy={ part:src.part, dur:src.dur, colors:(src.colors||[]).slice(), imp:src.imp, done:false };
+  const copy={ part:src.part, dur:src.dur, colors:(src.colors||[]).slice(), imp:src.imp, done:false, swaps:JSON.parse(JSON.stringify(src.swaps||[])) };
   pl.plateaux.splice(i+1, 0, copy);
   planSave(); planRender();
 }
@@ -8166,6 +8173,7 @@ function planSendToPlanning(){
       dureeMinutes:min,
       creneau:'',
       couleurs:couleurs,
+      swaps:((typeof pjpPlateauxOf==='function'?(pjpPlateauxOf(pid)[idx]||{}).swaps:null)||[]),
       notes:`plateau ${idx+1}/${plan.plateaux.length} · lot ${plan.lot||1}`,
       productId:pid,
       qty:plan.lot||1,
@@ -17092,6 +17100,67 @@ function pjpRubBadge(rub){
   return `<span style="display:inline-block;font-size:10px;font-weight:800;text-transform:uppercase;color:#111;background:var(--accent);border-radius:6px;padding:1px 7px;margin-left:6px;vertical-align:middle;white-space:nowrap;">${pjpEsc(rub||'—')}</span>`;
 }
 
+// Ce que la saisie « comprend » : affichage en direct sous le champ Durée
+function planDurLive(raw){
+  const f=planFmtDur(raw);
+  if(!f || planParseDur(f)<=0) return '<span style="color:#ff5c5c;font-weight:700;">⚠ durée manquante</span>';
+  return '<span style="color:var(--success);font-weight:700;">= '+f+'</span>';
+}
+// Case « HueForge » d'un plan : choix de Pat (plan.hueforge vrai/faux) s'il existe ; sinon valeur de départ NON enregistrée :
+// cochée si la rubrique est Hueforge ou si un modèle rattaché a des swaps, décochée sinon.
+function pjpIsHF(pid){
+  const plan=(db.plansImpression||{})[pid];
+  if(plan && typeof plan.hueforge==='boolean') return plan.hueforge;
+  const p=pjProd(pid); if(!p) return false;
+  if(/hueforge/i.test(p.libre?(p.rubrique||''):(p.categorie||''))) return true;
+  if(!p.libre){ const t=fathTplFor(p); if(t && pjpNormSwaps(t.swaps).length) return true; }
+  return false;
+}
+function pjpHexOf(name){ const d=planColorDef(name); return d.hex || (d.stops && d.stops[0]) || '#888'; }
+function pjpSwapsClean(arr){
+  return (arr||[]).filter(s=>s && (s.from||s.to||s.heure)).map(s=>({from:s.from||'',to:s.to||'',heure:s.heure||'',fromName:s.fromName||'',toName:s.toName||''}));
+}
+// Éditeur de swaps d'un plateau (contexte 'plan' = plan du produit ouvert, 'new' = formulaire « + Créer »)
+function pjpSwTarget(ctx,i){ return ctx==='new' ? (_pjNew && _pjNew.plateaux[i]) : (planGet(_planPid).plateaux[i]); }
+function pjpSwPersist(ctx){ if(ctx==='new') pjpNewRender(); else { planSave(); planRender(); } }
+function pjpSwAdd(ctx,i){ const pl=pjpSwTarget(ctx,i); if(!pl) return; pl.swaps=pl.swaps||[]; pl.swaps.push({from:'',to:'',heure:'',fromName:'',toName:''}); pjpSwPersist(ctx); }
+function pjpSwDel(ctx,i,j){ const pl=pjpSwTarget(ctx,i); if(!pl||!pl.swaps) return; pl.swaps.splice(j,1); pjpSwPersist(ctx); }
+function pjpSwSet(ctx,i,j,field,val){
+  const pl=pjpSwTarget(ctx,i); if(!pl||!pl.swaps||!pl.swaps[j]) return;
+  const sw=pl.swaps[j];
+  if(field==='from'){ sw.fromName=val; sw.from=val?pjpHexOf(val):''; }
+  else if(field==='to'){ sw.toName=val; sw.to=val?pjpHexOf(val):''; }
+  else { sw.heure=(typeof pjFmtHeure==='function')?pjFmtHeure(val):val; }
+  pjpSwPersist(ctx);
+}
+function pjpSwapEditorHTML(ctx,i,x){
+  const cols=x.colors||[]; const sw=x.swaps||[];
+  const opt=sel=>'<option value="">— choisir —</option>'+cols.map(n=>`<option value="${pjpEsc(n)}" ${sel===n?'selected':''}>${pjpEsc(n)}</option>`).join('');
+  const selSt='background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:12px;padding:3px 5px;max-width:150px;';
+  const rows=sw.map((t,j)=>`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px;">
+      <span style="font-size:11px;font-weight:800;color:#c9b6ff;">🔁 ${j+1}</span>
+      <span style="font-size:10px;color:var(--muted);">PART</span>${t.fromName?pjpDot(t.fromName,13):''}<select onchange="pjpSwSet('${ctx}',${i},${j},'from',this.value)" style="${selSt}">${opt(t.fromName)}</select>
+      <span style="font-size:10px;color:var(--muted);">→ NOUVELLE</span>${t.toName?pjpDot(t.toName,13):''}<select onchange="pjpSwSet('${ctx}',${i},${j},'to',this.value)" style="${selSt}">${opt(t.toName)}</select>
+      <span style="font-size:10px;color:var(--muted);">HEURE</span><input value="${pjpEsc(t.heure||'')}" inputmode="numeric" placeholder="ex : 02:15" onchange="pjpSwSet('${ctx}',${i},${j},'heure',this.value)" style="width:70px;${selSt}text-align:center;">
+      <span onclick="pjpSwDel('${ctx}',${i},${j})" title="Supprimer ce swap" style="cursor:pointer;color:#e0786a;padding:0 4px;">✕</span>
+    </div>`).join('');
+  return `<div style="flex-basis:100%;background:rgba(124,92,255,.07);border:1px solid rgba(124,92,255,.35);border-radius:8px;padding:6px 10px;">
+    <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:#c9b6ff;">🔁 Swaps de filament (HueForge)</div>
+    <div style="font-size:11px;color:var(--muted);">Couleur qui part → nouvelle couleur, à l'heure donnée par le slicer.${cols.length<2?' Ajoute d\'abord les couleurs du plateau.':''}</div>
+    ${rows}<button type="button" class="btn btn-secondary btn-sm" onclick="pjpSwAdd('${ctx}',${i})" style="margin-top:6px;">+ Ajouter un swap</button></div>`;
+}
+function planSetHF(v){ const plan=planGet(_planPid); plan.hueforge=!!v; planSave(); planRender(); }
+function planSetCount(v){
+  const plan=planGet(_planPid); let n=parseInt(v,10); if(isNaN(n)||n<0) n=0; if(n>40) n=40;
+  const cur=plan.plateaux.length;
+  if(n>cur){ for(let k=cur;k<n;k++) plan.plateaux.push({part:'',dur:'',colors:[],imp:'',done:false}); }
+  else if(n<cur){
+    const gone=plan.plateaux.slice(n), used=gone.filter(x=>x.part||x.dur||(x.colors||[]).length||(x.swaps||[]).length).length;
+    if(used && !confirm('Retirer les '+gone.length+' derniers plateaux ('+used+' avec des données) ?')){ planRender(); return; }
+    plan.plateaux.splice(n);
+  }
+  planSave(); planRender();
+}
 function pjpNorm(s){ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim(); }
 function pjpEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function pjpColorDef(c){
@@ -17113,19 +17182,19 @@ function pjpPlateauxOf(pid){
   const p=pjProd(pid); if(!p) return [];
   const plan=(db.plansImpression||{})[pid];
   const tpl=p.libre?null:fathTplFor(p);
-  const isHF=/hueforge/i.test(p.categorie||'');
+  const isHF=pjpIsHF(pid);
   const tplSwaps=tpl?pjpNormSwaps(tpl.swaps):[];
   if(plan && plan.plateaux && plan.plateaux.length){
     const n=plan.plateaux.length;
     return plan.plateaux.map((x,i)=>({
       idx:i, key:'p'+i, part:x.part||(n===1?p.name:('P'+(i+1))), min:planParseDur(x.dur),
       colors:(x.colors||[]).map(c=>planColorDef(c)),
-      swaps:(isHF&&i===0)?tplSwaps:[], fromPlan:true, note:`plateau ${i+1}/${n} · lot ${plan.lot||1}`
+      swaps:(!isHF?[]:(pjpNormSwaps(x.swaps).length?pjpNormSwaps(x.swaps):(i===0?tplSwaps:[]))), fromPlan:true, note:`plateau ${i+1}/${n} · lot ${plan.lot||1}`
     }));
   }
   if(tpl){
     return [{idx:null, key:'k0', part:p.name, min:Math.round((tpl.dur||0)*60),
-      colors:(tpl.colors||[]).map(c=>pjpColorDef(c)), swaps:tplSwaps, fromPlan:false, note:'modèle HueForge'}];
+      colors:(tpl.colors||[]).map(c=>pjpColorDef(c)), swaps:(isHF?tplSwaps:[]), fromPlan:false, note:'modèle HueForge'}];
   }
   return [];
 }
@@ -17575,7 +17644,7 @@ function pjpRubriques(){
   return [...s];
 }
 function pjpNewOpen(name){
-  _pjNew={name:name||'', rub:'Figurine', plateaux:[{part:'',dur:'',colors:[]}], pick:null, sel:[]};
+  _pjNew={name:name||'', rub:'Figurine', hf:false, hfTouched:false, plateaux:[{part:'',dur:'',colors:[],swaps:[]}], pick:null, sel:[]};
   pjpNewRender();
 }
 function pjpNewRender(){
@@ -17588,13 +17657,18 @@ function pjpNewRender(){
       <div style="width:104px;"><div style="${LBL}">Durée <span style="color:#ff5c5c;">*</span></div><input class="form-input" value="${pjpEsc(x.dur)}" inputmode="numeric" placeholder="ex : 3h21" oninput="_pjNew.plateaux[${i}].dur=this.value;document.getElementById('pjn-live-${i}').innerHTML=planDurLive(this.value)" onchange="this.value=planFmtDur(this.value);_pjNew.plateaux[${i}].dur=this.value;document.getElementById('pjn-live-${i}').innerHTML=planDurLive(this.value)" style="padding:5px 7px;font-size:13px;text-align:center;color:var(--accent);font-weight:700;"><div id="pjn-live-${i}" style="font-size:11px;margin-top:3px;text-align:center;">${planDurLive(x.dur)}</div></div>
       <div><div style="${LBL}">Couleurs</div><span style="display:inline-flex;gap:3px;align-items:center;">${x.colors.map((c,ci)=>`<span onclick="pjpNewDelColor(${i},${ci})" style="cursor:pointer;" title="Retirer ${pjpEsc(c)}">${pjpDot(c,18)}</span>`).join('')}<span onclick="pjpNewPick(${i})" style="font-size:11px;color:#7c5cff;background:var(--bg);border:1px dashed #5a4ba8;border-radius:5px;padding:2px 7px;cursor:pointer;">🎨 + couleur</span></span></div>
       <span onclick="pjpNewDelRow(${i})" title="Supprimer ce plateau" style="width:26px;height:26px;border-radius:7px;background:#2a1414;border:1px solid #5a2222;color:#e0786a;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-top:14px;">✕</span>
+      ${N.hf?pjpSwapEditorHTML('new',i,x):''}
     </div>`).join('');
   openModal(`
     <div class="modal-title">➕ Nouveau produit à imprimer</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Projet libre : il reste dans le Manager (pas de photo, ni prix, ni stock). Les plateaux seront réutilisés à chaque impression.</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
       <div class="form-group" style="flex:2;min-width:180px;"><label class="form-label">Nom</label><input class="form-input" id="pjn-name" value="${pjpEsc(N.name)}" oninput="_pjNew.name=this.value"></div>
-      <div class="form-group" style="flex:1;min-width:140px;"><label class="form-label">Rubrique</label><select class="form-input" onchange="_pjNew.rub=this.value">${pjpRubriques().map(r=>`<option value="${pjpEsc(r)}" ${r===N.rub?'selected':''}>${pjpEsc(r)}</option>`).join('')}</select></div>
+      <div class="form-group" style="flex:1;min-width:140px;"><label class="form-label">Rubrique</label><select class="form-input" onchange="pjpNewSetRub(this.value)">${pjpRubriques().map(r=>`<option value="${pjpEsc(r)}" ${r===N.rub?'selected':''}>${pjpEsc(r)}</option>`).join('')}</select></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:4px 0 10px;">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:800;"><input type="checkbox" ${N.hf?'checked':''} onchange="pjpNewSetHF(this.checked)" style="width:20px;height:20px;"> HueForge <span style="font-weight:600;font-size:11px;color:var(--muted);">(coche pour gérer les swaps de filament)</span></label>
+      <span style="margin-left:auto;font-size:13px;color:var(--muted);">Nombre de plateaux <input type="number" min="1" max="40" value="${N.plateaux.length}" onchange="pjpNewSetCount(this.value)" style="width:58px;background:var(--bg);border:1px solid var(--border);color:var(--accent);font-weight:800;text-align:center;border-radius:7px;padding:5px;"></span>
     </div>
     <label class="form-label">Plateaux (couleurs et durée)</label>
     <div style="max-height:40vh;overflow-y:auto;">${rows}</div>
@@ -17607,8 +17681,21 @@ function pjpNewRender(){
   `);
   setTimeout(()=>{ const i=document.getElementById('pjn-name'); if(i && !N.name) i.focus(); },70);
 }
-function pjpNewAddRow(){ _pjNew.plateaux.push({part:'',dur:'',colors:[]}); pjpNewRender(); }
-function pjpNewDelRow(i){ _pjNew.plateaux.splice(i,1); if(!_pjNew.plateaux.length) _pjNew.plateaux.push({part:'',dur:'',colors:[]}); pjpNewRender(); }
+function pjpNewAddRow(){ _pjNew.plateaux.push({part:'',dur:'',colors:[],swaps:[]}); pjpNewRender(); }
+function pjpNewSetHF(v){ _pjNew.hf=!!v; _pjNew.hfTouched=true; pjpNewRender(); }
+function pjpNewSetRub(v){ _pjNew.rub=v; if(!_pjNew.hfTouched){ _pjNew.hf=/hueforge/i.test(v); pjpNewRender(); } }
+function pjpNewSetCount(v){
+  let n=parseInt(v,10); if(isNaN(n)||n<1) n=1; if(n>40) n=40;
+  const P=_pjNew.plateaux;
+  if(n>P.length){ while(P.length<n) P.push({part:'',dur:'',colors:[],swaps:[]}); }
+  else if(n<P.length){
+    const gone=P.slice(n), used=gone.filter(x=>x.part||x.dur||(x.colors||[]).length||(x.swaps||[]).length).length;
+    if(used && !confirm('Retirer les '+gone.length+' derniers plateaux ('+used+' avec des données) ?')){ pjpNewRender(); return; }
+    P.splice(n);
+  }
+  pjpNewRender();
+}
+function pjpNewDelRow(i){ _pjNew.plateaux.splice(i,1); if(!_pjNew.plateaux.length) _pjNew.plateaux.push({part:'',dur:'',colors:[],swaps:[]}); pjpNewRender(); }
 function pjpNewDelColor(i,ci){ _pjNew.plateaux[i].colors.splice(ci,1); pjpNewRender(); }
 function pjpNewPick(i){ _pjNew.pick=i; _pjNew.sel=[..._pjNew.plateaux[i].colors]; pjpNewRender(); }
 function pjpNewGridHTML(){
@@ -17645,8 +17732,8 @@ function pjpNewSave(andAdd){
   if(dup && !confirm(`« ${dup.name} » (${dup.rub}) existe déjà. Créer quand même un nouveau produit ?`)) return;
   const id='L'+Date.now();
   planLibres().push({id, name, emoji:/hueforge/i.test(N.rub)?'🖼️':'🧩', keep:true, rubrique:N.rub});
-  const plan=planGet(id); plan.lot=1;
-  plan.plateaux=pl.map((x,i)=>({part:(x.part||'').trim()||(pl.length===1?name:('P'+(i+1))), dur:planFmtDur(x.dur), colors:x.colors.slice(), imp:'', done:false}));
+  const plan=planGet(id); plan.lot=1; plan.hueforge=!!N.hf;
+  plan.plateaux=pl.map((x,i)=>({part:(x.part||'').trim()||(pl.length===1?name:('P'+(i+1))), dur:planFmtDur(x.dur), colors:x.colors.slice(), imp:'', done:false, swaps:(N.hf?pjpSwapsClean(x.swaps):[])}));
   if(andAdd) pjpAdd(id);
   saveData();
   _pjNew=null; _pjpQ='';
