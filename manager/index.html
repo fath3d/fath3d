@@ -893,7 +893,7 @@ if ('serviceWorker' in navigator) {
       <button onclick="localStorage.removeItem('fath3d_nav');location.reload();" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">🔄 Réinitialiser les menus</button>
       <button onclick="toggleTheme()" id="theme-toggle-btn" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">☀️ Thème clair</button>
       <input type="file" id="import-input" accept=".json" style="display:none" onchange="importData(event)">
-      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.20 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
+      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.21 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
     </div>
   </nav>
 
@@ -7703,8 +7703,7 @@ function jaiImpListHTML() {
     return `<div onclick="openJaiImprimeQty(${p.id})" style="display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;cursor:pointer;">
       <span style="font-size:20px;">${p.emoji||'📦'}</span>
       <div style="min-width:0;">
-        <div style="font-weight:700;">${p.name}</div>
-        <div style="font-size:11px;color:var(--accent);text-transform:uppercase;">${p.categorie||'—'}</div>
+        <div style="font-weight:700;">${p.name}${pjpRubBadge(p.categorie)}</div>
       </div>
       <div style="margin-left:auto;text-align:right;font-size:11px;color:var(--muted);line-height:1.5;">
         🏠 <b style="color:var(--text);">${p.stocks.maison||0}</b> · 🏪 <b style="color:var(--text);">${p.stocks.marche||0}</b><br>
@@ -7959,8 +7958,7 @@ function planSearchListHTML(){
     const pl=store[p.id]; const nb=(pl&&pl.plateaux)?pl.plateaux.length:0;
     return `<div onclick="openPlan(${p.id})" style="display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;cursor:pointer;margin-bottom:7px;">
       <span style="font-size:20px;">${p.emoji||'📦'}</span>
-      <div style="flex:1;min-width:0;"><div style="font-weight:700;">${p.name}</div>
-        <div style="font-size:11px;color:var(--accent);text-transform:uppercase;">${p.categorie||'—'}</div></div>
+      <div style="flex:1;min-width:0;"><div style="font-weight:700;">${p.name}${pjpRubBadge(p.categorie)}</div></div>
       ${nb?`<span style="font-size:11px;color:var(--success);font-weight:700;white-space:nowrap;">🧩 ${nb} plateaux</span>`:'<span style="font-size:11px;color:var(--muted);white-space:nowrap;">+ créer</span>'}
     </div>`;
   }).join('');
@@ -16705,6 +16703,7 @@ window.fsyncMigrations = function(){
   const M = db.migrFix1118;
   let changed = false;
   try { if(FSyncCore.normalizeTickets(db) > 0) changed = true; } catch(e){ console.warn(e); }
+  try { if(typeof fathTplMigrate === 'function' && fathTplMigrate()) changed = true; } catch(e){ console.warn(e); }
   const H = db.caisseHistory || [];
   const stampTxt = 'migration du 18/11/2026';
   const addNote = (t, txt) => { t.corrections = (t.corrections || []).concat(txt + ' · ' + stampTxt); };
@@ -17056,19 +17055,43 @@ function fathTplFor(p){
   const byId=tpls.find(t=>t.productId!=null && t.productId===p.id);
   if(byId) return byId;
   const nm=String(p.name||'').toUpperCase();
-  const same=tpls.filter(t=>t.productId==null && String(t.name||'').toUpperCase()===nm);
+  const rub=pjpNorm(p.categorie||'');
+  // 1) modèle rattaché à CETTE rubrique (nom + rubrique) : le seul choix sûr
+  const exact=tpls.find(t=>t.productId==null && t.rubrique && pjpNorm(t.rubrique)===rub && String(t.name||'').toUpperCase()===nm);
+  if(exact) return exact;
+  // 2) anciens modèles enregistrés par le nom seul (sans rubrique) : comportement d'avant conservé
+  const same=tpls.filter(t=>t.productId==null && !t.rubrique && String(t.name||'').toUpperCase()===nm);
   if(!same.length) return null;
   const homonyms=(db.products||[]).filter(x=>String(x.name||'').toUpperCase()===nm);
   if(homonyms.length>1) return /hueforge/i.test(p.categorie||'') ? same[0] : null;
   return same[0];
 }
-
-// Ce que la saisie « comprend » : affichage en direct sous le champ Durée
-function planDurLive(raw){
-  const f=planFmtDur(raw);
-  if(!f || planParseDur(f)<=0) return '<span style="color:#ff5c5c;font-weight:700;">⚠ durée manquante</span>';
-  return '<span style="color:var(--success);font-weight:700;">= '+f+'</span>';
+// Rubrique d'un produit (catalogue ou projet libre), '' si inconnue
+function fathRubOf(productId){
+  if(productId==null) return '';
+  const p=pjProd(productId); if(!p) return '';
+  return p.libre ? (p.rubrique||'') : (p.categorie||'');
 }
+// Un modèle = nom + rubrique. rub '' = modèle sans rubrique (ancien ou saisi à la main).
+function fathTplFind(name, rub){
+  const n=String(name||'').toUpperCase(), r=pjpNorm(rub||'');
+  return (db.hfTemplates||[]).find(t=>String(t.name||'').toUpperCase()===n && pjpNorm(t.rubrique||'')===r) || null;
+}
+// Reprise des anciens modèles (nom seul) : rattachés à une rubrique SEULEMENT si un seul produit porte ce nom.
+// Si plusieurs produits portent ce nom, le modèle reste sans rubrique (accessible comme avant) : on ne devine pas.
+function fathTplMigrate(){
+  let ch=false; const prods=db.products||[];
+  (db.hfTemplates||[]).forEach(t=>{
+    if(t.rubrique!==undefined || t.productId!=null) return;
+    const same=prods.filter(p=>String(p.name||'').toUpperCase()===String(t.name||'').toUpperCase());
+    if(same.length===1 && same[0].categorie){ t.rubrique=same[0].categorie; ch=true; }
+  });
+  return ch;
+}
+function pjpRubBadge(rub){
+  return `<span style="display:inline-block;font-size:10px;font-weight:800;text-transform:uppercase;color:#111;background:var(--accent);border-radius:6px;padding:1px 7px;margin-left:6px;vertical-align:middle;white-space:nowrap;">${pjpEsc(rub||'—')}</span>`;
+}
+
 function pjpNorm(s){ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim(); }
 function pjpEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function pjpColorDef(c){
@@ -17159,8 +17182,8 @@ function pjpResultsHTML(){
   const exact=all.some(c=>pjpNorm(c.name)===pjpNorm(q));
   let html=rows.map(c=>`<div style="display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:8px 12px;margin-top:6px;flex-wrap:wrap;">
       <span style="font-size:18px;">${c.emoji}</span>
-      <div style="flex:1;min-width:150px;"><div style="font-weight:800;">${pjpEsc(c.name)}</div>
-        <div style="font-size:11px;color:var(--muted);"><span style="color:var(--accent);text-transform:uppercase;">${pjpEsc(c.rub)}</span> · ${pjpInfoLine(c.pid)}</div></div>
+      <div style="flex:1;min-width:150px;"><div style="font-weight:800;">${pjpEsc(c.name)}${pjpRubBadge(c.rub)}</div>
+        <div style="font-size:11px;color:var(--muted);">${pjpInfoLine(c.pid)}</div></div>
       <button class="btn btn-secondary btn-sm" onclick="pjpEditPlan(${pidJS(c.pid)})" title="Ajouter, supprimer, dupliquer des plateaux, changer couleurs et durées">✏️ Modifier les plateaux</button>
       <button class="btn btn-sm" onclick="pjpAddFromSearch(${pidJS(c.pid)})" style="background:var(--accent);color:#111;border-color:var(--accent);font-weight:800;">+ Ajouter à la liste</button>
     </div>`).join('');
@@ -17179,7 +17202,7 @@ function pjpRecentsHTML(){
   }
   if(!ids.length) return '';
   return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;"><span style="font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:700;">${label} :</span>`+
-    ids.map(pid=>{ const p=pjProd(pid); return `<button class="btn btn-secondary btn-sm" onclick="pjpAddFromSearch(${pidJS(pid)})" title="${pjpEsc(p.name)} — ${pjpEsc(pjpRubrique(p))}">${pjpEsc(p.name)} <span style="font-size:9px;color:var(--muted);text-transform:uppercase;">${pjpEsc(pjpRubrique(p))}</span></button>`; }).join('')+`</div>`;
+    ids.map(pid=>{ const p=pjProd(pid); return `<button class="btn btn-secondary btn-sm" onclick="pjpAddFromSearch(${pidJS(pid)})" title="${pjpEsc(p.name)} — ${pjpEsc(pjpRubrique(p))}">${pjpEsc(p.name)}${pjpRubBadge(pjpRubrique(p))}</button>`; }).join('')+`</div>`;
 }
 function pjpSearchBlockHTML(){
   return `<div class="card" id="pjq-card" style="margin-bottom:14px;border-left:4px solid #7c5cff;">
@@ -17797,12 +17820,17 @@ function pqSaveAsTemplate() {
   if (!name) { showToast('Nom requis', false); return; }
   if (!db.hfTemplates) db.hfTemplates = [];
   if (!db.nextHfTemplateId) db.nextHfTemplateId = 1;
-  const existing = db.hfTemplates.find(t => t.name.toUpperCase() === name.toUpperCase());
-  if (existing) { existing.dur = d.dur; existing.colors = d.couleurs; existing.swaps = d.swaps; existing.updatedAt = Date.now(); }
-  else db.hfTemplates.push({ id: db.nextHfTemplateId++, name, dur: d.dur, colors: d.couleurs, swaps: d.swaps, createdAt: Date.now() });
+  // Identité d'un modèle = nom + rubrique du produit (jamais le nom seul)
+  try { fathTplMigrate(); } catch(e){}
+  const prodT = it.productId != null ? pjProd(it.productId) : null;
+  const rubT = it.rubrique || fathRubOf(it.productId) || '';
+  let existing = fathTplFind(name, rubT);
+  if (!existing && prodT && !prodT.libre) { const lg = fathTplFor(prodT); if (lg && !lg.rubrique) existing = lg; }  // ancien modèle déjà utilisé pour ce produit : on le reprend
+  if (existing) { existing.dur = d.dur; existing.colors = d.couleurs; existing.swaps = d.swaps; existing.updatedAt = Date.now(); if (!existing.rubrique && rubT) existing.rubrique = rubT; }
+  else db.hfTemplates.push(Object.assign({ id: db.nextHfTemplateId++, name, dur: d.dur, colors: d.couleurs, swaps: d.swaps, createdAt: Date.now() }, rubT ? { rubrique: rubT } : {}));
   it.nom = name; it.dureeMinutes = d.dureeMinutes; it.couleurs = d.couleurs; it.swaps = d.swaps;
   saveData();
-  showToast(`Modèle "${name}" enregistré ⭐`, true);
+  showToast(`Modèle "${name}"${rubT?' ('+rubT+')':''} enregistré ⭐`, true);
 }
 
 
@@ -18849,8 +18877,8 @@ function planningShowSaveTemplate() {
   const swaps = [..._plSwaps];
   if (!db.hfTemplates) db.hfTemplates = [];
   if (!db.nextHfTemplateId) db.nextHfTemplateId = 1;
-  // Vérifier si un modèle du même nom existe déjà
-  const existing = db.hfTemplates.find(t => t.name.toUpperCase() === name.toUpperCase());
+  // Vérifier si un modèle du même nom (et sans rubrique : saisi à la main) existe déjà
+  const existing = fathTplFind(name, '');
   if (existing) {
     openModal(`
       <div class="modal-title">💾 Modèle déjà existant</div>
@@ -18904,7 +18932,7 @@ function planningShowTemplates() {
     return filtered.map(t => `
       <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:8px;border:1px solid var(--border);">
         <div style="flex:1;">
-          <div style="font-weight:800;font-size:14px;margin-bottom:4px;">${t.name}</div>
+          <div style="font-weight:800;font-size:14px;margin-bottom:4px;">${t.name}${t.rubrique?pjpRubBadge(t.rubrique):''}</div>
           <div style="display:flex;gap:3px;margin-bottom:3px;">${dotsHtmlTpl(t.colors)}</div>
           <div style="font-size:11px;color:var(--muted);">${fmtDur(t.dur)} · ${t.colors.length} couleurs${t.swaps&&t.swaps.filter(s=>s.from||s.heure).length?' · '+t.swaps.filter(s=>s.from||s.heure).map(sw=>{const f=PLANNING_PALETTE.find(c=>c.hex===sw.from);const t2=PLANNING_PALETTE.find(c=>c.hex===sw.to);return (f?f.name:'?')+'→'+(t2?t2.name:'?')+(sw.heure?' @'+sw.heure:'');}).join(', '):''}</div>
         </div>
@@ -18917,7 +18945,7 @@ function planningShowTemplates() {
   openModal(`
     <div class="modal-title">📋 Modèles Hueforge (${db.hfTemplates.length})</div>
     <input class="form-input" placeholder="🔍 Rechercher un modèle..." oninput="window._tplSearch=this.value;document.getElementById('tpl-list').innerHTML=tplListHtml ? '' : ''" style="margin-bottom:10px;width:100%;"
-      oninput="window._tplSearch=this.value; const l=document.getElementById('tpl-list'); if(l){const filtered=[...db.hfTemplates].filter(t=>!this.value||t.name.toLowerCase().includes(this.value.toLowerCase())).sort((a,b)=>a.name.localeCompare(b.name)); l.innerHTML=filtered.length?filtered.map(t=>'<div style=\"display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:8px;border:1px solid var(--border);margin-bottom:6px;\"><div style=\"flex:1;\"><div style=\"font-weight:800;font-size:14px;margin-bottom:4px;\">'+t.name+'</div><div style=\"font-size:11px;color:var(--muted);\">'+fmtDur(t.dur)+' · '+t.colors.length+' couleurs</div></div><div style=\"display:flex;flex-direction:column;gap:5px;\"><button class=\"btn btn-primary btn-sm\" onclick=\"planningLoadTemplate('+t.id+')\">▶ Utiliser</button><button class=\"btn btn-danger btn-sm\" onclick=\"planningDeleteTemplate('+t.id+')\">🗑️</button></div></div>').join(''):'<div style=\"text-align:center;padding:20px;color:var(--muted);\">Aucun modèle trouvé</div>';}">
+      oninput="window._tplSearch=this.value; const l=document.getElementById('tpl-list'); if(l){const filtered=[...db.hfTemplates].filter(t=>!this.value||t.name.toLowerCase().includes(this.value.toLowerCase())).sort((a,b)=>a.name.localeCompare(b.name)); l.innerHTML=filtered.length?filtered.map(t=>'<div style=\"display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:8px;border:1px solid var(--border);margin-bottom:6px;\"><div style=\"flex:1;\"><div style=\"font-weight:800;font-size:14px;margin-bottom:4px;\">'+t.name+(t.rubrique?pjpRubBadge(t.rubrique):'')+'</div><div style=\"font-size:11px;color:var(--muted);\">'+fmtDur(t.dur)+' · '+t.colors.length+' couleurs</div></div><div style=\"display:flex;flex-direction:column;gap:5px;\"><button class=\"btn btn-primary btn-sm\" onclick=\"planningLoadTemplate('+t.id+')\">▶ Utiliser</button><button class=\"btn btn-danger btn-sm\" onclick=\"planningDeleteTemplate('+t.id+')\">🗑️</button></div></div>').join(''):'<div style=\"text-align:center;padding:20px;color:var(--muted);\">Aucun modèle trouvé</div>';}">
     <div id="tpl-list" style="display:flex;flex-direction:column;gap:6px;max-height:55vh;overflow-y:auto;padding-right:4px;">
       ${tplListHtml('')}
     </div>
@@ -19147,9 +19175,10 @@ function ejSaveAsTemplate(id) {
   const dur = durH + durM/60;
   if(!db.hfTemplates) db.hfTemplates=[];
   if(!db.nextHfTemplateId) db.nextHfTemplateId=1;
-  const existing = db.hfTemplates.find(t=>t.name.toUpperCase()===name.toUpperCase());
+  const rubJ = job.productId!=null ? fathRubOf(job.productId) : '';
+  const existing = fathTplFind(name, rubJ);
   if(existing){ existing.dur=dur; existing.colors=[...window._ejColors]; existing.swaps=[...window._ejSwaps]; }
-  else { db.hfTemplates.push({id:db.nextHfTemplateId++, name, dur, colors:[...window._ejColors], swaps:[...window._ejSwaps], createdAt:Date.now()}); }
+  else { db.hfTemplates.push(Object.assign({id:db.nextHfTemplateId++, name, dur, colors:[...window._ejColors], swaps:[...window._ejSwaps], createdAt:Date.now()}, rubJ?{rubrique:rubJ}:{})); }
   saveData();
   showToast(`Modèle "${name}" sauvegardé 💾`, true);
 }
