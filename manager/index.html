@@ -893,7 +893,7 @@ if ('serviceWorker' in navigator) {
       <button onclick="localStorage.removeItem('fath3d_nav');location.reload();" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">🔄 Réinitialiser les menus</button>
       <button onclick="toggleTheme()" id="theme-toggle-btn" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">☀️ Thème clair</button>
       <input type="file" id="import-input" accept=".json" style="display:none" onchange="importData(event)">
-      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.18 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
+      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.19 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
     </div>
   </nav>
 
@@ -7530,7 +7530,7 @@ function renderStocks(el, actions) {
                   <button class="btn btn-secondary btn-sm" onclick="openAdjustStockMM(${p.id})" title="Ajuster">✏️</button>
                   <button class="btn btn-primary btn-sm" onclick="openReassortOne(${p.id})" title="Réassort → Marché">→🏪</button>
                   <button class="btn btn-secondary btn-sm" onclick="openRetourOne(${p.id})" title="Retour → Maison" style="border-color:#27ae60;color:#27ae60;">🏠</button>
-                  <button class="btn btn-secondary btn-sm" onclick="addStockToPlanning(${p.id})" title="Ajouter au Planning du Jour" style="border-color:#9b59b6;color:#9b59b6;">🖨️${(db.hfTemplates||[]).some(t=>t.name.toUpperCase()===p.name.toUpperCase())?'⭐':''}</button>
+                  <button class="btn btn-secondary btn-sm" onclick="addStockToPlanning(${p.id})" title="Ajouter au Planning du Jour" style="border-color:#9b59b6;color:#9b59b6;">🖨️${fathTplFor(p)?'⭐':''}</button>
                 </td>
               </tr>`;
             }).join('')}
@@ -7581,7 +7581,7 @@ function updateStocksTable() {
         <button class="btn btn-secondary btn-sm" onclick="openAdjustStockMM(${p.id})" title="Ajuster">✏️</button>
         <button class="btn btn-primary btn-sm" onclick="openReassortOne(${p.id})" title="Réassort → Marché">→🏪</button>
         <button class="btn btn-secondary btn-sm" onclick="openRetourOne(${p.id})" title="Retour → Maison" style="border-color:#27ae60;color:#27ae60;">🏠</button>
-        <button class="btn btn-secondary btn-sm" onclick="addStockToPlanning(${p.id})" title="Ajouter au Planning du Jour" style="border-color:#9b59b6;color:#9b59b6;">🖨️${(db.hfTemplates||[]).some(t=>t.name.toUpperCase()===p.name.toUpperCase())?'⭐':''}</button>
+        <button class="btn btn-secondary btn-sm" onclick="addStockToPlanning(${p.id})" title="Ajouter au Planning du Jour" style="border-color:#9b59b6;color:#9b59b6;">🖨️${fathTplFor(p)?'⭐':''}</button>
       </td>
     </tr>`;
   }).join('');
@@ -7874,7 +7874,7 @@ function pjProd(pid){
   let p=db.products.find(x=>x.id===pid);
   if(p) return p;
   const l=planLibres().find(x=>x.id===pid);
-  if(l) return {id:l.id, name:l.name, emoji:l.emoji||'🧩', libre:true, keep:l.keep};
+  if(l) return {id:l.id, name:l.name, emoji:l.emoji||'🧩', libre:true, keep:l.keep, rubrique:l.rubrique};
   return undefined;
 }
 function planNewLibreForm(){
@@ -8014,26 +8014,36 @@ function planRender(){
         <span onclick="planLaunchPlateau(${i})" title="Lancer sur une imprimante" style="flex-shrink:0;width:30px;height:30px;border-radius:8px;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#7c5cff;cursor:pointer;">${pn}</span>
         <div onclick="planLaunchPlateau(${i})" style="flex:1;min-width:0;cursor:pointer;"><div style="font-weight:700;text-transform:capitalize;${x.done?'text-decoration:line-through;':''}">${x.part||'—'} <span style="font-size:10px;color:#7c5cff;font-weight:700;">▶ lancer</span></div>
           ${swatches?`<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:4px;">${swatches}</div>`:''}</div>
-        <span style="font-size:13px;color:var(--accent);font-weight:700;white-space:nowrap;">${x.dur||'—'}</span>
+        <span style="font-size:13px;color:var(--accent);font-weight:700;white-space:nowrap;">${planParseDur(x.dur)>0?x.dur:'<span style="color:#ff5c5c;">⚠ durée manquante</span>'}</span>
         ${impBadge}
         <span onclick="planToggleCheck(${i})" style="flex-shrink:0;width:28px;height:28px;border-radius:7px;border:2px solid ${x.done?'var(--success)':'var(--border)'};background:${x.done?'var(--success)':'transparent'};color:${x.done?'#062':'transparent'};display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;cursor:pointer;">✓</span>
       </div>`;
     }
     // edit mode
+    const LBL='font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:800;margin:0 0 2px;letter-spacing:.3px;';
     const pbtns=printers.filter(pp=>!pp.masque).map(pp=>{
       const on=x.imp===pp.key;
       return `<span onclick="planSetImp(${i},'${pp.key}')" style="font-size:11px;font-weight:700;padding:5px 8px;border-radius:7px;cursor:pointer;border:1px solid ${on?pp.color:'var(--border)'};background:${on?pp.color+'22':'var(--bg)'};color:${on?pp.color:'var(--muted)'};">${pp.nom}</span>`;
     }).join('');
-    return `<div style="display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:9px 11px;margin-bottom:7px;flex-wrap:wrap;">
-      <span style="flex-shrink:0;width:30px;height:30px;border-radius:8px;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#7c5cff;">${pn}</span>
-      <div style="flex:1;min-width:140px;">
-        <input class="form-input" id="plan-part-${i}" value="${planAttr(x.part)}" oninput="planGet(${pidJS(pid)}).plateaux[${i}].part=this.value" onchange="planSave()" style="font-weight:700;padding:5px 7px;font-size:13px;margin-bottom:4px;" placeholder="partie (ex: veste)">
+    return `<div style="display:flex;align-items:flex-start;gap:10px;background:var(--card);border:1px solid ${planParseDur(x.dur)>0?'var(--border)':'#a33'};border-radius:10px;padding:9px 11px;margin-bottom:7px;flex-wrap:wrap;">
+      <span style="flex-shrink:0;width:30px;height:30px;border-radius:8px;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#7c5cff;margin-top:14px;">${pn}</span>
+      <div style="flex:1;min-width:150px;">
+        <div style="${LBL}">Nom de la partie</div>
+        <input class="form-input" id="plan-part-${i}" value="${planAttr(x.part)}" oninput="planGet(${pidJS(pid)}).plateaux[${i}].part=this.value" onchange="planSave()" style="font-weight:700;padding:5px 7px;font-size:13px;margin-bottom:6px;" placeholder="ex : veste">
+        <div style="${LBL}">Couleurs</div>
         <div style="display:flex;gap:3px;flex-wrap:wrap;align-items:center;">${swatches}<span onclick="openPlanPalette(${i})" style="font-size:11px;color:#7c5cff;background:var(--bg);border:1px dashed #5a4ba8;border-radius:5px;padding:2px 7px;cursor:pointer;">+ couleur</span></div>
       </div>
-      <input class="form-input" value="${planAttr(x.dur)}" inputmode="numeric" oninput="planGet(${pidJS(pid)}).plateaux[${i}].dur=this.value" onchange="const f=planFmtDur(this.value);planGet(${pidJS(pid)}).plateaux[${i}].dur=f;this.value=f;planSave()" style="width:70px;text-align:center;color:var(--accent);font-weight:700;padding:5px;" placeholder="ex 727">
-      <div style="display:flex;gap:4px;">${pbtns}</div>
-      <span onclick="planDupRow(${i})" title="Dupliquer ce plateau" style="flex-shrink:0;width:28px;height:28px;border-radius:7px;background:rgba(124,92,255,.14);border:1px solid #7c5cff;color:#7c5cff;font-size:14px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;">⧉</span>
-      <span onclick="planDelRow(${i})" style="flex-shrink:0;width:28px;height:28px;border-radius:7px;background:#2a1414;border:1px solid #5a2222;color:#e0786a;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🗑</span>
+      <div style="width:104px;">
+        <div style="${LBL}">Durée <span style="color:#ff5c5c;">*</span></div>
+        <input class="form-input" value="${planAttr(x.dur)}" inputmode="numeric" oninput="planGet(${pidJS(pid)}).plateaux[${i}].dur=this.value;document.getElementById('plan-dur-live-${i}').innerHTML=planDurLive(this.value)" onchange="const f=planFmtDur(this.value);planGet(${pidJS(pid)}).plateaux[${i}].dur=f;this.value=f;document.getElementById('plan-dur-live-${i}').innerHTML=planDurLive(f);planSave()" style="width:100%;text-align:center;color:var(--accent);font-weight:700;padding:5px;" placeholder="ex : 3h21">
+        <div id="plan-dur-live-${i}" style="font-size:11px;margin-top:3px;text-align:center;">${planDurLive(x.dur)}</div>
+      </div>
+      <div>
+        <div style="${LBL}">Imprimante</div>
+        <div style="display:flex;gap:4px;">${pbtns}</div>
+      </div>
+      <span onclick="planDupRow(${i})" title="Dupliquer ce plateau" style="flex-shrink:0;width:28px;height:28px;border-radius:7px;background:rgba(124,92,255,.14);border:1px solid #7c5cff;color:#7c5cff;font-size:14px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-top:14px;">⧉</span>
+      <span onclick="planDelRow(${i})" title="Supprimer ce plateau" style="flex-shrink:0;width:28px;height:28px;border-radius:7px;background:#2a1414;border:1px solid #5a2222;color:#e0786a;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-top:14px;">🗑</span>
     </div>`;
   }).join('');
 
@@ -8410,7 +8420,7 @@ function pjQueueAppend(pk, data, anchorHM){
     dureeMinutes:data.dureeMinutes||0,
     heureDebut: fixed?pjFmtHeure(anchorHM||'08:00'):'', heureFin:'', creneau:'',
     couleurs:data.couleurs||[], swaps:data.swaps||[], notes:data.notes||'', done:false,
-    ord:myOrd, gapBefore:30, fixed:fixed, fromPlan:!!data.fromPlan
+    ord:myOrd, gapBefore:30, fixed:fixed, fromPlan:!!data.fromPlan, repKey:(data.repKey||null)
   });
   pjRecalcPrinter(pk); saveData();
   // Renvoie le jour où le plateau a réellement atterri (peut déborder sur un autre jour)
@@ -12208,7 +12218,7 @@ function renderPlanningJour(el, actions) {
     <button class="btn btn-secondary btn-sm" onclick="openRecurrences()" style="border-color:#9b59b6;color:#9b59b6;">🔁 Récurrences</button>
     <button class="btn btn-secondary btn-sm" onclick="openConfigPrinters()" style="border-color:#16a085;color:#16a085;">⚙️ Imprimantes</button>
     <button class="btn btn-secondary btn-sm" onclick="planningJourGoTo('today')">📍 Aujourd'hui</button>
-    <button class="btn btn-sm" onclick="openPlanSearch()" style="background:#7c5cff;border:1px solid #7c5cff;color:#fff;font-weight:700;">🧩 Plan d'impression</button>
+    <button class="btn btn-sm" onclick="pjpFocusSearch()" style="background:#7c5cff;border:1px solid #7c5cff;color:#fff;font-weight:700;">🧩 Plan d'impression</button>
     <button class="btn btn-secondary btn-sm" onclick="navigate('inventaireVocal')" style="border-color:#f5c400;color:#f5c400;">📦 Inventaire</button>
     <button class="btn btn-secondary btn-sm" onclick="ivPrepOpen();navigate('inventaireVocal')" style="border-color:#7c5cff;color:#a996ff;">🧩 Préparer les impressions</button>
     <button class="btn btn-primary btn-sm" onclick="planningJourAdd()">+ Ajouter</button>
@@ -12292,6 +12302,7 @@ function renderPlanningJour(el, actions) {
         ${(imp.planPlateau!=null||couleurs)?`<div style="display:flex;gap:6px;margin-top:6px;align-items:center;">${imp.planPlateau!=null?`<span title="Plateau à charger dans le slicer" style="background:#7c5cff;color:#fff;font-weight:800;font-size:11px;padding:2px 7px;border-radius:6px;flex-shrink:0;">P${imp.planPlateau+1}</span>`:''}${couleurs}</div>`:''}
         ${swapsHtml}
         ${imp.notes?`<div style="font-size:10px;color:var(--muted);margin-top:4px;font-style:italic;">${imp.notes}</div>`:''}
+        ${(imp.repKey||(imp.fromPlan&&imp.productId!=null))?`<button onclick="pjpReturnImp('${dateCourante}','${imp.printer}',${idx})" title="Retire ce plateau de l'imprimante et le remet dans « À placer » de la liste d'impression (rien n'est supprimé)" style="margin-top:7px;width:100%;border-radius:6px;padding:5px;font-weight:700;font-size:11px;cursor:pointer;border:1px solid #7c5cff;background:rgba(124,92,255,.12);color:#c9b6ff;">↩ Renvoyer dans la liste</button>`:''}
         <button onclick="pjToggleDone('${dateCourante}','${imp.printer}',${idx})" style="margin-top:7px;width:100%;border-radius:6px;padding:6px;font-weight:700;font-size:11px;cursor:pointer;border:1px solid var(--success);${imp.done?'background:var(--success);color:#062;':finishing?'background:#3a2a10;border-color:var(--accent);color:var(--accent);':'background:transparent;color:var(--success);'}">${imp.done?'✓ Fait':finishing?'⏰ Terminé ? Coche':'Marquer fait'}</button>
       </div>
     `;
@@ -12320,7 +12331,11 @@ function renderPlanningJour(el, actions) {
       </div>
     ` : ''}
 
-    ${printQueuePanelHTML()}
+    ${pjpSearchBlockHTML()}
+
+    <div id="pq-wrap">${printQueuePanelHTML()}</div>
+
+    <div id="pjrep-wrap">${pjpRepHTML()}</div>
 
     ${pjProjectsPanelHTML(dateCourante)}
 
@@ -16928,7 +16943,7 @@ function addHM(startTime, elapsedTime) {
 
 // Construit les données d'impression d'un produit (reprend le modèle HF s'il existe)
 function fath_buildStockJob(p) {
-  const tpl = (db.hfTemplates||[]).find(t => t.name.toUpperCase() === p.name.toUpperCase());
+  const tpl = fathTplFor(p);
   const dureeMinutes = tpl ? Math.round((tpl.dur || 0) * 60) : 0;
   const couleurs = tpl ? (tpl.colors || []).map(c => (typeof c === 'string' ? planColorDef(c) : c)) : [];
   const swaps = tpl ? (tpl.swaps || [])
@@ -16941,7 +16956,7 @@ function fath_buildStockJob(p) {
 function addStockToPlanning(productId) {
   const p = db.products.find(x => x.id === productId);
   if (!p) return;
-  const hasTpl = (db.hfTemplates||[]).some(t => t.name.toUpperCase() === p.name.toUpperCase());
+  const hasTpl = !!fathTplFor(p);
   const printers = (typeof planPrintersVisible === 'function' ? planPrintersVisible() : planPrinters()) || [];
   const pbtns = printers.map(pr =>
     `<button class="btn btn-secondary" onclick="stockSendToPrinter(${productId},'${pr.key}')" style="text-align:left;border-color:${pr.color||'#888'};color:${pr.color||'#ddd'};">🖨️ ${pr.nom}</button>`
@@ -16998,37 +17013,637 @@ function stockSendToPrinter(productId, pk) {
   showToast(`${p.emoji||'🖨️'} ${p.name} → ${pn} 🖨️${j.hasTpl?' (modèle ⭐)':''}`, true);
 }
 
+// ===================== 🧩 PLANNING MULTI-PRODUITS (recherche, liste, répartition par couleur) =====================
+// Lien produit -> modèle HueForge. Avant : par le nom seul. Maintenant : par id si le modèle en a un ;
+// sinon par le nom, mais si plusieurs produits portent ce nom (ex. ZORO Figurine / ZORO Hueforge),
+// seul le produit de rubrique Hueforge reprend le modèle.
+function fathTplFor(p){
+  if(!p) return null;
+  const tpls=db.hfTemplates||[];
+  const byId=tpls.find(t=>t.productId!=null && t.productId===p.id);
+  if(byId) return byId;
+  const nm=String(p.name||'').toUpperCase();
+  const same=tpls.filter(t=>t.productId==null && String(t.name||'').toUpperCase()===nm);
+  if(!same.length) return null;
+  const homonyms=(db.products||[]).filter(x=>String(x.name||'').toUpperCase()===nm);
+  if(homonyms.length>1) return /hueforge/i.test(p.categorie||'') ? same[0] : null;
+  return same[0];
+}
+
+// Ce que la saisie « comprend » : affichage en direct sous le champ Durée
+function planDurLive(raw){
+  const f=planFmtDur(raw);
+  if(!f || planParseDur(f)<=0) return '<span style="color:#ff5c5c;font-weight:700;">⚠ durée manquante</span>';
+  return '<span style="color:var(--success);font-weight:700;">= '+f+'</span>';
+}
+function pjpNorm(s){ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim(); }
+function pjpEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function pjpColorDef(c){
+  if(c && typeof c==='object') return c;
+  const s=String(c==null?'':c);
+  if(s.charAt(0)==='#'){ const f=(typeof PLANNING_PALETTE!=='undefined'?PLANNING_PALETTE:[]).find(x=>String(x.hex).toLowerCase()===s.toLowerCase()); return f?{hex:f.hex,name:f.name}:{hex:s,name:s}; }
+  return planColorDef(s);
+}
+function pjpDot(c,sz){
+  sz=sz||12; const d=pjpColorDef(c);
+  return `<span title="${pjpEsc(d.name||d.hex||'')}" style="width:${sz}px;height:${sz}px;border-radius:50%;display:inline-block;border:1px solid #555;flex-shrink:0;${filSwatchCSS(d)}"></span>`;
+}
+function pjpNormSwaps(arr){
+  return (arr||[]).map(s=>(typeof s==='string'?{from:'',to:'',heure:s}:{from:s.from||'',to:s.to||'',heure:s.heure||''})).filter(s=>s.from||s.to||s.heure);
+}
+
+// ---------- Données d'un produit : plateaux déjà saisis (plan) ou modèle HueForge ----------
+function pjpPlateauxOf(pid){
+  const p=pjProd(pid); if(!p) return [];
+  const plan=(db.plansImpression||{})[pid];
+  const tpl=p.libre?null:fathTplFor(p);
+  const isHF=/hueforge/i.test(p.categorie||'');
+  const tplSwaps=tpl?pjpNormSwaps(tpl.swaps):[];
+  if(plan && plan.plateaux && plan.plateaux.length){
+    const n=plan.plateaux.length;
+    return plan.plateaux.map((x,i)=>({
+      idx:i, key:'p'+i, part:x.part||(n===1?p.name:('P'+(i+1))), min:planParseDur(x.dur),
+      colors:(x.colors||[]).map(c=>planColorDef(c)),
+      swaps:(isHF&&i===0)?tplSwaps:[], fromPlan:true, note:`plateau ${i+1}/${n} · lot ${plan.lot||1}`
+    }));
+  }
+  if(tpl){
+    return [{idx:null, key:'k0', part:p.name, min:Math.round((tpl.dur||0)*60),
+      colors:(tpl.colors||[]).map(c=>pjpColorDef(c)), swaps:tplSwaps, fromPlan:false, note:'modèle HueForge'}];
+  }
+  return [];
+}
+// Plateaux d'un article de la liste : en direct depuis le plan (articles ajoutés ici), sinon depuis l'article lui-même
+function pjpItemPlateaux(it){
+  if(it.multi && it.productId!=null){
+    const plan=(db.plansImpression||{})[it.productId];
+    if(plan && plan.plateaux && plan.plateaux.length) return pjpPlateauxOf(it.productId).filter(x=>(it.sent||[]).indexOf(x.key)<0);
+  }
+  return [{idx:null, key:'k0', part:it.nom, min:Math.round(parseFloat(it.dureeMinutes)||0),
+    colors:(it.couleurs||[]).map(c=>pjpColorDef(c)), swaps:pjpNormSwaps(it.swaps), fromPlan:false, note:''}];
+}
+function pjpRubrique(p){ return p.libre ? (p.rubrique||'Projet libre') : (p.categorie||'—'); }
+function pjpAdd(pid){
+  const p=pjProd(pid); if(!p) return false;
+  const pl=pjpPlateauxOf(pid);
+  if(!db.printQueue) db.printQueue=[];
+  if(!db.nextPrintQueueId) db.nextPrintQueueId=1;
+  const cols=[]; pl.forEach(x=>x.colors.forEach(c=>{ if(!cols.some(y=>y.name===c.name)) cols.push(c); }));
+  const sw=[]; pl.forEach(x=>(x.swaps||[]).forEach(s=>sw.push(s)));
+  db.printQueue.push({id:db.nextPrintQueueId++, productId:pid, nom:p.name, rubrique:pjpRubrique(p),
+    dureeMinutes:pl.reduce((a,x)=>a+x.min,0), couleurs:cols, swaps:sw, multi:true, createdAt:Date.now()});
+  saveData();
+  pjpRecentPush(pid);
+  return true;
+}
+
+// ---------- Récents (préférence d'affichage seulement, stockée dans le navigateur) ----------
+function pjpRecentGet(){ try{ const a=JSON.parse(localStorage.getItem('fath3d_pj_recents')||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+function pjpRecentPush(pid){ try{ const a=pjpRecentGet().filter(x=>x!==pid); a.unshift(pid); localStorage.setItem('fath3d_pj_recents', JSON.stringify(a.slice(0,8))); }catch(e){} }
+
+// ---------- Bloc « Quoi imprimer ? » ----------
+var _pjpQ='';
+function pjpCandidates(q){
+  const nq=pjpNorm(q); const store=planGetStore(); const out=[];
+  planLibres().forEach(l=>out.push({pid:l.id,name:l.name,emoji:l.emoji||'🧩',rub:l.rubrique||'Projet libre',libre:true}));
+  (db.products||[]).forEach(p=>{
+    const rub=p.categorie||'';
+    const hasPlan=store[p.id]&&store[p.id].plateaux&&store[p.id].plateaux.length;
+    if(/figurine|hueforge/i.test(rub) || hasPlan) out.push({pid:p.id,name:p.name,emoji:p.emoji||'📦',rub:rub||'—',libre:false});
+  });
+  return out.filter(c=>!nq||pjpNorm(c.name).includes(nq)||pjpNorm(c.rub).includes(nq)).sort((a,b)=>a.name.localeCompare(b.name,'fr'));
+}
+function pjpInfoLine(pid){
+  const pl=pjpPlateauxOf(pid);
+  if(!pl.length) return '<span style="color:var(--warn);">⏱️ à saisir (aucun plateau enregistré)</span>';
+  const tot=pl.reduce((a,x)=>a+x.min,0);
+  const sw=pl.reduce((a,x)=>a+(x.swaps||[]).length,0);
+  return `${pl.length} plateau${pl.length>1?'x':''} · ${tot?planMinToDur(tot):''}${pl.some(x=>!(x.min>0))?`${tot?' ':''}<span style="color:#ff5c5c;font-weight:700;">⚠ durée manquante${pl.length>1?' ('+pl.filter(x=>!(x.min>0)).length+')':''}</span>`:''}${sw?` · 🔁 ${sw} swap${sw>1?'s':''}`:''}`;
+}
+function pjpResultsHTML(){
+  const q=(_pjpQ||'').trim(); if(!q) return '';
+  const all=pjpCandidates(q); const rows=all.slice(0,8);
+  const exact=all.some(c=>pjpNorm(c.name)===pjpNorm(q));
+  let html=rows.map(c=>`<div style="display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:8px 12px;margin-top:6px;flex-wrap:wrap;">
+      <span style="font-size:18px;">${c.emoji}</span>
+      <div style="flex:1;min-width:150px;"><div style="font-weight:800;">${pjpEsc(c.name)}</div>
+        <div style="font-size:11px;color:var(--muted);"><span style="color:var(--accent);text-transform:uppercase;">${pjpEsc(c.rub)}</span> · ${pjpInfoLine(c.pid)}</div></div>
+      <button class="btn btn-secondary btn-sm" onclick="pjpEditPlan(${pidJS(c.pid)})" title="Ajouter, supprimer, dupliquer des plateaux, changer couleurs et durées">✏️ Modifier les plateaux</button>
+      <button class="btn btn-sm" onclick="pjpAddFromSearch(${pidJS(c.pid)})" style="background:var(--accent);color:#111;border-color:var(--accent);font-weight:800;">+ Ajouter à la liste</button>
+    </div>`).join('');
+  if(all.length>rows.length) html+=`<div style="font-size:11px;color:var(--muted);margin-top:6px;">… ${all.length-rows.length} autres résultats : précise ta recherche.</div>`;
+  if(!all.length) html+=`<div style="font-size:12px;color:var(--muted);margin-top:8px;">Aucun produit « ${pjpEsc(q)} » (figurines et HueForge).</div>`;
+  if(!exact) html+=`<button class="btn btn-secondary btn-sm" onclick="pjpNewOpen(${pjpAttrJs(q)})" style="margin-top:8px;border-style:dashed;border-color:var(--accent);color:var(--accent);">+ Créer « ${pjpEsc(q)} »</button>`;
+  return html;
+}
+function pjpAttrJs(s){ return pjpEsc("'"+String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")+"'"); }
+function pjpRecentsHTML(){
+  let ids=pjpRecentGet().filter(pid=>pjProd(pid)); let label='Récents';
+  if(!ids.length){
+    label='Plateaux déjà saisis';
+    const s=db.plansImpression||{};
+    ids=Object.keys(s).filter(k=>s[k]&&s[k].plateaux&&s[k].plateaux.length).map(k=>/^\d+$/.test(k)?parseInt(k,10):k).filter(pid=>pjProd(pid)).slice(0,8);
+  }
+  if(!ids.length) return '';
+  return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;"><span style="font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:700;">${label} :</span>`+
+    ids.map(pid=>{ const p=pjProd(pid); return `<button class="btn btn-secondary btn-sm" onclick="pjpAddFromSearch(${pidJS(pid)})" title="${pjpEsc(p.name)} — ${pjpEsc(pjpRubrique(p))}">${pjpEsc(p.name)} <span style="font-size:9px;color:var(--muted);text-transform:uppercase;">${pjpEsc(pjpRubrique(p))}</span></button>`; }).join('')+`</div>`;
+}
+function pjpSearchBlockHTML(){
+  return `<div class="card" id="pjq-card" style="margin-bottom:14px;border-left:4px solid #7c5cff;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      <div style="font-size:15px;font-weight:800;color:#a996ff;">🔍 Quoi imprimer ?</div>
+      <span onclick="openPlanSearch()" style="font-size:11px;color:var(--muted);cursor:pointer;text-decoration:underline;">🧩 Plan détaillé d'un produit</span>
+    </div>
+    <input class="form-input" id="pjq-input" autocomplete="off" value="${pjpEsc(_pjpQ)}" placeholder="Tape un nom (figurine, HueForge, cadre…) — Entrée ajoute si un seul résultat" oninput="pjpSearchInput(this.value)" onkeydown="pjpSearchKey(event)">
+    <div id="pjq-results">${pjpResultsHTML()}</div>
+    <div id="pjq-recents">${pjpRecentsHTML()}</div>
+  </div>`;
+}
+function pjpRefresh(){
+  const set=(id,h)=>{ const e=document.getElementById(id); if(e) e.innerHTML=h; };
+  set('pjq-results', pjpResultsHTML());
+  set('pjq-recents', pjpRecentsHTML());
+  set('pq-wrap', printQueuePanelHTML());
+  set('pjrep-wrap', pjpRepHTML());
+}
+function pjpSearchInput(v){ _pjpQ=v; const e=document.getElementById('pjq-results'); if(e) e.innerHTML=pjpResultsHTML(); }
+function pjpSearchKey(ev){
+  if(ev.key!=='Enter') return;
+  ev.preventDefault();
+  const q=(_pjpQ||'').trim(); if(!q) return;
+  const all=pjpCandidates(q);
+  if(all.length===1) pjpAddFromSearch(all[0].pid);
+  else showToast(all.length?'Plusieurs résultats : clique sur « + Ajouter à la liste »':'Aucun résultat : utilise « + Créer »', false);
+}
+function pjpAddFromSearch(pid){
+  const p=pjProd(pid); if(!p) return;
+  if(!pjpAdd(pid)) return;
+  _pjpQ='';
+  const inp=document.getElementById('pjq-input'); if(inp){ inp.value=''; }
+  pjpRefresh();
+  showToast(`✅ ${p.name} (${pjpRubrique(p)}) ajouté à la liste`, true);
+  if(inp) inp.focus();
+}
+function pjpFocusSearch(){
+  if((window._planningJourMode||'jour')!=='jour'){ planningSetMode('jour'); setTimeout(pjpFocusSearch,200); return; }
+  const i=document.getElementById('pjq-input');
+  if(i){ i.scrollIntoView({behavior:'smooth',block:'center'}); i.focus(); } else openPlanSearch();
+}
+// Ouvre le plan du produit directement en mode Édition (ajouter / supprimer / dupliquer des plateaux, couleurs, durées).
+// À la fermeture, la page se redessine (via _plaqueDirty) : liste, totaux et répartition se mettent à jour seuls.
+function pjpEditPlan(pid){ window._plaqueDirty=true; openPlan(pid); _planMode='edit'; planRender(); }
+
+// ---------- Répartition : tout est placé À LA MAIN (rien n'est placé automatiquement) ----------
+function pjpUnits(){
+  const out=[];
+  (db.printQueue||[]).forEach(it=>{
+    pjpItemPlateaux(it).forEach((x,k)=>{
+      const keys=[]; x.colors.forEach(c=>{ const n=c.name||c.hex; if(n && !keys.includes(n)) keys.push(n); });
+      out.push({uid:it.id+':'+x.key, key:x.key, itemId:it.id, pid:it.productId, nom:it.nom,
+        rub:it.rubrique||((it.productId!=null&&pjProd(it.productId))?pjpRubrique(pjProd(it.productId)):''),
+        part:x.part, min:x.min, colors:x.colors, keys:keys,
+        swaps:x.swaps||[], idx:x.idx, fromPlan:x.fromPlan, note:x.note||'',
+        // filaments à charger en même temps : chaque swap HueForge libère une place (la couleur qui part est remplacée)
+        need:Math.max(1, keys.length-((x.swaps||[]).filter(s=>s.from&&s.to).length))});
+    });
+  });
+  return out;
+}
+function pjpCap(pr){ return pr.type==='mono'?1:(pr.type==='resine'?0:4); }
+function pjpPrinters(){ return planPrintersVisible().filter(p=>pjpCap(p)>0); }
+function pjpBaseLoad(pk){
+  let m=0; Object.keys(db.planningJour||{}).forEach(d=>(db.planningJour[d].impressions||[]).forEach(i=>{ if(i.printer===pk && !i.done) m+=parseFloat(i.dureeMinutes)||0; }));
+  return m;
+}
+function pjpSig(){
+  return pjpPrinters().map(p=>p.key+p.type).join(',')+'|'+pjpUnits().map(u=>u.uid+'/'+u.min+'/'+u.keys.join('+')).join(';');
+}
+// --- Couleurs chargées en ce moment sur une imprimante (enregistrées dans db.printersConfig[].chargees) ---
+function pjpLoaded(pr){ return (pr.chargees||[]).map(n=>planColorDef(n)); }
+function pjpColSame(a,b){
+  const na=String(a.name||a.hex||'').toLowerCase(), nb=String(b.name||b.hex||'').toLowerCase();
+  if(na && na===nb) return true;
+  const ha=String(a.hex||'').toLowerCase(), hb=String(b.hex||'').toLowerCase();
+  return !!ha && ha===hb && ha!=='#888' && ha!=='#888888';
+}
+function pjpHas(defs,c){ return defs.some(d=>pjpColSame(c,d)); }
+function pjpMissing(u,defs){
+  const out=[]; u.colors.forEach(c=>{ if(!pjpHas(defs,c) && !pjpHas(out,c)) out.push(c); }); return out;
+}
+// Regroupement par couleur dans une imprimante : d'abord les couleurs déjà chargées, puis les plus longues
+function pjpSortPrinter(list, loaded){
+  const sig=u=>u.keys.slice().sort().join('+');
+  const tot={}; list.forEach(u=>{ tot[sig(u)]=(tot[sig(u)]||0)+u.min; });
+  const rank=u=>(loaded&&loaded.length&&!pjpMissing(u,loaded).length)?0:1;
+  list.sort((a,b)=>{ const sa=sig(a), sb=sig(b);
+    if(sa!==sb){ return (rank(a)-rank(b))||(tot[sb]-tot[sa])||sa.localeCompare(sb); }
+    return b.min-a.min; });
+}
+// Aucun placement automatique : les plateaux nouveaux vont dans « À placer », ceux déjà placés par Pat restent où ils sont
+function pjpCompute(prev){
+  const prs=pjpPrinters(); const units=pjpUnits();
+  const S={printers:{}, order:prs.map(p=>p.key), aplacer:[], sig:pjpSig()};
+  prs.forEach(p=>{ S.printers[p.key]=[]; });
+  const kept={};
+  if(prev){ prs.forEach(p=>(prev.printers[p.key]||[]).forEach(o=>{ kept[o.uid]=p.key; })); }
+  units.forEach(u=>{ if(kept[u.uid]) S.printers[kept[u.uid]].push(u); else S.aplacer.push(u); });
+  prs.forEach(p=>pjpSortPrinter(S.printers[p.key], pjpLoaded(p)));
+  return S;
+}
+function pjpState(){
+  if(!window._pjRep || window._pjRep.sig!==pjpSig()) window._pjRep=pjpCompute(window._pjRep);
+  return window._pjRep;
+}
+// Renvoie un plateau envoyé (Valider) depuis une imprimante vers « À placer » : retiré du planning, jamais supprimé ni dupliqué
+function pjpReturnImp(date, printer, idx){
+  const arr=((db.planningJour||{})[date]||{}).impressions; if(!arr||!arr[idx]) return;
+  const imp=arr[idx]; const pid=imp.productId;
+  if(pid==null) return;
+  const key=imp.repKey || (imp.planPlateau!=null ? 'p'+imp.planPlateau : 'k0');
+  const label=imp.part || (imp.planPlateau!=null ? 'P'+(imp.planPlateau+1) : 'plateau');
+  arr.splice(idx,1);
+  if(imp.printer) pjRecalcPrinter(imp.printer);
+  // Le plateau repart de zéro : plus de « fait » dans le plan
+  if(imp.planPlateau!=null){ const pp=(db.plansImpression||{})[pid]; if(pp && pp.plateaux && pp.plateaux[imp.planPlateau]) pp.plateaux[imp.planPlateau].done=false; }
+  if(!db.printQueue) db.printQueue=[];
+  if(!db.nextPrintQueueId) db.nextPrintQueueId=1;
+  const keys=pjProd(pid) ? pjpPlateauxOf(pid).map(x=>x.key) : [];
+  const it=db.printQueue.find(x=>x.productId===pid && x.multi);
+  if(keys.indexOf(key)<0){
+    // Le plateau n'existe plus dans le plan du produit : on le garde tel qu'il était dans la liste
+    db.printQueue.push({id:db.nextPrintQueueId++, productId:pid, nom:imp.nom, rubrique:'', dureeMinutes:imp.dureeMinutes||0,
+      couleurs:imp.couleurs||[], swaps:imp.swaps||[], createdAt:Date.now()});
+  } else if(it){
+    it.sent=(it.sent||[]).filter(k=>k!==key);
+  } else {
+    // Produit plus dans la liste : on le remet avec ce plateau ; les autres plateaux déjà sur des imprimantes restent « envoyés »
+    const onPrinters=[];
+    Object.keys(db.planningJour||{}).forEach(d=>((db.planningJour[d]||{}).impressions||[]).forEach(i=>{
+      if(i.productId===pid && (i.repKey || (i.fromPlan && i.planPlateau!=null))) onPrinters.push(i.repKey || ('p'+i.planPlateau));
+    }));
+    if(pjpAdd(pid)){ const ni=db.printQueue[db.printQueue.length-1]; ni.sent=onPrinters.filter(k=>k!==key); }
+  }
+  saveData();
+  showToast(`« ${label} » de ${imp.nom} remis dans la liste`, true);
+  render('planningJour');
+}
+function pjpResetPlacement(){
+  const S=pjpState();
+  S.order.forEach(pk=>{ S.printers[pk].forEach(u=>S.aplacer.push(u)); S.printers[pk]=[]; });
+  pjpRefresh();
+  showToast('Tous les plateaux sont revenus dans « À placer »', true);
+}
+function pjpFind(S,uid){
+  for(const pk of S.order){ const i=S.printers[pk].findIndex(u=>u.uid===uid); if(i>=0) return {pk, i, list:S.printers[pk]}; }
+  const j=S.aplacer.findIndex(u=>u.uid===uid);
+  return j>=0 ? {pk:'', i:j, list:S.aplacer} : null;
+}
+function pjpMove(uid, to){
+  const S=pjpState(); const f=pjpFind(S,uid); if(!f) return;
+  if(to==='__none') to='';
+  if(to===f.pk) { pjpRefresh(); return; }
+  const u=f.list[f.i];
+  if(to===''){ f.list.splice(f.i,1); S.aplacer.push(u); pjpRefresh(); return; }
+  const pr=pjpPrinters().find(p=>p.key===to); if(!pr){ pjpRefresh(); return; }
+  if(u.need>pjpCap(pr)){
+    showToast(`${pr.nom} (${printerSub(pr.type)}) ne peut pas porter « ${u.part} » : ce plateau demande ${u.need} couleur${u.need>1?'s':''} en même temps`, false);
+    pjpRefresh(); return;
+  }
+  f.list.splice(f.i,1); S.printers[to].push(u); pjpSortPrinter(S.printers[to], pjpLoaded(pr));
+  pjpRefresh();
+}
+// ◀ ▶ : imprimante précédente / suivante (◀ depuis la première = retour dans « À placer »)
+function pjpShift(uid, dir){
+  const S=pjpState(); const f=pjpFind(S,uid); if(!f) return;
+  if(f.pk==='') return;
+  const ni=S.order.indexOf(f.pk)+dir;
+  if(ni<0){ pjpMove(uid,''); return; }
+  if(ni>=S.order.length) return;
+  pjpMove(uid, S.order[ni]);
+}
+// Aide optionnelle : jamais automatique, seulement au clic. Ne touche qu'aux plateaux « À placer ».
+function pjpPropose(pk){
+  const S=pjpState(); const pr=pjpPrinters().find(p=>p.key===pk); if(!pr) return;
+  const cap=pjpCap(pr);
+  const U=pjpLoaded(pr);
+  S.printers[pk].forEach(u=>u.colors.forEach(c=>{ if(!pjpHas(U,c)) U.push(c); }));
+  let rest=S.aplacer.filter(u=>u.need<=cap);
+  const take=rest.filter(u=>!pjpMissing(u,U).length);   // 1) rien à recharger
+  rest=rest.filter(u=>take.indexOf(u)<0);
+  let extra=[];
+  // 2) sinon, le groupe qui demande le moins de changements de filament (sans dépasser les emplacements)
+  let best=null;
+  rest.forEach(u=>{
+    const miss=pjpMissing(u,U); if(!miss.length) return;
+    const U2=U.slice(); miss.forEach(c=>{ if(!pjpHas(U2,c)) U2.push(c); });
+    if(U2.length>cap) return;
+    const grp=rest.filter(v=>!pjpMissing(v,U2).length);
+    const tot=grp.reduce((a,v)=>a+v.min,0);
+    if(!best || miss.length<best.miss.length || (miss.length===best.miss.length && tot>best.tot)) best={miss,U2,grp,tot};
+  });
+  if(best){ best.grp.forEach(u=>take.push(u)); extra=best.miss; }
+  if(!take.length){
+    showToast(`Rien ne rentre sur ${pr.nom} sans dépasser ${cap} couleur${cap>1?'s':''} : modifie les couleurs chargées ou place à la main`, false);
+    return;
+  }
+  take.forEach(u=>{ const i=S.aplacer.indexOf(u); if(i>=0) S.aplacer.splice(i,1); S.printers[pk].push(u); });
+  pjpSortPrinter(S.printers[pk], pjpLoaded(pr));
+  pjpRefresh();
+  showToast(`${take.length} plateau${take.length>1?'x':''} proposé${take.length>1?'s':''} sur ${pr.nom}`+(extra.length?` · à charger en plus : ${extra.map(c=>c.name||c.hex).join(', ')}`:' · aucune couleur à recharger'), true);
+}
+// --- Choix des couleurs chargées ---
+var _pjLoad=null;
+function pjpLoadOpen(pk){
+  const pr=pjpPrinters().find(p=>p.key===pk); if(!pr) return;
+  _pjLoad={pk, cap:pjpCap(pr), sel:(pr.chargees||[]).slice()};
+  pjpLoadRender();
+}
+function pjpLoadGridHTML(){
+  const all=[...(typeof FILAMENT_PALETTE!=='undefined'?FILAMENT_PALETTE:[]), ...(db.customFilColors||[])];
+  return all.map(c=>{ const on=_pjLoad.sel.includes(c.name);
+    return `<div onclick="pjpLoadTog('${escapeJs(c.name)}')" title="${pjpEsc(c.name)}" style="aspect-ratio:1;border-radius:8px;cursor:pointer;${filSwatchCSS(c)};border:2px solid ${on?'#fff':'rgba(255,255,255,.12)'};${on?'box-shadow:0 0 0 2px #7c5cff;':''}"></div>`; }).join('');
+}
+function pjpLoadSelHTML(){
+  return _pjLoad.sel.length ? _pjLoad.sel.map(n=>pjpDot(n,14)+' '+pjpEsc(n)).join(' &nbsp; ') : 'Aucune couleur sélectionnée';
+}
+function pjpLoadRender(){
+  const pr=pjpPrinters().find(p=>p.key===_pjLoad.pk);
+  openModal(`
+    <div class="modal-title">🎨 Couleurs chargées — ${pjpEsc(pr.nom)}</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Touche ${_pjLoad.cap>1?'jusqu\'à '+_pjLoad.cap+' couleurs':'la couleur'} actuellement dans l'imprimante (${printerSub(pr.type)}). Tu peux changer à tout moment.</div>
+    <div id="pjl-grid" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;max-height:42vh;overflow-y:auto;margin-bottom:10px;">${pjpLoadGridHTML()}</div>
+    <div id="pjl-sel" style="font-size:12px;margin-bottom:12px;">${pjpLoadSelHTML()}</div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-secondary" onclick="_pjLoad.sel=[];pjpLoadRender()">Vider</button>
+      <button class="btn" onclick="pjpLoadOk()" style="background:var(--accent);color:#111;border-color:var(--accent);font-weight:800;">✓ Enregistrer</button>
+    </div>`);
+}
+function pjpLoadTog(name){
+  const L=_pjLoad; const i=L.sel.indexOf(name);
+  if(i>=0) L.sel.splice(i,1);
+  else if(L.cap===1) L.sel=[name];
+  else if(L.sel.length>=L.cap){ showToast(`${L.cap} couleurs maximum sur cette imprimante : retire-en une d'abord`, false); return; }
+  else L.sel.push(name);
+  const g=document.getElementById('pjl-grid'); if(g) g.innerHTML=pjpLoadGridHTML();
+  const s=document.getElementById('pjl-sel'); if(s) s.innerHTML=pjpLoadSelHTML();
+}
+function pjpLoadOk(){
+  const pr=(db.printersConfig||[]).find(p=>p.key===_pjLoad.pk);
+  if(pr){ pr.chargees=_pjLoad.sel.slice(); saveData(); }
+  _pjLoad=null; closeModal(); pjpRefresh();
+}
+function pjpValidate(){
+  const S=pjpState();
+  const units=[]; S.order.forEach(pk=>S.printers[pk].forEach(u=>units.push({pk,u})));
+  if(!units.length){ showToast('Place d\'abord des plateaux sur une imprimante', false); return; }
+  // Durée obligatoire : on ne compte jamais un plateau sans durée comme 0
+  const sans=units.filter(({u})=>!(u.min>0));
+  if(sans.length){
+    alert("Impossible d'envoyer : durée manquante pour "+sans.length+" plateau"+(sans.length>1?"x":"")+" :\n\n"+
+      sans.map(({u})=>"• "+u.nom+(u.rub?" ("+u.rub+")":"")+" — plateau « "+(u.part||"sans nom")+" »").join("\n")+
+      "\n\nClique « ✏️ Modifier les plateaux » sur ce produit, renseigne la durée, puis valide à nouveau.");
+    return;
+  }
+  if(!confirm(`Envoyer ${units.length} plateau${units.length>1?'x':''} placé${units.length>1?'s':''} sur les imprimantes ?`+(S.aplacer.length?`\n${S.aplacer.length} plateau${S.aplacer.length>1?'x':''} restent dans « À placer ».`:''))) return;
+  window._planningJourDate=window._planningJourDate||todayISO();
+  const sentKeys={};
+  units.forEach(({pk,u})=>{
+    pjQueueAppend(pk,{productId:u.pid, planPlateau:(u.fromPlan?u.idx:null), nom:u.nom, part:u.part, dureeMinutes:u.min,
+      couleurs:u.colors, swaps:u.swaps, notes:u.note, fromPlan:!!u.fromPlan, repKey:u.key});
+    (sentKeys[u.itemId]=sentKeys[u.itemId]||[]).push(u.key);
+    // On repart de zéro : l'ancien « fait » du plan ne doit pas faire croire que ce plateau est déjà imprimé
+    if(u.fromPlan && u.idx!=null){ const pp=(db.plansImpression||{})[u.pid]; if(pp && pp.plateaux && pp.plateaux[u.idx]) pp.plateaux[u.idx].done=false; }
+  });
+  // Les plateaux envoyés quittent la liste ; ceux restés « À placer » y restent
+  const remaining={}; S.aplacer.forEach(u=>{ remaining[u.itemId]=true; });
+  db.printQueue=(db.printQueue||[]).filter(it=>{
+    if(!sentKeys[it.id]) return true;
+    if(!remaining[it.id]) return false;
+    it.sent=(it.sent||[]).concat(sentKeys[it.id]);
+    return true;
+  });
+  window._pjRep=null;
+  saveData();
+  showToast(`🖨️ ${units.length} plateau${units.length>1?'x':''} envoyé${units.length>1?'s':''} sur les imprimantes`, true);
+  render('planningJour');
+}
+function pjpRepHTML(){
+  const q=db.printQueue||[];
+  const head=(extra)=>`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+      <div style="font-size:15px;font-weight:800;color:var(--accent);">🧮 Répartition sur les imprimantes</div>${extra||''}</div>`;
+  if(!q.length) return `<div class="card" style="margin-bottom:14px;border-left:4px solid #16a085;">${head()}<div style="font-size:12px;color:var(--muted);">Ajoute des produits à la liste : leurs plateaux arrivent dans « À placer », et tu choisis toi-même l'imprimante de chacun.</div></div>`;
+  const S=pjpState();
+  const prs=pjpPrinters();
+  const nbPlaced=S.order.reduce((a,pk)=>a+S.printers[pk].length,0);
+  const sansTxt=(list)=>{ const n=list.filter(u=>!(u.min>0)).length; return n?` <span style="color:#ff5c5c;">(+ ${n} sans durée)</span>`:''; };
+  const durCell=u=>u.min>0?planMinToDur(u.min):'<span style="color:#ff5c5c;">⚠ durée manquante</span>';
+  const placedRow=(u,n)=>{
+    const sel=`<select onchange="pjpMove('${u.uid}',this.value)" title="Changer d'imprimante" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);border-radius:5px;font-size:10px;max-width:92px;">`+
+      `<option value="">⇄</option><option value="__none">↩ À placer</option>`+prs.map(p=>`<option value="${p.key}">${pjpEsc(p.nom)}</option>`).join('')+`</select>`;
+    return `<div style="display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:5px 7px;margin-top:5px;flex-wrap:wrap;">
+      <span style="font-size:10px;font-weight:800;color:var(--muted);width:16px;">${n}</span>
+      <span style="display:inline-flex;gap:2px;align-items:center;">${u.colors.map(c=>pjpDot(c,11)).join('')}</span>
+      <div style="flex:1;min-width:90px;font-size:12px;"><b>${pjpEsc(u.nom)}</b> <span style="color:var(--muted);">· ${pjpEsc(u.part)}</span>${planningSwapBadgesHtml(u.swaps,{showLabels:true})}</div>
+      <span style="font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap;">${durCell(u)}</span>
+      <span style="display:inline-flex;gap:3px;align-items:center;"><button onclick="pjpShift('${u.uid}',-1)" title="Imprimante précédente (depuis la première : retour dans À placer)" class="btn btn-secondary btn-sm" style="padding:1px 6px;">◀</button><button onclick="pjpShift('${u.uid}',1)" title="Imprimante suivante" class="btn btn-secondary btn-sm" style="padding:1px 6px;">▶</button>${sel}</span>
+    </div>`;
+  };
+  const toBtns=u=>prs.map(p=>{ const ok=u.need<=pjpCap(p);
+    return `<button onclick="pjpMove('${u.uid}','${p.key}')" title="${ok?'Placer sur '+pjpEsc(p.nom):pjpEsc(p.nom)+' ('+printerSub(p.type)+') ne peut pas porter ce plateau'}" style="background:transparent;border:1px solid ${p.color||'#888'};color:${p.color||'#ddd'};border-radius:7px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer;${ok?'':'opacity:.4;'}">→ ${pjpEsc(p.nom)}</button>`; }).join('');
+  const toPlaceRow=u=>`<div style="display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:5px 7px;margin-top:5px;flex-wrap:wrap;">
+      <span style="display:inline-flex;gap:2px;align-items:center;">${u.colors.map(c=>pjpDot(c,11)).join('')}</span>
+      <div style="flex:1;min-width:110px;font-size:12px;"><span style="color:var(--muted);">${pjpEsc(u.part)}</span>${planningSwapBadgesHtml(u.swaps,{showLabels:true})}</div>
+      <span style="font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap;">${durCell(u)}</span>
+      <span style="display:inline-flex;gap:4px;flex-wrap:wrap;">${toBtns(u)}</span>
+    </div>`;
+  // --- Zone « À placer », regroupée par produit
+  let placeBody='';
+  if(!S.aplacer.length) placeBody='<div style="font-size:12px;color:var(--muted);padding:6px 0;">Tout est placé. Vérifie les cartes ci-dessous puis valide.</div>';
+  else {
+    const byItem={}; const order=[]; S.aplacer.forEach(u=>{ if(!byItem[u.itemId]){ byItem[u.itemId]=[]; order.push(u.itemId); } byItem[u.itemId].push(u); });
+    placeBody=order.map(id=>{ const l=byItem[id]; const f=l[0];
+      return `<div style="margin-top:8px;"><div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);"><span style="color:var(--text);">${pjpEsc(f.nom)}</span> ${f.rub?'· <span style="color:var(--accent);">'+pjpEsc(f.rub)+'</span>':''} · ${l.length} plateau${l.length>1?'x':''}</div>${l.map(toPlaceRow).join('')}</div>`; }).join('');
+  }
+  const aplacerTot=S.aplacer.reduce((a,u)=>a+u.min,0);
+  const placeCard=`<div style="margin-bottom:12px;background:rgba(124,92,255,.06);border:1px dashed #7c5cff;border-radius:10px;padding:10px 12px;">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap;"><b style="color:#a996ff;">📥 À placer — ${S.aplacer.length} plateau${S.aplacer.length>1?'x':''}${aplacerTot?' · '+planMinToDur(aplacerTot):''}${sansTxt(S.aplacer)}</b><span style="font-size:11px;color:var(--muted);">Rien n'est placé tout seul : choisis une imprimante pour chaque plateau.</span></div>
+      ${placeBody}</div>`;
+  // --- Cartes imprimantes
+  const cards=prs.map(pr=>{
+    const list=S.printers[pr.key]||[];
+    const tot=list.reduce((a,u)=>a+u.min,0);
+    const base=pjpBaseLoad(pr.key);
+    const loaded=pjpLoaded(pr); const cap=pjpCap(pr);
+    const used=[]; list.forEach(u=>u.colors.forEach(c=>{ if(!pjpHas(used,c)) used.push(c); }));
+    const extra=used.filter(c=>!pjpHas(loaded,c));
+    const loadedHTML=loaded.length?loaded.map(c=>pjpDot(c,14)+' <span style="color:var(--text);">'+pjpEsc(c.name||c.hex)+'</span>').join(' &nbsp; '):'<span style="color:var(--warn);">à indiquer</span>';
+    let extraHTML='';
+    if(list.length){
+      extraHTML=extra.length
+        ? `<div style="font-size:11px;margin-top:3px;color:#ffb347;">➕ À charger en plus : ${extra.map(c=>pjpDot(c,12)+' <b>'+pjpEsc(c.name||c.hex)+'</b>').join(' &nbsp; ')}</div>`
+        : `<div style="font-size:11px;margin-top:3px;color:var(--success);">✓ Rien à recharger</div>`;
+      if(loaded.length+extra.length>cap) extraHTML+=`<div style="font-size:11px;margin-top:2px;color:var(--warn);">⚠ ${loaded.length+extra.length} couleurs pour ${cap} emplacement${cap>1?'s':''} : il faudra recharger en cours de route</div>`;
+    }
+    let lastSig=null, n=0, body='';
+    list.forEach(u=>{
+      const sg=u.keys.slice().sort().join('+');
+      if(sg!==lastSig){
+        const gl=list.filter(x=>x.keys.slice().sort().join('+')===sg);
+        body+=`<div style="margin-top:8px;font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;">${u.colors.length?u.colors.map(c=>pjpDot(c,10)+' '+pjpEsc(c.name||c.hex)).join(' · '):'Couleur à définir'} — ${planMinToDur(gl.reduce((a,x)=>a+x.min,0))}${sansTxt(gl)}</div>`;
+        lastSig=sg;
+      }
+      body+=placedRow(u,++n);
+    });
+    if(!list.length) body='<div style="text-align:center;color:var(--muted);font-size:12px;padding:12px 0;">Aucun plateau placé</div>';
+    return `<div style="background:var(--card);border:1px solid var(--border);border-top:3px solid ${pr.color||'#888'};border-radius:10px;padding:10px 12px;">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:6px;"><b style="color:${pr.color||'var(--text)'};">${pjpEsc(pr.nom)}</b><span style="font-size:10px;color:var(--muted);">${printerSub(pr.type)}</span></div>
+      <div style="font-size:11px;color:var(--muted);margin:5px 0 0;">Chargé en ce moment (${cap} max) : ${loadedHTML} <span onclick="pjpLoadOpen('${pr.key}')" style="cursor:pointer;color:#a996ff;text-decoration:underline;margin-left:4px;">✏️ modifier</span></div>
+      ${extraHTML}
+      <button class="btn btn-secondary btn-sm" onclick="pjpPropose('${pr.key}')" title="Place sur cette imprimante, seulement parmi les plateaux « À placer », d'abord ceux dont les couleurs sont déjà chargées" style="margin-top:7px;width:100%;border-color:${pr.color||'#888'};">✨ Proposer pour cette imprimante</button>
+      ${body}
+      <div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border);font-size:12px;"><b>Total : ${planMinToDur(tot)}</b>${sansTxt(list)}${base?` <span style="color:var(--muted);">· déjà en file : ${planMinToDur(base)}</span>`:''}</div>
+    </div>`;
+  }).join('');
+  const btns=`<span style="display:inline-flex;gap:6px;flex-wrap:wrap;"><button class="btn btn-secondary btn-sm" onclick="pjpResetPlacement()" title="Remet tous les plateaux placés dans « À placer » (rien n'est envoyé)">↺ Tout remettre à placer</button><button class="btn btn-sm" onclick="pjpValidate()" style="background:var(--accent);color:#111;border-color:var(--accent);font-weight:800;">✓ Valider : envoyer sur les imprimantes</button></span>`;
+  return `<div class="card" style="margin-bottom:14px;border-left:4px solid #16a085;">${head(btns)}
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">${S.aplacer.length+nbPlaced} plateau${S.aplacer.length+nbPlaced>1?'x':''} : ${nbPlaced} placé${nbPlaced>1?'s':''}, ${S.aplacer.length} à placer. Rien n'est définitif avant « Valider », qui n'envoie que les plateaux placés. Une imprimante 1 couleur ne prend que du mono-couleur.</div>
+    ${placeCard}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;">${cards}</div></div>`;
+}
+
+// ---------- Création d'un produit (projet libre complet) ----------
+var _pjNew=null;
+function pjpRubriques(){
+  const s=new Set(['Figurine','Hueforge']); (db.products||[]).forEach(p=>{ if(p.categorie) s.add(p.categorie); });
+  return [...s];
+}
+function pjpNewOpen(name){
+  _pjNew={name:name||'', rub:'Figurine', plateaux:[{part:'',dur:'',colors:[]}], pick:null, sel:[]};
+  pjpNewRender();
+}
+function pjpNewRender(){
+  const N=_pjNew; if(!N) return;
+  if(N.pick!=null){ pjpNewPaletteRender(); return; }
+  const LBL='font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:800;margin:0 0 2px;letter-spacing:.3px;';
+  const rows=N.plateaux.map((x,i)=>`<div style="display:flex;align-items:flex-start;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin-bottom:6px;flex-wrap:wrap;">
+      <span style="flex-shrink:0;width:28px;height:28px;border-radius:8px;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#7c5cff;margin-top:14px;">P${i+1}</span>
+      <div style="flex:1;min-width:120px;"><div style="${LBL}">Nom de la partie</div><input class="form-input" value="${pjpEsc(x.part)}" placeholder="ex : peau" oninput="_pjNew.plateaux[${i}].part=this.value" style="padding:5px 7px;font-size:13px;"></div>
+      <div style="width:104px;"><div style="${LBL}">Durée <span style="color:#ff5c5c;">*</span></div><input class="form-input" value="${pjpEsc(x.dur)}" inputmode="numeric" placeholder="ex : 3h21" oninput="_pjNew.plateaux[${i}].dur=this.value;document.getElementById('pjn-live-${i}').innerHTML=planDurLive(this.value)" onchange="this.value=planFmtDur(this.value);_pjNew.plateaux[${i}].dur=this.value;document.getElementById('pjn-live-${i}').innerHTML=planDurLive(this.value)" style="padding:5px 7px;font-size:13px;text-align:center;color:var(--accent);font-weight:700;"><div id="pjn-live-${i}" style="font-size:11px;margin-top:3px;text-align:center;">${planDurLive(x.dur)}</div></div>
+      <div><div style="${LBL}">Couleurs</div><span style="display:inline-flex;gap:3px;align-items:center;">${x.colors.map((c,ci)=>`<span onclick="pjpNewDelColor(${i},${ci})" style="cursor:pointer;" title="Retirer ${pjpEsc(c)}">${pjpDot(c,18)}</span>`).join('')}<span onclick="pjpNewPick(${i})" style="font-size:11px;color:#7c5cff;background:var(--bg);border:1px dashed #5a4ba8;border-radius:5px;padding:2px 7px;cursor:pointer;">🎨 + couleur</span></span></div>
+      <span onclick="pjpNewDelRow(${i})" title="Supprimer ce plateau" style="width:26px;height:26px;border-radius:7px;background:#2a1414;border:1px solid #5a2222;color:#e0786a;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-top:14px;">✕</span>
+    </div>`).join('');
+  openModal(`
+    <div class="modal-title">➕ Nouveau produit à imprimer</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Projet libre : il reste dans le Manager (pas de photo, ni prix, ni stock). Les plateaux seront réutilisés à chaque impression.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <div class="form-group" style="flex:2;min-width:180px;"><label class="form-label">Nom</label><input class="form-input" id="pjn-name" value="${pjpEsc(N.name)}" oninput="_pjNew.name=this.value"></div>
+      <div class="form-group" style="flex:1;min-width:140px;"><label class="form-label">Rubrique</label><select class="form-input" onchange="_pjNew.rub=this.value">${pjpRubriques().map(r=>`<option value="${pjpEsc(r)}" ${r===N.rub?'selected':''}>${pjpEsc(r)}</option>`).join('')}</select></div>
+    </div>
+    <label class="form-label">Plateaux (couleurs et durée)</label>
+    <div style="max-height:40vh;overflow-y:auto;">${rows}</div>
+    <button class="btn btn-secondary btn-sm" onclick="pjpNewAddRow()" style="width:100%;border-style:dashed;margin-top:4px;">+ Ajouter un plateau</button>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-secondary" onclick="pjpNewSave(false)">Enregistrer</button>
+      <button class="btn" onclick="pjpNewSave(true)" style="background:var(--accent);color:#111;border-color:var(--accent);font-weight:800;">Enregistrer et ajouter à la liste</button>
+    </div>
+  `);
+  setTimeout(()=>{ const i=document.getElementById('pjn-name'); if(i && !N.name) i.focus(); },70);
+}
+function pjpNewAddRow(){ _pjNew.plateaux.push({part:'',dur:'',colors:[]}); pjpNewRender(); }
+function pjpNewDelRow(i){ _pjNew.plateaux.splice(i,1); if(!_pjNew.plateaux.length) _pjNew.plateaux.push({part:'',dur:'',colors:[]}); pjpNewRender(); }
+function pjpNewDelColor(i,ci){ _pjNew.plateaux[i].colors.splice(ci,1); pjpNewRender(); }
+function pjpNewPick(i){ _pjNew.pick=i; _pjNew.sel=[..._pjNew.plateaux[i].colors]; pjpNewRender(); }
+function pjpNewGridHTML(){
+  const all=[...(typeof FILAMENT_PALETTE!=='undefined'?FILAMENT_PALETTE:[]), ...(db.customFilColors||[])];
+  return all.map(c=>{ const on=_pjNew.sel.includes(c.name);
+    return `<div onclick="pjpNewTog('${escapeJs(c.name)}')" title="${pjpEsc(c.name)}" style="aspect-ratio:1;border-radius:8px;cursor:pointer;${filSwatchCSS(c)};border:2px solid ${on?'#fff':'rgba(255,255,255,.12)'};${on?'box-shadow:0 0 0 2px #7c5cff;':''}"></div>`; }).join('');
+}
+function pjpNewPaletteRender(){
+  openModal(`
+    <div class="modal-title">🎨 Couleurs du plateau</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Touche une ou plusieurs couleurs, puis Valider. Re-touche pour retirer.</div>
+    <div id="pjn-grid" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;max-height:46vh;overflow-y:auto;margin-bottom:14px;">${pjpNewGridHTML()}</div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="_pjNew.pick=null;pjpNewRender()">Annuler</button>
+      <button class="btn" id="pjn-ok" onclick="pjpNewPickOk()" style="background:var(--accent);color:#111;border-color:var(--accent);font-weight:800;">✓ Valider (${_pjNew.sel.length})</button>
+    </div>`);
+}
+function pjpNewTog(name){
+  const i=_pjNew.sel.indexOf(name); if(i>=0) _pjNew.sel.splice(i,1); else _pjNew.sel.push(name);
+  const g=document.getElementById('pjn-grid'); if(g) g.innerHTML=pjpNewGridHTML();
+  const ok=document.getElementById('pjn-ok'); if(ok) ok.textContent='✓ Valider ('+_pjNew.sel.length+')';
+}
+function pjpNewPickOk(){ _pjNew.plateaux[_pjNew.pick].colors=[..._pjNew.sel]; _pjNew.pick=null; pjpNewRender(); }
+function pjpNewSave(andAdd){
+  const N=_pjNew; if(!N) return;
+  const name=(N.name||'').trim();
+  if(!name){ showToast('Donne un nom au produit', false); return; }
+  const pl=N.plateaux.filter(x=>(x.part||'').trim()||x.dur||x.colors.length);
+  if(!pl.length){ showToast('Ajoute au moins un plateau, avec sa durée', false); return; }
+  const sansDur=pl.map((x,i)=>({x,i})).filter(o=>!(planParseDur(planFmtDur(o.x.dur))>0));
+  if(sansDur.length){ showToast('Durée manquante : '+sansDur.map(o=>'« '+((o.x.part||'').trim()||('plateau '+(o.i+1)))+' »').join(', ')+' (ex : 3h21)', false); return; }
+  const dup=[...planLibres().map(l=>({name:l.name,rub:l.rubrique||'Projet libre'})), ...(db.products||[]).map(p=>({name:p.name,rub:p.categorie||'—'}))]
+    .find(x=>pjpNorm(x.name)===pjpNorm(name));
+  if(dup && !confirm(`« ${dup.name} » (${dup.rub}) existe déjà. Créer quand même un nouveau produit ?`)) return;
+  const id='L'+Date.now();
+  planLibres().push({id, name, emoji:/hueforge/i.test(N.rub)?'🖼️':'🧩', keep:true, rubrique:N.rub});
+  const plan=planGet(id); plan.lot=1;
+  plan.plateaux=pl.map((x,i)=>({part:(x.part||'').trim()||(pl.length===1?name:('P'+(i+1))), dur:planFmtDur(x.dur), colors:x.colors.slice(), imp:'', done:false}));
+  if(andAdd) pjpAdd(id);
+  saveData();
+  _pjNew=null; _pjpQ='';
+  closeModal();
+  render('planningJour');
+  showToast(andAdd?`✅ ${name} créé et ajouté à la liste`:`✅ ${name} créé (${N.rub})`, true);
+}
+
 // ===================== 📋 LISTE D'IMPRESSION (objectif persistant) =====================
 function printQueuePanelHTML() {
   const q = db.printQueue || [];
   const printers = (typeof planPrintersVisible === 'function' ? planPrintersVisible() : planPrinters()) || [];
-  const dot = (hex) => `<span style="width:12px;height:12px;border-radius:50%;display:inline-block;border:1px solid #555;background:${hex||'#888'};"></span>`;
+  let totPl = 0, totMin = 0, totSans = 0;
   const rows = q.length ? q.map(it => {
-    const couls = (it.couleurs||[]).map(c => dot(typeof c === 'string' ? c : (c && c.hex))).join(' ');
-    const sw = (it.swaps||[]).filter(s => s && (s.from || s.to || s.heure));
-    const swChip = sw.length ? `<span style="font-size:10px;color:#c9b6ff;background:rgba(124,92,255,.12);border:1px solid rgba(124,92,255,.35);border-radius:6px;padding:2px 7px;">🔁 ${sw.length} swap${sw.length>1?'s':''}</span>` : '';
-    const durLbl = it.dureeMinutes ? `⏱️ ${planMinToDur(it.dureeMinutes)}` : `<span style="color:var(--warn);">⏱️ à définir</span>`;
-    const prod = (it.productId!=null) ? db.products.find(x => x.id === it.productId) : null;
+    const pl = pjpItemPlateaux(it);
+    const itMin = pl.reduce((a, x) => a + x.min, 0);
+    totPl += pl.length; totMin += itMin;
+    const allSw = []; pl.forEach(x => (x.swaps || []).forEach(s => allSw.push(s)));
+    const swHtml = allSw.length ? `<div style="flex-basis:100%;display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:rgba(124,92,255,.10);border:1px solid rgba(124,92,255,.40);border-radius:8px;padding:4px 8px;"><span style="font-size:11px;font-weight:800;color:#c9b6ff;">🔁 ${allSw.length} swap${allSw.length>1?'s':''} de filament</span>${planningSwapBadgesHtml(allSw, {showLabels:true}).replace('margin-top:6px;', 'margin-top:0;')}</div>` : '';
+    const nbSans = pl.filter(x => !(x.min > 0)).length;
+    totSans += nbSans;
+    const durLbl = (itMin ? `⏱️ ${planMinToDur(itMin)}` : '') + (nbSans ? `${itMin?' ':''}<span style="color:#ff5c5c;font-weight:700;">⚠ durée manquante${pl.length>1?' ('+nbSans+' plateau'+(nbSans>1?'x':'')+')':''}</span>` : '');
+    const prod = (it.productId!=null) ? pjProd(it.productId) : null;
     const emoji = prod ? (prod.emoji||'📦') : '📦';
-    const assignBtns = printers.map(pr =>
-      `<button onclick="pqAssign(${it.id},'${pr.key}')" title="Envoyer sur ${pr.nom}" style="background:transparent;border:1px solid ${pr.color||'#888'};color:${pr.color||'#ddd'};border-radius:7px;padding:5px 9px;font-size:12px;font-weight:700;cursor:pointer;">→ ${pr.nom}</button>`
-    ).join('');
+    const rub = it.rubrique || (prod ? pjpRubrique(prod) : '');
+    const chips = pl.length > 1 || (pl.length === 1 && it.multi) ? pl.map(x => `<span title="${pjpEsc(x.part)}" style="display:inline-flex;align-items:center;gap:3px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:2px 6px;font-size:11px;color:var(--muted);">${(x.colors||[]).map(c => pjpDot(c, 10)).join('')}<span>${pjpEsc(x.part)}</span><b style="color:${x.min>0?'var(--accent)':'#ff5c5c'};">${x.min>0 ? planMinToDur(x.min) : '⚠ durée manquante'}</b></span>`).join('') : '';
+    const couls = !chips ? pl[0].colors.map(c => pjpDot(c, 12)).join(' ') : '';
+    const assignBtns = pl.length <= 1 ? printers.map(pr =>
+      `<button onclick="pqAssign(${it.id},'${pr.key}')" title="Envoyer sur ${pr.nom}" style="background:transparent;border:1px solid ${pr.color||'#888'};color:${pr.color||'#ddd'};border-radius:7px;padding:5px 9px;font-size:12px;font-weight:700;cursor:pointer;">${pr.nom}</button>`
+    ).join('') : '';
+    const hasPlan = it.multi && it.productId!=null && (db.plansImpression||{})[it.productId] && ((db.plansImpression||{})[it.productId].plateaux||[]).length;
+    const editBtn = hasPlan
+      ? `<button onclick="pjpEditPlan(${pidJS(it.productId)})" title="Modifier les plateaux (ajouter, supprimer, dupliquer, couleurs, durées)" class="btn btn-secondary btn-sm" style="padding:5px 8px;">✏️ Modifier les plateaux</button>`
+      : `<button onclick="pqEdit(${it.id})" title="Modifier durée, couleurs, swaps" class="btn btn-secondary btn-sm" style="padding:5px 8px;">✏️</button>`;
     return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:10px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <span style="font-weight:700;">${emoji} ${it.nom}</span>
-      <span style="font-size:11px;color:var(--muted);">${durLbl}</span>
-      ${couls?`<span style="display:inline-flex;gap:3px;align-items:center;">${couls}</span>`:''}
-      ${swChip}
+      <span style="font-weight:700;">${emoji} ${pjpEsc(it.nom)}</span>
+      ${rub ? `<span style="font-size:10px;color:var(--accent);text-transform:uppercase;font-weight:700;">${pjpEsc(rub)}</span>` : ''}
+      <span style="font-size:11px;color:var(--muted);">${pl.length > 1 ? pl.length + ' plateaux · ' : ''}${durLbl}</span>
+      ${couls ? `<span style="display:inline-flex;gap:3px;align-items:center;">${couls}</span>` : ''}
       <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         ${assignBtns}
-        <button onclick="pqEdit(${it.id})" title="Modifier durée, couleurs, swaps" class="btn btn-secondary btn-sm" style="padding:5px 8px;">✏️</button>
+        ${editBtn}
         <button onclick="pqDelete(${it.id})" title="Retirer de la liste" class="btn btn-danger btn-sm" style="padding:5px 8px;">✕</button>
       </span>
+      ${chips ? `<div style="flex-basis:100%;display:flex;gap:5px;flex-wrap:wrap;">${chips}</div>` : ''}
+      ${swHtml}
     </div>`;
-  }).join('') : `<div style="text-align:center;color:var(--muted);padding:14px;font-size:13px;">Liste vide. Ajoute des articles depuis le Stock (bouton 🖨️).</div>`;
+  }).join('') : `<div style="text-align:center;color:var(--muted);padding:14px;font-size:13px;">Liste vide. Cherche un produit ci-dessus, ou ajoute des articles depuis le Stock (bouton 🖨️).</div>`;
+  const summary = q.length ? `${q.length} produit${q.length>1?'s':''} · ${totPl} plateau${totPl>1?'x':''} · ${totMin ? planMinToDur(totMin) : '—'}${totSans ? ` <span style="color:#ff5c5c;">(+ ${totSans} plateau${totSans>1?'x':''} sans durée)</span>` : ''}` : '0 à imprimer';
   return `<div class="card" style="margin-bottom:14px;border-left:4px solid var(--accent);">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px;">
       <div style="font-size:15px;font-weight:800;color:var(--accent);">🖨️ Liste d'impression — mon objectif</div>
-      <span style="font-size:11px;color:var(--muted);">${q.length} à imprimer</span>
+      <span style="font-size:12px;font-weight:700;color:var(--muted);">${summary}</span>
     </div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">↩︎ Ce qui reste ici se reporte tout seul au lendemain, tant que ce n'est pas envoyé sur une imprimante.</div>
     <div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>
