@@ -893,7 +893,7 @@ if ('serviceWorker' in navigator) {
       <button onclick="localStorage.removeItem('fath3d_nav');location.reload();" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">🔄 Réinitialiser les menus</button>
       <button onclick="toggleTheme()" id="theme-toggle-btn" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">☀️ Thème clair</button>
       <input type="file" id="import-input" accept=".json" style="display:none" onchange="importData(event)">
-      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.19 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
+      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.20 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
     </div>
   </nav>
 
@@ -16121,9 +16121,42 @@ const FSyncCore = (function(){
     }
   }
 
+  // Catalogue de départ intégré (defaultData) : sur un appareil qui n'a JAMAIS synchronisé avec ce compte (pas de « photo » B),
+  // les lignes identiques au catalogue de départ ne sont pas des données de l'utilisateur. On les ignore avant la fusion,
+  // pour qu'elles ne s'ajoutent pas au cloud (le cloud remplace alors le jeu de départ).
+  // Garde-fous : (1) seulement si au moins 80 % des produits locaux sont identiques au catalogue de départ (un navigateur avec de
+  // vraies données n'est donc jamais touché) ; (2) seule une ligne strictement identique est ignorée : toute ligne modifiée,
+  // ajoutée ou créée ici est conservée ; (3) en cas de doute, rien n'est retiré.
+  function stripPristineSeed(L, seed){
+    if(!seed || !isObj(L) || !Array.isArray(L.products) || !Array.isArray(seed.products)) return 0;
+    const core = el => { const o = {}; for(const k of Object.keys(el)) if(k !== '_uid' && k !== '_m') o[k] = el[k]; return stable(o); };
+    const maps = {};
+    for(const k of Object.keys(seed)){
+      const sv = seed[k];
+      if(!Array.isArray(sv) || !isKeyedList(k, sv)) continue;
+      const m = new Map(); sv.forEach(el => { if(isObj(el) && el.id !== undefined && el.id !== null) m.set(String(el.id), core(el)); });
+      maps[k] = m;
+    }
+    const pm = maps.products; if(!pm) return 0;
+    const same = el => isObj(el) && el.id !== undefined && el.id !== null && pm.get(String(el.id)) === core(el);
+    const locals = L.products.filter(isObj);
+    if(locals.length < 10) return 0;
+    if(locals.filter(same).length < locals.length * 0.8) return 0;
+    let n = 0;
+    for(const k of Object.keys(maps)){
+      if(!Array.isArray(L[k])) continue;
+      const m = maps[k];
+      const kept = L[k].filter(el => !(isObj(el) && el.id !== undefined && el.id !== null && m.get(String(el.id)) === core(el)));
+      n += L[k].length - kept.length;
+      L[k] = kept;
+    }
+    return n;
+  }
+
   function mergeDb(B, L, C, opts){
     opts = opts || {};
     L = clone(L); C = clone(C); ensureUids(L, false); ensureUids(C, true);
+    if(!B && opts.seed){ const dropped = stripPristineSeed(L, opts.seed); if(dropped && typeof opts.onSeedStrip === 'function') opts.onSeedStrip(dropped); }
     const out = {}, delL = L._del || {}, delC = C._del || {};
     const keys = new Set([...Object.keys(L), ...Object.keys(C)]);
     for(const k of keys){
@@ -16220,7 +16253,7 @@ const FSyncCore = (function(){
     return n;
   }
 
-  return {stable, h, eq, clone, newUid, isKeyedList, ensureUids, track, resetTrack, mergeDb, mergeValue, normalizeTickets, diffStats, countPending, repairCounters, LOG_KEYS};
+  return {stable, h, eq, clone, newUid, isKeyedList, ensureUids, track, resetTrack, mergeDb, stripPristineSeed, mergeValue, normalizeTickets, diffStats, countPending, repairCounters, LOG_KEYS};
 })();
 
 // ===================== SYNCHRO (FSync) : chef d'orchestre =====================
@@ -16360,7 +16393,7 @@ const FSync = (function(){
     try {
       beforeSave();
       snap = C.clone(db);
-      const opts = {allowShrink};
+      const opts = {allowShrink, seed: (base ? null : (typeof defaultData !== 'undefined' ? defaultData : null)), onSeedStrip: n => { try { logEvt('Catalogue de départ ignoré ('+n+' lignes) : les données du cloud ont été gardées'); } catch(e){} }};
       const res = await window.cloudMergeWrite(cloud => {
         if(acctChanged) return cloud ? {merged: cloud, write: false} : {merged: snap, write: true};
         if(!cloud) return {merged: snap, write: true};
