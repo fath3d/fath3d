@@ -893,7 +893,7 @@ if ('serviceWorker' in navigator) {
       <button onclick="localStorage.removeItem('fath3d_nav');location.reload();" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">🔄 Réinitialiser les menus</button>
       <button onclick="toggleTheme()" id="theme-toggle-btn" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">☀️ Thème clair</button>
       <input type="file" id="import-input" accept=".json" style="display:none" onchange="importData(event)">
-      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.24 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
+      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.25 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
     </div>
   </nav>
 
@@ -8150,46 +8150,23 @@ function planParseDur(str){
   return 0;
 }
 function planMinToDur(min){ min=Math.max(0,Math.round(min)); return Math.floor(min/60)+'h'+('0'+(min%60)).slice(-2); }
+// « 📅 Envoyer au Planning » (éditeur de plateaux) : amène le produit dans « À placer » de la répartition, pour TOUS les produits.
+// Pat choisit ensuite lui-même l'imprimante de chaque plateau dans la répartition. Aucune imprimante n'est demandée ici.
+// (Ancien comportement retiré : envoi direct des seuls plateaux ayant une imprimante, qui effaçait aussi des plateaux déjà envoyés.)
 function planSendToPlanning(){
   const pid=_planPid; const p=pjProd(pid); if(!p) return;
   const plan=planGet(pid);
-  if(!plan.plateaux.length){ showToast('Plan vide', false); return; }
-  const date=window._planningJourDate || todayISO();
-  if(!db.planningJour) db.planningJour={};
-  if(!db.planningJour[date]) db.planningJour[date]={impressions:[],taches:[]};
-  const validKeys=planPrinters().map(pp=>pp.key);
-  // retirer un éventuel envoi précédent de cette fig ce jour-là (évite les doublons si on renvoie)
-  db.planningJour[date].impressions = db.planningJour[date].impressions.filter(i=>!(i.fromPlan && i.productId===pid));
-  let added=0, skipped=0;
-  plan.plateaux.forEach((x,idx)=>{
-    if(!x.imp || !validKeys.includes(x.imp)){ skipped++; return; }
-    const min=planParseDur(x.dur);
-    const couleurs=(x.colors||[]).map(n=>planColorDef(n));
-    db.planningJour[date].impressions.push({
-      printer:x.imp,
-      nom:p.name,
-      part:x.part||('P'+(idx+1)),
-      duree:x.dur||planMinToDur(min),
-      dureeMinutes:min,
-      creneau:'',
-      couleurs:couleurs,
-      swaps:((typeof pjpPlateauxOf==='function'?(pjpPlateauxOf(pid)[idx]||{}).swaps:null)||[]),
-      notes:`plateau ${idx+1}/${plan.plateaux.length} · lot ${plan.lot||1}`,
-      productId:pid,
-      qty:plan.lot||1,
-      fromPlan:true,
-      planPlateau:idx,
-      done:false
-    });
-    added++;
-  });
-  saveData();
+  if(!plan.plateaux.length){ showToast('Plan vide : ajoute au moins un plateau', false); return; }
+  if(!db.printQueue) db.printQueue=[];
+  const exist=db.printQueue.find(x=>x.productId===pid);
+  let msg;
+  if(exist){ msg='« '+p.name+' » est déjà dans la liste : ses plateaux sont dans « À placer »'; }
+  else { pjpAdd(pid); const n=pjpPlateauxOf(pid).length; msg='✅ '+p.name+' : '+n+' plateau'+(n>1?'x':'')+' dans « À placer »'; }
+  window._plaqueDirty=false;
   closeModal();
-  let msg=`📅 ${added} plateau${added>1?'x':''} dispatché${added>1?'s':''} au Planning`;
-  if(skipped) msg+=` · ${skipped} sans imprimante (à assigner dans le plan)`;
-  showToast(msg, added>0);
-  window._planningJourDate=date;
-  render('planningJour');
+  showToast(msg, true);
+  navigate('planningJour');
+  setTimeout(()=>{ const e=document.getElementById('pjrep-wrap'); if(e) e.scrollIntoView({behavior:'smooth',block:'start'}); }, 300);
 }
 
 // ===================== 🗓️ PLANNING COCKPIT (placement projet→plateau) =====================
