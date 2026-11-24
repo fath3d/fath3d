@@ -893,7 +893,7 @@ if ('serviceWorker' in navigator) {
       <button onclick="localStorage.removeItem('fath3d_nav');location.reload();" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">🔄 Réinitialiser les menus</button>
       <button onclick="toggleTheme()" id="theme-toggle-btn" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">☀️ Thème clair</button>
       <input type="file" id="import-input" accept=".json" style="display:none" onchange="importData(event)">
-      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.23 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
+      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.24 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
     </div>
   </nav>
 
@@ -17355,12 +17355,16 @@ function planSaveAsTemplate(){
 function pjpEditPlan(pid){ window._plaqueDirty=true; openPlan(pid); _planMode='edit'; planRender(); }
 
 // ---------- Répartition : tout est placé À LA MAIN (rien n'est placé automatiquement) ----------
-function pjpUnits(){
+// all=true : inclut aussi les plateaux écartés (drapeau skipped). Par défaut ils sont absents (ni placés, ni envoyés, ni comptés).
+function pjpUnits(all){
   const out=[];
   (db.printQueue||[]).forEach(it=>{
+    const skipSet=new Set(it.ecartes||[]);
     pjpItemPlateaux(it).forEach((x,k)=>{
+      const skipped=skipSet.has(x.key);
+      if(skipped && !all) return;
       const keys=[]; x.colors.forEach(c=>{ const n=c.name||c.hex; if(n && !keys.includes(n)) keys.push(n); });
-      out.push({uid:it.id+':'+x.key, key:x.key, itemId:it.id, pid:it.productId, nom:it.nom,
+      out.push({uid:it.id+':'+x.key, key:x.key, itemId:it.id, pid:it.productId, nom:it.nom, skipped:skipped,
         rub:it.rubrique||((it.productId!=null&&pjProd(it.productId))?pjpRubrique(pjProd(it.productId)):''),
         part:x.part, min:x.min, colors:x.colors, keys:keys,
         swaps:x.swaps||[], idx:x.idx, fromPlan:x.fromPlan, note:x.note||'',
@@ -17448,6 +17452,20 @@ function pjpReturnImp(date, printer, idx){
   showToast(`« ${label} » de ${imp.nom} remis dans la liste`, true);
   render('planningJour');
 }
+// Écarter = « je ne l'imprime pas cette fois ». Mémorisé dans la ligne de liste (it.ecartes), donc conservé au rechargement et à la synchro.
+// Remis à zéro : quand Pat clique « Remettre » (un plateau, un produit ou tous), quand la ligne est retirée de la liste, ou quand « Valider » retire la ligne.
+// Le plan du produit, ses plateaux, durées, couleurs et modèles ne sont jamais touchés.
+function pjpSkipFind(itemId){ return (db.printQueue||[]).find(x=>String(x.id)===String(itemId)); }
+function pjpSkipSave(it,set){ if(set.size) it.ecartes=[...set]; else delete it.ecartes; saveData(); pjpRefresh(); }
+function pjpSkipToggle(itemId,key,on){ const it=pjpSkipFind(itemId); if(!it) return; const set=new Set(it.ecartes||[]); if(on) set.add(key); else set.delete(key); pjpSkipSave(it,set); }
+// En-tête de produit : écarte d'un coup tous ses plateaux « à placer » (jamais ceux déjà placés sur une imprimante)
+function pjpSkipItem(itemId,on){
+  const it=pjpSkipFind(itemId); if(!it) return; const S=pjpState();
+  const set=new Set(it.ecartes||[]); S.aplacer.filter(u=>String(u.itemId)===String(itemId)).forEach(u=>{ if(on) set.add(u.key); else set.delete(u.key); });
+  pjpSkipSave(it,set);
+}
+function pjpSkipRestoreItem(itemId){ const it=pjpSkipFind(itemId); if(!it) return; pjpSkipSave(it,new Set()); }
+function pjpSkipAll(){ let n=0; (db.printQueue||[]).forEach(it=>{ if(it.ecartes && it.ecartes.length){ n+=it.ecartes.length; delete it.ecartes; } }); saveData(); pjpRefresh(); showToast(n?(n+' plateau'+(n>1?'x':'')+' remis dans « À placer »'):'Aucun plateau écarté', !!n); }
 function pjpResetPlacement(){
   const S=pjpState();
   S.order.forEach(pk=>{ S.printers[pk].forEach(u=>S.aplacer.push(u)); S.printers[pk]=[]; });
@@ -17613,23 +17631,35 @@ function pjpRepHTML(){
   const toBtns=u=>prs.map(p=>{ const ok=u.need<=pjpCap(p);
     return `<button onclick="pjpMove('${u.uid}','${p.key}')" title="${ok?'Placer sur '+pjpEsc(p.nom):pjpEsc(p.nom)+' ('+printerSub(p.type)+') ne peut pas porter ce plateau'}" style="background:transparent;border:1px solid ${p.color||'#888'};color:${p.color||'#ddd'};border-radius:7px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer;${ok?'':'opacity:.4;'}">→ ${pjpEsc(p.nom)}</button>`; }).join('');
   const toPlaceRow=u=>`<div style="display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:5px 7px;margin-top:5px;flex-wrap:wrap;">
+      <input type="checkbox" onclick="pjpSkipToggle(${u.itemId},'${u.key}',this.checked)" title="Cocher = je ne l'imprime pas cette fois (écarté ; rien n'est supprimé)" style="width:18px;height:18px;cursor:pointer;flex-shrink:0;">
       <span style="display:inline-flex;gap:2px;align-items:center;">${u.colors.map(c=>pjpDot(c,11)).join('')}</span>
       <div style="flex:1;min-width:110px;font-size:12px;"><span style="color:var(--muted);">${pjpEsc(u.part)}</span>${planningSwapBadgesHtml(u.swaps,{showLabels:true})}</div>
       <span style="font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap;">${durCell(u)}</span>
       <span style="display:inline-flex;gap:4px;flex-wrap:wrap;">${toBtns(u)}</span>
     </div>`;
   // --- Zone « À placer », regroupée par produit
+  const skippedAll=pjpUnits(true).filter(u=>u.skipped);
   let placeBody='';
-  if(!S.aplacer.length) placeBody='<div style="font-size:12px;color:var(--muted);padding:6px 0;">Tout est placé. Vérifie les cartes ci-dessous puis valide.</div>';
+  if(!S.aplacer.length) placeBody='<div style="font-size:12px;color:var(--muted);padding:6px 0;">'+(skippedAll.length?'Tout est placé ou écarté.':'Tout est placé.')+' Vérifie les cartes ci-dessous puis valide.</div>';
   else {
     const byItem={}; const order=[]; S.aplacer.forEach(u=>{ if(!byItem[u.itemId]){ byItem[u.itemId]=[]; order.push(u.itemId); } byItem[u.itemId].push(u); });
     placeBody=order.map(id=>{ const l=byItem[id]; const f=l[0];
-      return `<div style="margin-top:8px;"><div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);"><span style="color:var(--text);">${pjpEsc(f.nom)}</span> ${f.rub?'· <span style="color:var(--accent);">'+pjpEsc(f.rub)+'</span>':''} · ${l.length} plateau${l.length>1?'x':''}</div>${l.map(toPlaceRow).join('')}</div>`; }).join('');
+      return `<div style="margin-top:8px;"><div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><input type="checkbox" onclick="pjpSkipItem(${id},this.checked)" title="Écarter d'un coup tous les plateaux à placer de ce produit (rien n'est supprimé)" style="width:18px;height:18px;cursor:pointer;"><span style="color:var(--text);">${pjpEsc(f.nom)}</span> ${f.rub?'· <span style="color:var(--accent);">'+pjpEsc(f.rub)+'</span>':''} · ${l.length} plateau${l.length>1?'x':''}</div>${l.map(toPlaceRow).join('')}</div>`; }).join('');
   }
   const aplacerTot=S.aplacer.reduce((a,u)=>a+u.min,0);
+  let skipPanel='';
+  if(skippedAll.length){
+    const byIt={}, ord=[]; skippedAll.forEach(u=>{ if(!byIt[u.itemId]){ byIt[u.itemId]=[]; ord.push(u.itemId); } byIt[u.itemId].push(u); });
+    const skTot=skippedAll.reduce((a,u)=>a+u.min,0);
+    skipPanel=`<details ${window._pjSkipOpen?'open':''} ontoggle="window._pjSkipOpen=this.open" style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px;">
+      <summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--muted);">🚫 ${skippedAll.length} plateau${skippedAll.length>1?'x':''} écarté${skippedAll.length>1?'s':''}${skTot?' · '+planMinToDur(skTot):''} <button class="btn btn-secondary btn-sm" onclick="event.preventDefault();event.stopPropagation();pjpSkipAll()" style="margin-left:8px;padding:2px 8px;">↩ Tout remettre</button></summary>
+      ${ord.map(id=>{ const l=byIt[id]; const f=l[0]; return `<div style="margin-top:8px;"><div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span style="color:var(--text);">${pjpEsc(f.nom)}</span>${f.rub?'· <span style="color:var(--accent);">'+pjpEsc(f.rub)+'</span>':''}<button class="btn btn-secondary btn-sm" onclick="pjpSkipRestoreItem(${id})" style="padding:1px 8px;">↩ Remettre ce produit</button></div>`+
+        l.map(u=>`<div style="display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:4px 7px;margin-top:4px;opacity:.75;flex-wrap:wrap;"><span style="display:inline-flex;gap:2px;">${u.colors.map(c=>pjpDot(c,11)).join('')}</span><span style="flex:1;font-size:12px;color:var(--muted);">${pjpEsc(u.part)}</span><span style="font-size:12px;font-weight:700;">${durCell(u)}</span><button class="btn btn-secondary btn-sm" onclick="pjpSkipToggle(${u.itemId},'${u.key}',false)" style="padding:1px 8px;">↩ Remettre</button></div>`).join('')+`</div>`; }).join('')}
+    </details>`;
+  }
   const placeCard=`<div style="margin-bottom:12px;background:rgba(124,92,255,.06);border:1px dashed #7c5cff;border-radius:10px;padding:10px 12px;">
       <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap;"><b style="color:#a996ff;">📥 À placer — ${S.aplacer.length} plateau${S.aplacer.length>1?'x':''}${aplacerTot?' · '+planMinToDur(aplacerTot):''}${sansTxt(S.aplacer)}</b><span style="font-size:11px;color:var(--muted);">Rien n'est placé tout seul : choisis une imprimante pour chaque plateau.</span></div>
-      ${placeBody}</div>`;
+      ${placeBody}${skipPanel}</div>`;
   // --- Cartes imprimantes
   const cards=prs.map(pr=>{
     const list=S.printers[pr.key]||[];
@@ -17668,7 +17698,7 @@ function pjpRepHTML(){
   }).join('');
   const btns=`<span style="display:inline-flex;gap:6px;flex-wrap:wrap;"><button class="btn btn-secondary btn-sm" onclick="pjpResetPlacement()" title="Remet tous les plateaux placés dans « À placer » (rien n'est envoyé)">↺ Tout remettre à placer</button><button class="btn btn-sm" onclick="pjpValidate()" style="background:var(--accent);color:#111;border-color:var(--accent);font-weight:800;">✓ Valider : envoyer sur les imprimantes</button></span>`;
   return `<div class="card" style="margin-bottom:14px;border-left:4px solid #16a085;">${head(btns)}
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">${S.aplacer.length+nbPlaced} plateau${S.aplacer.length+nbPlaced>1?'x':''} : ${nbPlaced} placé${nbPlaced>1?'s':''}, ${S.aplacer.length} à placer. Rien n'est définitif avant « Valider », qui n'envoie que les plateaux placés. Une imprimante 1 couleur ne prend que du mono-couleur.</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">${S.aplacer.length+nbPlaced} plateau${S.aplacer.length+nbPlaced>1?'x':''} : ${nbPlaced} placé${nbPlaced>1?'s':''}, ${S.aplacer.length} à placer${skippedAll.length?' (+ '+skippedAll.length+' écarté'+(skippedAll.length>1?'s':'')+', non comptés)':''}. Rien n'est définitif avant « Valider », qui n'envoie que les plateaux placés. Une imprimante 1 couleur ne prend que du mono-couleur.</div>
     ${placeCard}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;">${cards}</div></div>`;
 }
@@ -17786,17 +17816,20 @@ function printQueuePanelHTML() {
   let totPl = 0, totMin = 0, totSans = 0;
   const rows = q.length ? q.map(it => {
     const pl = pjpItemPlateaux(it);
-    const itMin = pl.reduce((a, x) => a + x.min, 0);
-    totPl += pl.length; totMin += itMin;
-    const allSw = []; pl.forEach(x => (x.swaps || []).forEach(s => allSw.push(s)));
+    const skipSet = new Set(it.ecartes || []);
+    const plAct = pl.filter(x => !skipSet.has(x.key));
+    const nbEcart = pl.length - plAct.length;
+    const itMin = plAct.reduce((a, x) => a + x.min, 0);
+    totPl += plAct.length; totMin += itMin;
+    const allSw = []; plAct.forEach(x => (x.swaps || []).forEach(s => allSw.push(s)));
     const swHtml = allSw.length ? `<div style="flex-basis:100%;display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:rgba(124,92,255,.10);border:1px solid rgba(124,92,255,.40);border-radius:8px;padding:4px 8px;"><span style="font-size:11px;font-weight:800;color:#c9b6ff;">🔁 ${allSw.length} swap${allSw.length>1?'s':''} de filament</span>${planningSwapBadgesHtml(allSw, {showLabels:true}).replace('margin-top:6px;', 'margin-top:0;')}</div>` : '';
-    const nbSans = pl.filter(x => !(x.min > 0)).length;
+    const nbSans = plAct.filter(x => !(x.min > 0)).length;
     totSans += nbSans;
     const durLbl = (itMin ? `⏱️ ${planMinToDur(itMin)}` : '') + (nbSans ? `${itMin?' ':''}<span style="color:#ff5c5c;font-weight:700;">⚠ durée manquante${pl.length>1?' ('+nbSans+' plateau'+(nbSans>1?'x':'')+')':''}</span>` : '');
     const prod = (it.productId!=null) ? pjProd(it.productId) : null;
     const emoji = prod ? (prod.emoji||'📦') : '📦';
     const rub = it.rubrique || (prod ? pjpRubrique(prod) : '');
-    const chips = pl.length > 1 || (pl.length === 1 && it.multi) ? pl.map(x => `<span title="${pjpEsc(x.part)}" style="display:inline-flex;align-items:center;gap:3px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:2px 6px;font-size:11px;color:var(--muted);">${(x.colors||[]).map(c => pjpDot(c, 10)).join('')}<span>${pjpEsc(x.part)}</span><b style="color:${x.min>0?'var(--accent)':'#ff5c5c'};">${x.min>0 ? planMinToDur(x.min) : '⚠ durée manquante'}</b></span>`).join('') : '';
+    const chips = pl.length > 1 || (pl.length === 1 && it.multi) ? pl.map(x => `<span title="${pjpEsc(x.part)}" style="display:inline-flex;align-items:center;gap:3px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:2px 6px;font-size:11px;color:var(--muted);${skipSet.has(x.key)?'opacity:.4;text-decoration:line-through;':''}">${(x.colors||[]).map(c => pjpDot(c, 10)).join('')}<span>${pjpEsc(x.part)}</span><b style="color:${x.min>0?'var(--accent)':'#ff5c5c'};">${x.min>0 ? planMinToDur(x.min) : '⚠ durée manquante'}</b></span>`).join('') : '';
     const couls = !chips ? pl[0].colors.map(c => pjpDot(c, 12)).join(' ') : '';
     const assignBtns = (pl.length <= 1 && !(pl[0] && pl[0].fromPlan)) ? printers.map(pr =>
       `<button onclick="pqAssign(${it.id},'${pr.key}')" title="Envoyer sur ${pr.nom}" style="background:transparent;border:1px solid ${pr.color||'#888'};color:${pr.color||'#ddd'};border-radius:7px;padding:5px 9px;font-size:12px;font-weight:700;cursor:pointer;">${pr.nom}</button>`
@@ -17805,7 +17838,7 @@ function printQueuePanelHTML() {
     return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:10px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <span style="font-weight:700;">${emoji} ${pjpEsc(it.nom)}</span>
       ${rub ? `<span style="font-size:10px;color:var(--accent);text-transform:uppercase;font-weight:700;">${pjpEsc(rub)}</span>` : ''}
-      <span style="font-size:11px;color:var(--muted);">${pl.length > 1 ? pl.length + ' plateaux · ' : ''}${durLbl}</span>
+      <span style="font-size:11px;color:var(--muted);">${pl.length > 1 ? plAct.length + ' plateaux · ' : ''}${durLbl}${nbEcart ? ' · 🚫 ' + nbEcart + ' écarté' + (nbEcart > 1 ? 's' : '') : ''}</span>
       ${couls ? `<span style="display:inline-flex;gap:3px;align-items:center;">${couls}</span>` : ''}
       <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         ${assignBtns}
