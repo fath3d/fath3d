@@ -893,7 +893,7 @@ if ('serviceWorker' in navigator) {
       <button onclick="localStorage.removeItem('fath3d_nav');location.reload();" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">🔄 Réinitialiser les menus</button>
       <button onclick="toggleTheme()" id="theme-toggle-btn" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">☀️ Thème clair</button>
       <input type="file" id="import-input" accept=".json" style="display:none" onchange="importData(event)">
-      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.25 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
+      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.26 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
     </div>
   </nav>
 
@@ -17677,7 +17677,8 @@ function pjpRepHTML(){
   return `<div class="card" style="margin-bottom:14px;border-left:4px solid #16a085;">${head(btns)}
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">${S.aplacer.length+nbPlaced} plateau${S.aplacer.length+nbPlaced>1?'x':''} : ${nbPlaced} placé${nbPlaced>1?'s':''}, ${S.aplacer.length} à placer${skippedAll.length?' (+ '+skippedAll.length+' écarté'+(skippedAll.length>1?'s':'')+', non comptés)':''}. Rien n'est définitif avant « Valider », qui n'envoie que les plateaux placés. Une imprimante 1 couleur ne prend que du mono-couleur.</div>
     ${placeCard}
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;">${cards}</div></div>`;
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;">${cards}</div>
+    ${nbPlaced?`<div style="display:flex;justify-content:flex-end;margin-top:12px;"><button class="btn" onclick="pjpValidate()" style="background:var(--accent);color:#111;border-color:var(--accent);font-weight:800;">✓ Valider : envoyer sur les imprimantes (${nbPlaced} plateau${nbPlaced>1?'x':''})</button></div>`:''}</div>`;
 }
 
 // ---------- Création d'un produit (projet libre complet) ----------
