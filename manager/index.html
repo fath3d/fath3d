@@ -893,7 +893,7 @@ if ('serviceWorker' in navigator) {
       <button onclick="localStorage.removeItem('fath3d_nav');location.reload();" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">🔄 Réinitialiser les menus</button>
       <button onclick="toggleTheme()" id="theme-toggle-btn" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">☀️ Thème clair</button>
       <input type="file" id="import-input" accept=".json" style="display:none" onchange="importData(event)">
-      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.27 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
+      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.28 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
     </div>
   </nav>
 
@@ -11673,11 +11673,13 @@ function renderRecettes(el, actions) {
               <td style="white-space:nowrap;" onclick="event.stopPropagation()">
                 ${r.isManual ? `
                   <button class="btn btn-secondary btn-sm" onclick="openEditRecetteManuelle(${r.id})" title="Modifier">✏️</button>
-                  <button class="btn btn-danger btn-sm" onclick="deleteRecetteManuelle(${r.id})" title="Supprimer">🗑️</button>
+                  <button class="btn btn-danger btn-sm" onclick="livreSupprimer('manuel',${r.id})" title="Supprimer cette ligne">🗑️</button>
                 ` : r.sourceType === 'sale' ? `
                   <button class="btn btn-secondary btn-sm" onclick="openEditSale(${r.sourceId})" title="Modifier la vente">✏️</button>
+                  <button class="btn btn-danger btn-sm" onclick="livreSupprimer('sale',${r.sourceId})" title="Supprimer cette ligne">🗑️</button>
                 ` : r.sourceType === 'ventesLigne' ? `
                   <button class="btn btn-secondary btn-sm" onclick="openEditVenteLigne(${r.sourceId})" title="Modifier la vente">✏️</button>
+                  <button class="btn btn-danger btn-sm" onclick="livreSupprimer('ligne',${r.sourceId})" title="Supprimer cette ligne">🗑️</button>
                 ` : `<span style="color:var(--muted);font-size:10px;">auto</span>`}
               </td>
             </tr>`).join('') : '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:30px;font-style:italic;">Aucune recette pour cette période</td></tr>'}
@@ -11791,6 +11793,25 @@ function doEditRecetteManuelle(id) {
   saveData(); closeModal(); showToast('Recette mise à jour ✅', true); render('recettes');
 }
 
+// Corbeille du livre de recettes : supprime la ligne (vente boutique, vente en ligne ou recette saisie) après confirmation.
+// La synchro enregistre la suppression (pierre tombale). Une ligne « AUTO — Récap » est protégée : elle ne sera pas recréée.
+function livreSupprimer(type, id) {
+  const listes = {manuel: 'recettesManuelles', sale: 'sales', ligne: 'ventesLigne'};
+  const k = listes[type]; if(!k) return;
+  const arr = db[k] || [];
+  const it = arr.find(x => String(x.id) === String(id));
+  if(!it) { showToast('Ligne introuvable (déjà supprimée ?)', false); return; }
+  const lib = it.productName || it.designation || it.produit || '—';
+  const mt = (Number(it.total) || 0).toFixed(2).replace('.', ',') + ' €';
+  const auto = type === 'sale' && it.autoBoutiqueRecap && it.boutiqueRecapKey;
+  if(!confirm('Supprimer cette ligne du livre de recettes ?\n\n' + (it.date ? formatDateMarche(it.date) : '—') + ' · ' + lib + ' · ' + mt +
+    (auto ? '\n\nCette ligne vient d\'un récap AUTO : elle ne sera pas recréée.' : '') + '\n\nCette suppression est définitive.')) return;
+  if(auto) { if(!Array.isArray(db.recapProtectedKeys)) db.recapProtectedKeys = []; if(!db.recapProtectedKeys.includes(it.boutiqueRecapKey)) db.recapProtectedKeys.push(it.boutiqueRecapKey); }
+  db[k] = arr.filter(x => x !== it);
+  saveData();
+  showToast('Ligne supprimée : ' + lib + ' · ' + mt, true);
+  render('recettes');
+}
 function deleteRecetteManuelle(id) {
   if(!confirm('Supprimer cette recette ?')) return;
   db.recettesManuelles = (db.recettesManuelles||[]).filter(x=>x.id!==id);
@@ -16765,6 +16786,15 @@ window.fsyncMigrations = function(){
       found.forEach(t => { if(!t.detailClasse && typeof _ticketADetailler === 'function' && _ticketADetailler(t)){ t.detailClasse = true; } });
       M.classes = Date.now(); changed = true;
     }
+  }
+  // 4) Livre de recettes : doublon du 13/04/2026 (La Boutique de Véro, 105,50 €), revenu avec le catalogue de départ (fusion du 21-23/11).
+  //    La vraie ligne est celle du 22/04/2026 (présente depuis juin). On ne retire que la copie identique au catalogue de départ.
+  if(!M.veroAvrilDoublon){
+    const S = db.sales || [];
+    const dup = S.find(x => x.id === 15 && x.date === '2026-04-13' && Number(x.total) === 105.5 && x.depot === 'boutA' && x.payment === 'VRT');
+    const vraie = S.find(x => x.id !== 15 && x.depot === 'boutA' && String(x.date||'').slice(0,7) === '2026-04' && Number(x.total) === 105.5);
+    if(dup && vraie){ db.sales = S.filter(x => x !== dup); M.veroAvrilDoublon = Date.now(); changed = true; }
+    else if(!dup){ M.veroAvrilDoublon = Date.now(); changed = true; }
   }
   return changed;
 };
