@@ -893,7 +893,7 @@ if ('serviceWorker' in navigator) {
       <button onclick="localStorage.removeItem('fath3d_nav');location.reload();" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">🔄 Réinitialiser les menus</button>
       <button onclick="toggleTheme()" id="theme-toggle-btn" style="width: 100%; margin-bottom: 6px; padding: 6px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 10px; font-family: &quot;Exo 2&quot;, sans-serif; --darkreader-inline-border-short: 1px solid var(--darkreader-border--border); --darkreader-inline-bgimage: none; --darkreader-inline-bgcolor: initial; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-border-short="" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">☀️ Thème clair</button>
       <input type="file" id="import-input" accept=".json" style="display:none" onchange="importData(event)">
-      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.28 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
+      <div style="font-size: 10px; color: var(--muted); text-align: center; font-family: &quot;Space Mono&quot;, monospace; --darkreader-inline-color: var(--darkreader-text--muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">FATH 3D — v3.29 ✅ (multi-plateaux · flèches ▲▼ file · historique replié)</div>
     </div>
   </nav>
 
@@ -1876,7 +1876,7 @@ function renderDashboard(el, actions) {
     {label:'🛍️ En ligne',    val:caVentesLigne,             color:'#9b59b6'},
   ];
 
-  el.innerHTML = `
+  el.innerHTML = `${(typeof urssafAlertesHTML==='function')?urssafAlertesHTML():''}
     <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
       <button onclick="toggleDemo()" style="display:flex;align-items:center;gap:8px;background:${window._demoMode?'rgba(124,92,255,.18)':'var(--card)'};border:1px solid ${window._demoMode?'#7c5cff':'var(--border)'};border-radius:8px;padding:7px 14px;cursor:pointer;color:${window._demoMode?'#c9b8ff':'var(--text)'};font-family:'Exo 2',sans-serif;font-weight:700;font-size:13px;">🕶️ ${window._demoMode?'Quitter le mode démo':'Mode démo'}</button>
       ${window._demoMode ? '' : `<button onclick="toggleFinances()" style="display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:7px 14px;cursor:pointer;color:var(--text);font-family:'Exo 2',sans-serif;font-weight:700;font-size:13px;">
@@ -11981,7 +11981,7 @@ function renderURSSAF(el, actions) {
     {label:'Nov–Déc '+YR, months:[11,12], echeance:(YR+1)+'-02-28'},
   ];
 
-  el.innerHTML = `
+  el.innerHTML = `${urssafAlertesHTML()}
     <div class="grid-2" style="margin-bottom:16px;">
       <div class="urssaf-rate" style="border-radius:12px;padding:20px;">
         <div style="font-size:12px;font-weight:700;opacity:.8;margin-bottom:8px;">TAUX APPLICABLE — Vente de marchandises</div>
@@ -12005,10 +12005,10 @@ function renderURSSAF(el, actions) {
 
     <div class="grid-2" style="margin-bottom:16px;">
       <div class="card">
-        <div class="card-title">Déclarations mensuelles ${YR}</div>
+        <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">Déclarations mensuelles ${YR} <button class="btn btn-secondary btn-sm" onclick="urssafDeclarerPasses()" title="Mémorise d'un coup les mois passés pas encore mémorisés, avec les montants actuels (après confirmation)" style="font-size:11px;">✅ Mémoriser les mois déjà déclarés</button></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Mois</th><th style="text-align:right;">CA</th><th style="text-align:right;">Cotis. 12,3%</th><th style="text-align:right;">CFP 0,3%</th><th style="text-align:right;">Total</th><th style="text-align:right;">Échéance</th></tr></thead>
+            <thead><tr><th>Mois</th><th style="text-align:right;">CA</th><th style="text-align:right;">Cotis. 12,3%</th><th style="text-align:right;">CFP 0,3%</th><th style="text-align:right;">Total</th><th style="text-align:right;">Échéance</th><th style="text-align:right;">Déclaré</th></tr></thead>
             <tbody>
               ${monthNames.map((name,i) => {
                 const ca = caByMonth[i+1];
@@ -12025,6 +12025,9 @@ function renderURSSAF(el, actions) {
                   <td style="text-align:right;font-weight:600;color:${ca>0?'var(--muted)':'var(--muted)'};">${ca>0?cfp+' €':'—'}</td>
                   <td style="text-align:right;font-weight:800;color:${ca>0?'var(--text)':'var(--muted)'};">${ca>0?total+' €':'—'}</td>
                   <td style="text-align:right;font-size:11px;color:var(--muted);">${urssafEchTxt(i,YR)}</td>
+                  <td style="text-align:right;white-space:nowrap;">${(() => { const ym = YR + '-' + String(i+1).padStart(2,'0'); const e = urssafEcart(ym);
+                    if(e) return `<span style="font-size:12px;font-weight:800;color:${e.ok?'var(--success)':'var(--danger)'};" title="Mémorisé le ${new Date(e.decl.le).toLocaleDateString('fr-FR')}">${e.ok?'✅':'⚠️'} ${Math.round(e.decl.montant)} €</span> <span onclick="urssafAnnulerDecl('${ym}')" title="Oublier cette déclaration" style="cursor:pointer;color:var(--muted);font-size:11px;">✕</span>`;
+                    return ym <= ymCourant() ? `<button class="btn btn-secondary btn-sm" onclick="urssafDeclarer('${ym}')" style="padding:2px 7px;font-size:11px;">J'ai déclaré</button>` : '<span style="color:var(--muted);">—</span>'; })()}</td>
                 </tr>`;
               }).join('')}
               <tr style="background:rgba(0,212,170,.08);border-top:2px solid var(--accent2);">
@@ -12033,7 +12036,7 @@ function renderURSSAF(el, actions) {
                 <td style="text-align:right;font-weight:800;color:var(--accent);">${Math.round(totalYear*taux/100)} €</td>
                 <td style="text-align:right;font-weight:800;color:var(--muted);">${monthNames.reduce((s,_,i)=>s+(caByMonth[i+1]>0?Math.round(caByMonth[i+1]*0.003):0),0)} €</td>
                 <td style="text-align:right;font-weight:800;color:var(--text);">${Math.round(totalYear*taux/100) + monthNames.reduce((s,_,i)=>s+(caByMonth[i+1]>0?Math.round(caByMonth[i+1]*0.003):0),0)} €</td>
-                <td></td>
+                <td></td><td></td>
               </tr>
             </tbody>
           </table>
@@ -16605,6 +16608,75 @@ function ticketByRef(ref){
 }
 
 // --- URSSAF : échéance affichée (le 15 du mois suivant ; décembre -> janvier de l'année suivante) ---
+// ===================== URSSAF : mémoire des déclarations et alerte d'écart =====================
+// Pat clique « J'ai déclaré » : on mémorise le montant déclaré et la liste exacte des lignes du mois (ventes boutiques + recettes saisies,
+// comme le calcul URSSAF). Si plus tard le mois change (ligne ajoutée, retirée ou modifiée), une alerte rouge le signale.
+const URSSAF_MOIS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+function urssafMoisLabel(ym){ return URSSAF_MOIS[(+String(ym).slice(5,7))-1] + ' ' + String(ym).slice(0,4); }
+function urssafEur(n){ return (Math.round((Number(n)||0)*100)/100).toFixed(2).replace('.', ',') + ' €'; }
+function urssafLignesMois(ym){
+  const out = [];
+  (db.sales||[]).forEach(x => { if(String(x.date||'').slice(0,7) === ym) out.push({k:'sales|'+(x._uid||('id:'+x.id)), date:x.date, lib:(x.productName||'—')+(x.client?' · '+x.client:''), total:Math.round((Number(x.total)||0)*100)/100}); });
+  (db.recettesManuelles||[]).forEach(x => { if(String(x.date||'').slice(0,7) === ym) out.push({k:'rec|'+(x._uid||('id:'+x.id)), date:x.date, lib:(x.designation||'—')+(x.client?' · '+x.client:''), total:Math.round((Number(x.total)||0)*100)/100}); });
+  return out;
+}
+function urssafDecls(){ if(!db.urssafDeclarations || typeof db.urssafDeclarations !== 'object') db.urssafDeclarations = {}; return db.urssafDeclarations; }
+function urssafEcart(ym){
+  const d = (db.urssafDeclarations||{})[ym]; if(!d) return null;
+  const cur = urssafLignesMois(ym), snap = d.lignes || [];
+  const cm = new Map(cur.map(l => [l.k, l])), sm = new Map(snap.map(l => [l.k, l]));
+  const ajout = cur.filter(l => !sm.has(l.k));
+  const retire = snap.filter(l => !cm.has(l.k));
+  const modif = cur.filter(l => sm.has(l.k) && (Math.abs(sm.get(l.k).total - l.total) > 0.004 || sm.get(l.k).date !== l.date)).map(l => ({avant: sm.get(l.k), apres: l}));
+  const total = Math.round(cur.reduce((a, l) => a + l.total, 0)*100)/100;
+  const ok = !ajout.length && !retire.length && !modif.length && Math.round(total) === Math.round(Number(d.montant)||0);
+  return {ym, decl: d, total, ajout, retire, modif, ok};
+}
+function urssafDeclarer(ym){
+  const cur = urssafLignesMois(ym), tot = cur.reduce((a, l) => a + l.total, 0);
+  const v = prompt('Montant déclaré à l\'URSSAF pour ' + urssafMoisLabel(ym) + ' (en €) :', String(Math.round(tot)));
+  if(v === null) return;
+  const m = Number(String(v).replace(',', '.').replace(/[^\d.]/g, ''));
+  if(!Number.isFinite(m) || m < 0){ showToast('Montant invalide', false); return; }
+  if(Math.round(m) !== Math.round(tot) && !confirm('L\'appli calcule ' + Math.round(tot) + ' € pour ' + urssafMoisLabel(ym) + '.\nEnregistrer quand même ' + Math.round(m) + ' € comme montant déclaré ?\n\n(L\'alerte d\'écart s\'affichera tant que les deux ne correspondent pas.)')) return;
+  urssafDecls()[ym] = {montant: m, le: Date.now(), lignes: cur};
+  saveData();
+  showToast('✅ ' + urssafMoisLabel(ym) + ' : déclaration de ' + Math.round(m) + ' € mémorisée', true);
+  render(currentPage || 'urssaf');
+}
+function urssafAnnulerDecl(ym){
+  if(!confirm('Oublier la déclaration mémorisée de ' + urssafMoisLabel(ym) + ' ?\n(Rien n\'est changé à l\'URSSAF ni dans ton livre de recettes.)')) return;
+  delete urssafDecls()[ym]; saveData(); render(currentPage || 'urssaf');
+}
+// Mémoriser d'un coup les mois passés pas encore mémorisés (montants actuels de l'appli), après confirmation de la liste
+function urssafDeclarerPasses(){
+  const now = ymCourant(), an = now.slice(0, 4), D = db.urssafDeclarations || {};
+  const mois = []; for(let i = 1; i <= 12; i++){ const ym = an + '-' + String(i).padStart(2, '0'); if(ym < now && !D[ym]) mois.push(ym); }
+  if(!mois.length){ showToast('Tous les mois passés sont déjà mémorisés', true); return; }
+  const lst = mois.map(ym => '• ' + urssafMoisLabel(ym) + ' : ' + Math.round(urssafLignesMois(ym).reduce((a, l) => a + l.total, 0)) + ' €').join('\n');
+  if(!confirm('Mémoriser comme DÉCLARÉS ces montants (ceux que l\'appli calcule aujourd\'hui) ?\n\n' + lst + '\n\nNe valide que si ce sont bien les montants déclarés à l\'URSSAF.')) return;
+  const D2 = urssafDecls(); mois.forEach(ym => { const cur = urssafLignesMois(ym); D2[ym] = {montant: Math.round(cur.reduce((a, l) => a + l.total, 0)), le: Date.now(), lignes: cur}; });
+  saveData(); showToast('✅ ' + mois.length + ' mois mémorisés comme déclarés', true); render(currentPage || 'urssaf');
+}
+function urssafAlertesHTML(){
+  const D = db.urssafDeclarations || {};
+  const ec = Object.keys(D).sort().map(urssafEcart).filter(e => e && !e.ok);
+  if(!ec.length) return '';
+  const li = (l, sign) => `<div style="font-size:12px;padding:2px 0;">${sign} ${l.date ? formatDateMarche(l.date) : '—'} · ${l.lib} · <b>${urssafEur(l.total)}</b></div>`;
+  return `<div class="card" style="margin-bottom:14px;border:2px solid var(--danger);background:rgba(229,72,77,.08);">
+    <div style="font-size:15px;font-weight:800;color:var(--danger);margin-bottom:6px;">⚠️ URSSAF : un mois déjà déclaré a changé</div>
+    ${ec.map(e => { const diff = e.total - (e.decl.lignes||[]).reduce((a, l) => a + (Number(l.total)||0), 0); return `<div style="padding:8px 0;border-top:1px solid var(--border);">
+      <div style="font-weight:800;margin-bottom:4px;">${urssafMoisLabel(e.ym).replace(/^./, c => c.toUpperCase())} : déclaré ${Math.round(e.decl.montant)} €, l'appli calcule ${Math.round(e.total)} € (${diff >= 0 ? '+' : ''}${urssafEur(diff)} depuis ta déclaration)</div>
+      ${e.ajout.map(l => li(l, '➕ ajoutée :')).join('')}
+      ${e.retire.map(l => li(l, '➖ disparue :')).join('')}
+      ${e.modif.map(m => `<div style="font-size:12px;padding:2px 0;">✏️ modifiée : ${m.apres.date ? formatDateMarche(m.apres.date) : '—'} · ${m.apres.lib} · ${urssafEur(m.avant.total)} → <b>${urssafEur(m.apres.total)}</b></div>`).join('')}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="navigate('recettes')">📒 Ouvrir le livre de recettes</button>
+        <button class="btn btn-secondary btn-sm" onclick="urssafDeclarer('${e.ym}')">✅ Le changement est voulu : mettre à jour</button>
+      </div></div>`; }).join('')}
+  </div>`;
+}
+
 function urssafEchTxt(i, y){
   const m = i < 11 ? i + 2 : 1, yy = (i < 11 ? y : y + 1) % 100;
   return '15/' + String(m).padStart(2,'0') + '/' + String(yy).padStart(2,'0');
